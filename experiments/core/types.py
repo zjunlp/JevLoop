@@ -25,6 +25,21 @@ class Tool:
     description: str
     # JSON Schema 形状。判定模型的候选枚举要靠它，所以**必须是闭集**
     parameters: dict[str, Any]
+    #: ★★★ **每步重建的候选** —— 环境自己给的那一份（`None` = 没有）。
+    #:
+    #: 为什么 `parameters` 里的静态 `enum` 不够:**上一步的动作改变了可选项。**
+    #: 实测（2026-09-23,ALFWorld）:一开局 `admissible_commands` 有 **28 条**
+    #: （`go to cabinet 1` …），**走到 cabinet 1 之后那 28 条全换了**。
+    #: ALFWorld 的 loader 里早就登记过这件事（`alfworld.py::admissible`）:
+    #:
+    #:     「这是这个数据集上最值得单说的一处:候选每步重建（§8.4）
+    #:       在这里**不是优化,是必需**」
+    #:
+    #: ★ 而在它接上之前,ALFWorld 上的 agent 是**自己编命令**的 ——
+    #:   实测它发了 `examine counter` / `use apple` / `go north`,
+    #:   这些**根本不是 ALFWorld 的动词**,环境一律回 `Nothing happens.`,
+    #:   于是它卡在 `examine counter` 上连调 11 次。**28 条合法命令它一条都没看见。**
+    live_candidates: Callable[[], Sequence[str]] | None = None
 
 
 @dataclass(frozen=True)

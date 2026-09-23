@@ -240,12 +240,21 @@ def test_a_request_over_the_option_budget_is_fatal() -> None:
     以前 `FrameSpec` 只声明字段预算,选项数**没有任何人管** —— 而两者抢的是
     同一段上下文（实测 77 个候选时选中概率掉到 **0.425**）。
 
-    所以预算必须在 `Request` 这个粒度上算。30 > 20 时**必须**报出来。
+    所以预算必须在 `Request` 这个粒度上算。超过 `MAX_OPTIONS` 时**必须**报出来。
+
+    ⚠️ 这里写的是 `MAX_OPTIONS + 10` 而**不是一个字面量** —— 原版写死 30
+    （当时上限 20）。2026-09-23 上限按实测提到 32 之后,30 就不再越界,
+    而**这条测试会以「R5 不工作了」的样子红掉** —— 其实 R5 好好的,
+    是测试把「上限是多少」抄了一份。**常量只有一个地方该写。**
     """
-    req = _req(n_options=30)
+    req = _req(n_options=MAX_OPTIONS + 10)
     codes = {v.code for v in req.check()}
     assert "options_over_budget" in codes
-    assert [v.code for v in req.fatal] == ["options_over_budget"], "超预算是 fatal —— 不许照发"
+    # ★ **不是 fatal** —— 它原来是,而那个 fatal 在 2026-09-23 把 ALFWorld
+    #   整条臂干掉了（环境每步给 28 条真实合法命令 → 每一步都发不出去）。
+    #   实测 28 条判得又准又果断（top=0.880）,而拦下来是整道题作废。
+    assert "options_over_budget" not in {v.code for v in req.fatal}, \
+        "候选过多要**报**,但不能拦 —— 拦下来整道题就废了"
 
 
 def test_a_request_at_the_option_budget_is_clean() -> None:

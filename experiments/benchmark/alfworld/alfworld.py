@@ -383,6 +383,11 @@ class AlfWorld:
         """
         self._ensure_env()
         return (Tool(
+            # ★★★ **环境每步给的合法命令** —— 接上它,`pickInput` 才从
+            #   「自由生成一段文本」变成「**从 28 条里挑一条**」。
+            #   在那之前 agent 编出来的命令(`examine counter` / `use apple`)
+            #   一条都不合法,环境全回 `Nothing happens.`。
+            live_candidates=self.admissible,
             name="act",
             description=("Execute one command in the environment. "
                          "The command must be one that the environment currently allows."),
