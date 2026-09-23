@@ -259,9 +259,25 @@ class MockClient:
     def decide(self, request: DecideRequest) -> DecideResponse:
         out: dict[str, Answer] = {}
         for qid, q in request.questions.items():
-            kind = (q or {}).get("kind", "noul") if isinstance(q, dict) else "noul"
+            # ★★ **读线协议的名字 `type`,不是 `kind`。**
+            #
+            #   这里是接七个节点时撞出来的:三个分支原来读的是 `q["kind"]`,
+            #   而 `_wire()` 发出去的是 **`type`**（`vocab.ts` 的形状）。
+            #   ⇒ `kind` 恒为 `.get("kind", "noul")` 的默认值 **`"noul"`**,
+            #   于是**每一道题都被当成是非题**:
+            #
+            #   - `choice` 题拿到 `{"noul": 0.5}`（没有 `choice` 字段),
+            #     被 `parse_answers` 判成**畸形答案丢掉** —— 「降级」看起来发生了;
+            #   - `score` 题（`gradeRisk` 的 `risk`）拿到 `noul=0.5`,
+            #     于是「保守的 mock」给风险判了一个**中间档**,
+            #     而 §8.6 要的是「一律最低分」。
+            #
+            #   ★ 它一直没被发现,是因为 `test_mock_actually_walks_to_escalate`
+            #     只断言「弃答了」—— 而**丢掉一个畸形答案同样会导致弃答**。
+            #     **两种完全不同的原因在结果上长得一样**,这正是 §8.10 那个形状。
+            kind = q.get("type", "noul") if isinstance(q, dict) else "noul"
             if kind == "choice":
-                opts = list(((q or {}).get("options") or {}).keys()) if isinstance(q, dict) else []
+                opts = list((q.get("criteria") or {}).keys()) if isinstance(q, dict) else []
                 # ★ 0.5 平均分给所有选项 —— 「完全不确定」的样子
                 prob = 1.0 / len(opts) if opts else 0.0
                 out[qid] = Answer(kind="choice", choice=opts[0] if opts else "",

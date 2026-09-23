@@ -41,16 +41,39 @@ from experiments.jloop.typed import TypedController, candidates  # noqa: E402
 
 
 class ScriptedClient:
-    """按脚本回答的判定后端。**它把每次请求都记下来** —— 「有没有发出去」要用。"""
+    """按脚本回答的判定后端。**它把每次请求都记下来** —— 「有没有发出去」要用。
+
+    ★★ **它必须认三种问题形状,而且认出 `score`。**
+    七个节点接齐之后多了一格 `score`（`gradeRisk` 的 `risk`,`vocab.ts` 里
+    的 `{type:'score', criteria:[档位…]}`）。第一版这里只有 `choice` 和
+    `noul` 两支,于是 `risk` 被当成 `noul` 答回去 —— 而 `parse_answers`
+    **认值不认标签**,它会按 `noul` 收下,`Answer.score` 恒为 0。
+    结果:每一调都被判成「只读」,`auto_audit` 和 `ask_human` 两条路
+    **在测试里永远走不到** —— 而它们正是要测的东西。
+
+    ★ `noul` 可以是:
+
+    - 一个数 —— 所有 `noul` 题都答它;
+    - 一个**列表** —— 按**调用顺序**依次取（越界后停在最后一个);
+    - 一个 **dict** —— 按**问题 id** 取（`{"needsTool": 0.9}`）。
+
+    接七个节点之前,顺序那套够用（一步只问两三次);现在一步最多四次请求、
+    而且顺序取决于哪条分支先命中 —— **按位置写脚本会变成在测「调用顺序」,
+    不是在测被测的东西**。所以需要精确控制时用 dict。
+    """
 
     name = "scripted"
 
-    def __init__(self, *, noul: float | list[float] = 0.9,
+    def __init__(self, *, noul: float | list[float] | dict[str, float] = 0.9,
                  pick: dict[str, str] | None = None,
+                 score: int = 0,
                  omit: tuple[str, ...] = (),
                  spread: float = 0.9) -> None:
-        self.noul = noul if isinstance(noul, list) else [noul]
+        self.noul = noul
         self.pick = pick or {}
+        #: `score` 题的档位。**默认 0 = 只读** —— 让绝大多数测试走过 `auto`,
+        #: 要看闸门的那几条自己把它调到 1 / 2。
+        self.score = score
         #: 选中项拿多少概率。**调低它就是「答得不果断」** ——
         #: §8.6 要 Mock 走到的那条路,这里可以精确地只让它发生在一道题上。
         self.spread = spread
@@ -58,9 +81,15 @@ class ScriptedClient:
         self.requests: list = []
         self._call = 0
 
+    def _noul_for(self, qid: str) -> float:
+        if isinstance(self.noul, dict):
+            return float(self.noul.get(qid, 0.9))
+        if isinstance(self.noul, list):
+            return float(self.noul[min(self._call, len(self.noul) - 1)])
+        return float(self.noul)
+
     def decide(self, request):
         self.requests.append(request)
-        noul = self.noul[min(self._call, len(self.noul) - 1)]
         self._call += 1
 
         raw: dict = {}
@@ -78,8 +107,11 @@ class ScriptedClient:
                             "probabilities": {o: (self.spread if o == chosen
                                                   else leftover / rest)
                                               for o in opts}}
+            elif q["type"] == "score":
+                raw[qid] = {"type": "score", "score": self.score,
+                            "confidence": self.spread}
             else:
-                raw[qid] = {"noul": noul}
+                raw[qid] = {"noul": self._noul_for(qid)}
 
         # ★ 走真的归一化,不绕过它 —— 否则这些测试和 `parse_answers` 是两套口径
         answers, dropped, missing = parse_answers(raw, list(request.questions))
@@ -89,6 +121,11 @@ class ScriptedClient:
 
     def asked(self, node: str) -> int:
         return sum(1 for r in self.requests if node in r.questions)
+
+    def questions(self) -> list[str]:
+        """按顺序摊平**问过的问题 id** —— 「哪几个节点被问到了、按什么顺序」
+        用它,而不是去数请求数（一次请求可以带多道题）。"""
+        return [qid for r in self.requests for qid in r.questions]
 
 
 def capital_model(seen: list | None = None) -> CallableModel:
@@ -150,10 +187,16 @@ def test_the_arm_name_stays_the_same_so_logs_do_not_get_two_spellings() -> None:
 
 
 def test_a_run_with_the_typed_controller_produces_a_correct_answer() -> None:
-    """端到端:`react × typed` 在 toy 上真的走得通,并交出正确答案。"""
+    """端到端:`react × typed` 在 toy 上真的走得通,并交出正确答案。
+
+    ★ 脚本**按问题 id 写,不按调用顺序写** —— 七个节点接齐之后一步最多四次
+    请求,而先命中哪条分支取决于判定答案。按位置写脚本会变成在测调用顺序。
+    """
     session = make_session()
     outcome = ReAct(controller=TypedController(ScriptedClient(
-        noul=[0.9, 0.1],                      # 第一步要工具,第二步收尾
+        noul={"needsTool": 0.9,               # 第一步:还要动手
+              "isDone": 0.6,                  # 做完这一步,但任务没完
+              "needs_auth": 0.1},             # 读写工作目录里的事,不用批
         pick={"pickInput": "France"},
     ))).solve(session)
 
@@ -188,7 +231,8 @@ def test_the_typed_arm_does_not_reuse_the_react_prompt() -> None:
     session.model = capital_model(seen)
 
     ReAct(controller=TypedController(ScriptedClient(
-        noul=[0.9, 0.1], pick={"pickInput": "France"},
+        noul={"needsTool": 0.9, "isDone": 0.6, "needs_auth": 0.1},
+        pick={"pickInput": "France"},
     ))).solve(session)
 
     assert seen, "模型一次都没被调用?"
@@ -221,10 +265,16 @@ def test_the_typed_arm_does_not_add_a_second_output_contract() -> None:
     """
     session = make_session()
     seen: list[str] = []
-    session.model = capital_model(seen)
+    # ★ 生成端**不看参数**:这条测试要量的是「闸门打回之后有没有真的重写」,
+    #   而不是「工具查的是哪个国家」。所以答案固定是那个首都 ——
+    #   参数由闸门随便挑,证据里那一次调用返回的也正是这句话。
+    session.model = CallableModel(
+        lambda messages: (seen.append(messages[-1].content), "Paris")[1],
+        model_id="fake")
 
     ReAct(controller=TypedController(ScriptedClient(
-        noul=[0.9, 0.1], pick={"pickInput": "France"},
+        noul={"needsTool": 0.9, "isDone": 0.6, "needs_auth": 0.1},
+        pick={"pickInput": "France"},
     ))).solve(session)
 
     answer_prompts = [p for p in seen if "What is the capital of" in p]
@@ -458,7 +508,7 @@ def test_a_fatal_violation_stops_the_request_from_being_sent() -> None:
     """★★★ **校验发现 → 无人接收 → 请求照发 → 判定静默掉点。**
 
     断在第三步和断在第四步的区别就是这里:帧缺了判定依据时
-    `_ask()` 返回 `None`,而 `client.requests` 里**一条都不会多**。
+    `_ask()` 返回**空字典**,而 `client.requests` 里**一条都不会多**。
 
     发出去会怎样?判定模型答一个没有依据的答案,而日志上它和正常判定一样。
     """
@@ -471,10 +521,10 @@ def test_a_fatal_violation_stops_the_request_from_being_sent() -> None:
 
     from experiments.jloop.typed import NODE_THRESHOLDS, _noul_question
 
-    blocked = ctrl._ask(session, 0, AgentCtx(), 0, "needsTool",
+    blocked = ctrl._ask(session, 0, AgentCtx(), 0,
                         _noul_question("needsTool", "?",
                                        threshold=NODE_THRESHOLDS["needsTool"]))
-    assert blocked is None, "缺判定依据时必须返回 None"
+    assert blocked == {}, "缺判定依据时必须返回空（= 发不出去）"
     assert client.requests == [], "★ 请求不许发出去"
     assert ctrl.trace[-1]["violation"] == "field_missing" and ctrl.trace[-1]["fatal"]
 
@@ -541,7 +591,7 @@ def test_a_free_text_argument_is_generated_and_marked_as_such() -> None:
                                       "properties": {"query": {"type": "string"}}})]
     session.executor = ToolExecutor(session.tools, {"search": lambda query: "ok"})
 
-    client = ScriptedClient(noul=0.9)
+    client = ScriptedClient(noul={"needsTool": 0.9, "needs_auth": 0.1})
     ctrl = TypedController(client)
     decision = ctrl.decide(session, _view(session))
     session.finish_events()          # ★ 批次要封口才进事件流（见 runner 里那两行的顺序）
@@ -557,7 +607,11 @@ def test_a_free_text_argument_is_generated_and_marked_as_such() -> None:
 def test_an_enumerable_argument_is_scored_not_generated() -> None:
     """反面:`country` 有 enum,所以它**应该**被判 —— 而且不该走生成。"""
     session = make_session()
-    client = ScriptedClient(noul=0.9, pick={"pickInput": "Peru"})
+    # ⚠️ `needs_auth` 必须显式给低 —— 这道**授权闸门**是七个节点接齐之后
+    #    新出现的,而它的默认脚本值 0.9 会把这一调判成 `ask_human`
+    #    （§8.5:授权闸门不接受概率绕过）。这条测试问的是参数怎么来的,
+    #    不该被另一道闸门拦下 —— 那两条测试要分开,否则红的时候分不清是谁。
+    client = ScriptedClient(noul={"needs_auth": 0.1}, pick={"pickInput": "Peru"})
     ctrl = TypedController(client)
     decision = ctrl.decide(session, _view(session))
 
@@ -574,7 +628,7 @@ def test_a_single_candidate_is_not_worth_a_decision_request() -> None:
     §8.1 第三行:能由精确规则定的,不交给判定模型。
     """
     session = make_session()          # toy 只有一个工具
-    client = ScriptedClient(noul=0.9)
+    client = ScriptedClient(noul={"needs_auth": 0.1})
     decision = TypedController(client).decide(session, _view(session))
 
     assert decision.tool == "lookup_capital"
@@ -582,8 +636,19 @@ def test_a_single_candidate_is_not_worth_a_decision_request() -> None:
 
 
 def test_a_task_with_no_tools_never_asks_whether_it_needs_one() -> None:
-    """★ 没有工具的任务（GSM8K 那种）不该问「要不要用工具」——
-    那个问题的答案恒为否,问它只是白花一次判定。"""
+    """★ 没有工具的任务（GSM8K 那种）**一次判定都不该发**。
+
+    两个理由,都是结构性的:
+
+    ① 「要不要用工具」的答案恒为否,问它只是白花一次判定;
+    ② `canDeliver` 判的是「回答有没有超出**工具输出**的支持」——
+       没有工具就没有工具输出,那这道闸门**没有可核对的材料**,
+       问它只会得到一个凭空的答案（§8.10 的形状)。
+
+    ★ 这一条在接 `canDeliver` 之前是**绿的而理由是错的** ——
+      那时它只覆盖了①,第 0 步问了一次 `deliverable`/`unsupported`
+      这件事没有任何东西看得见。
+    """
     session = make_session()
     session.tools = []
     session.executor = ToolExecutor([], {})
@@ -619,7 +684,12 @@ def test_decisions_in_one_step_share_a_batch() -> None:
 
     records = session.decision_records()
     assert len(records) >= 2, f"这一步该有多次判定:{[r.node for r in records]}"
-    assert len({r.batch for r in records}) == 1, "同一步的判定要算作同一批"
+    # ★ 每一步的判定**分属不同的批**（批 = 一次请求）,而每一批都记着自己的题数与请求数
+    for b in session.decision_batches():
+        assert b.requests_in_batch == 1, (
+            f"一个批只该对应一次请求,而它记了 {b.requests_in_batch} 次 —— "
+            f"那么「合并省了几次往返」就再也量不出来")
+        assert b.questions_in_batch == len(b.decisions)
 
 
 def test_confidence_and_correctness_land_on_the_same_row() -> None:
@@ -782,9 +852,9 @@ def test_a_violation_reaches_the_event_stream_not_just_memory() -> None:
     session = make_session()
     ctrl = TypedController(ScriptedClient())
     # 空 ctx ⇒ needsTool 缺「判定依据」⇒ fatal ⇒ 请求不发
-    assert ctrl._ask(session, session.next_batch(), AgentCtx(), 0, "needsTool",
+    assert ctrl._ask(session, session.next_batch(), AgentCtx(), 0,
                      _noul_question("needsTool", "?",
-                                    threshold=NODE_THRESHOLDS["needsTool"])) is None
+                                    threshold=NODE_THRESHOLDS["needsTool"])) == {}
     session.finish_events()
 
     rows = session.decision_records()
@@ -974,8 +1044,20 @@ def test_the_two_choice_nodes_do_not_share_a_threshold() -> None:
     """
     from experiments.jloop.typed import NODE_THRESHOLDS
 
-    assert NODE_THRESHOLDS == {"needsTool": 0.5, "pickTool": 0.6, "pickInput": 0.5}
+    # ★ 七个节点接齐之后,表里多了 `stepOk` / `isDone` 两条
+    assert NODE_THRESHOLDS == {"needsTool": 0.5, "pickTool": 0.6, "pickInput": 0.5,
+                              "stepOk": 0.6, "isDone": 0.6}
     assert NODE_THRESHOLDS["pickTool"] != NODE_THRESHOLDS["pickInput"]
+    # ★★★ **`stepOk` 是 0.6 不是 0.5,这条有讲究**（`DECISION.md` 的 `step_ok`）:
+    #   它是七个判定点里唯一一个「放行 = 当没事发生」的门 —— 放行的意思是
+    #   「这一步成功了」,于是**失败被吞掉**。`noul` 的 0.5 是最不确定的取值,
+    #   而门限是闭区间 `>=` —— 一个等于「毫无信息」的值不该能放行任何事。
+    assert NODE_THRESHOLDS["stepOk"] == 0.6
+    # ⚠️ `gradeRisk` / `canDeliver` **故意不在表里** —— 它们的策略是
+    #   `DECISION.md` 里那几条顺序求值的规则 (`score:risk >= 2` 先于
+    #   `prob:needs_auth`),不是一道题一个果断度门限。塞一个 0.5 进来
+    #   会让「硬规则不接受概率绕过」（§8.5）看起来也能被绕过。
+    assert "gradeRisk" not in NODE_THRESHOLDS and "canDeliver" not in NODE_THRESHOLDS
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1033,15 +1115,25 @@ def test_requests_and_questions_are_counted_separately() -> None:
     session.executor = ToolExecutor(session.tools, {"lookup_capital": lambda country: "Paris",
                                                     "other": lambda: "ok"})
 
-    TypedController(ScriptedClient(noul=0.9, pick={"pickTool": "lookup_capital"})).decide(
+    TypedController(ScriptedClient(noul={"needs_auth": 0.1},
+                                   pick={"pickTool": "lookup_capital"})).decide(
         session, _view(session))
     session.finish_events()
 
-    b = session.decision_batches()[0]
-    assert b.requests_in_batch > 0
-    assert b.questions_in_batch == b.requests_in_batch, (
-        "现在每道题各发一次请求 —— 相等是对的,而**它本身就是要量的那个浪费**"
+    batches = session.decision_batches()
+    assert batches
+    # ★★★ **两个节点确实合并进了一次请求**:`gradeRisk` 问两件事
+    #   （`risk` + `needs_auth`,`DECISION.md` 里 kind 是 `mixed`）——
+    #   它们共享同一份帧,所以一次往返就能都答了。
+    #   而「彼此独立 + 证据形状相同」正是合并的判据,不是「能塞多少塞多少」。
+    merged = [b for b in batches if b.questions_in_batch > b.requests_in_batch]
+    assert merged, (
+        "没有任何一批是合并过的 —— 那么「判定有没有被合并」这件事"
+        f"在账上就看不出来了:{[(b.questions_in_batch, b.requests_in_batch) for b in batches]}"
     )
+    # ★ 而两个数**必须分开记**:相等 = 一步一请求（PLAN 说那是全项目最大的浪费）,
+    #   题数远大于请求数 = 合并得对。合成一个就永远分不出这两种情况。
+    assert all(b.requests_in_batch >= 1 for b in batches)
 
 
 def test_a_single_tool_dataset_still_terminates_after_doing_it() -> None:
@@ -1058,16 +1150,27 @@ def test_a_single_tool_dataset_still_terminates_after_doing_it() -> None:
 
     这条测试用一个只有 1 个工具、且 `needsTool` 一直说「还要」的环境,
     确认它**不会炸**,而是走到生成。
+
+    ★ 七个节点接齐之后,这条路上多了两个**事后**判定（`stepOk` / `isDone`）——
+    而它们和 `DONE` 出口是可以互相遮挡的:如果 `isDone` 说「完了」,
+    循环就从**另一条**出口收尾了,`options == [DONE]` 那一段根本走不到。
+    所以脚本里 `isDone` 特意判「还没完」:这条测试要打的是 `DONE` 那条路,
+    不是 `isDone` 那条。**两个出口都要各自被测到** —— 否则一条遮住另一条,
+    而有东西坏掉时看起来像「被遮住的那条没事」。
     """
     from experiments.core.controller import Decision
     from experiments.core.frame import ctx_from_steps
     from experiments.jloop.typed import DONE, TypedController
 
     session = make_session()          # toy 只有一个工具
-    client = ScriptedClient(noul=0.9)  # needsTool 恒为「还要」
+    # `needsTool` 恒为「还要」;`isDone` 判「还没完」—— 这样第二步才会走到
+    # 「候选只剩 `DONE`」那条路（`isDone` 说完了就会直接去生成,那条路
+    # 是**另一条**出口,它有自己的测试）。授权闸门放行。
+    client = ScriptedClient(noul={"needsTool": 0.9, "isDone": 0.1,
+                                  "needs_auth": 0.1})
 
     class Spy(TypedController):
-        def _generate(self, session, view, ctx, *, why, batch=0):
+        def _finish(self, session, view, ctx, *, why, batch=0):
             return Decision(kind="answer", answer="PARIS", syntax="generated")
 
     ctrl = Spy(client)
@@ -1085,3 +1188,339 @@ def test_a_single_tool_dataset_still_terminates_after_doing_it() -> None:
     d2 = ctrl.decide(session, _view(session, history=(step,)))
     assert d2.kind == "answer", f"做完之后必须能收尾,而不是炸:{d2}"
     assert {t.get("answer") for t in ctrl.trace} >= {DONE}
+
+
+# ═══════════════════════════════════════════════════════════
+# ★★★ 七个节点一起接（2026-09-23）—— 四个新节点各自的回归
+#
+# 前面那些测试钉的是「两条臂只差一个控制器」和「判的 vs 生成的」。
+# 这一节钉的是**新接上的四个节点里,每一个都真的在链路上工作** ——
+# 接上一个节点却没有任何东西看得见它,和没接是一样的（§8.16）。
+# ═══════════════════════════════════════════════════════════
+
+
+def _tool_step(tool: str = "lookup_capital", *, country: str = "France",
+               observation: str = "Paris"):
+    """造一个「刚刚调过工具」的历史 —— 事后判定的输入就是它。"""
+    from experiments.core.types import Action, Step
+
+    return Step(index=0, action=Action(kind="tool", name=tool,
+                                       arguments={"country": country}),
+                observation=observation)
+
+
+def test_step_ok_and_is_done_run_at_the_start_of_the_next_decide() -> None:
+    """★★★ **两个事后判定在下一次 `decide()` 的开头补跑。**
+
+    `stepOk` / `isDone` 判的都是「**刚刚**那一步」,而 `decide()` 只在**事前**
+    被调用 —— 工具还没跑,没有东西可判。所以它们只能在**下一次进来**时补跑,
+    而 `view.history` 的最后一步就是那次调用。
+
+    ★ 这一条测试的判据是**顺序**,不是「问过没有」:`stepOk` 必须排在
+    `needsTool` **之前**。放后面的话,`needsTool` 会在一个**塌了的历史**上判
+    「还要不要动作」—— 它判得"没错"（历史里确实有那些动作),
+    错的是我们没告诉它上一步没成。
+    """
+    session = make_session()
+    # `isDone` 必须判「还没完」—— 说完了整步就在 isDone 那一格收尾了,
+    # 而这条测试要的是**顺序**,不是 `isDone` 的出口（那条另有测试）。
+    client = ScriptedClient(noul={"needsTool": 0.9, "isDone": 0.1,
+                                  "needs_auth": 0.1})
+    ctrl = TypedController(client)
+
+    ctrl.decide(session, _view(session, history=(_tool_step(),)))
+
+    asked = client.questions()
+    assert "stepOk" in asked and "isDone" in asked, (
+        f"事后判定没有补跑 —— 那么工具失败和任务完成这两件事都没人看:{asked}")
+    assert asked.index("stepOk") < asked.index("needsTool"), (
+        f"事后判定必须排在事前判定之前:{asked}")
+
+
+def test_a_failed_step_stops_instead_of_being_treated_as_success() -> None:
+    """★★★ **`stepOk` 是七个判定点里唯一一个「放行 = 当没事发生」的门。**
+
+    它放行的意思是「这一步成功了,继续」—— 于是**失败被吞掉**。
+    所以这条测试判两件事:动作是 `stop`（不是继续),**而且理由是 `stepOk`**。
+
+    ⚠️ 只断言「返回了 `unparsed`」是不够的:`isDone` 或别的节点出问题
+    也会走到 `unparsed`。**两种完全不同的原因在结果上长得一样** ——
+    这正是 §8.10 那个形状,所以这里的断言按**原因**分开写。
+    """
+    session = make_session()
+    # 第一步成功、第二步失败:脚本只让第二个 `stepOk` 判否 ——
+    # ★ 按**问题 id** 写脚本,不是按调用位置。
+    client = ScriptedClient(noul={"stepOk": 0.1})
+    ctrl = TypedController(client)
+
+    decision = ctrl.decide(session, _view(session, history=(_tool_step(),)))
+
+    assert decision.kind == "unparsed", f"这一步没成,不该继续:{decision}"
+    assert "stepOk" in decision.raw and "stop" in decision.raw, decision.raw
+    # ★ 而且它**不是**被 `needsTool` 那一侧拦下的（那种失败看起来一样）
+    assert "needsTool" not in decision.raw, "原因是别的节点,不许记成 stepOk"
+
+
+def test_is_done_finishes_the_loop_after_a_successful_step() -> None:
+    """★★ `isDone` 判「完了」→ **收尾去生成**,不再调第二个工具。
+
+    这是**语义早停**:简单任务在第一步之后就结束,而不是傻等到 `max_iter`。
+    实测的反面（`DECISION.md` 的 `is_done` 一节):旧措辞里有半句
+    「any further tool call would not add information」,于是两个文件都读完了
+    它还不肯停 —— 因为「读任何一个还没读过的文件都会增加信息」。
+    """
+    session = make_session()
+    client = ScriptedClient(noul={"stepOk": 0.9, "isDone": 0.9})
+    ctrl = TypedController(client)
+
+    decision = ctrl.decide(session, _view(session, history=(_tool_step(),)))
+
+    assert decision.kind == "answer", f"判了做完就该去生成:{decision}"
+    assert decision.answer == "Paris"
+    # ★ 收尾之后就**不该再问「还要不要动作」** —— 顺序反了的话会多花一次判定
+    assert "needsTool" not in client.questions(), client.questions()
+
+
+def test_can_deliver_carries_the_tool_evidence_not_just_the_draft() -> None:
+    """★★★ **交付闸门必须看得到工具输出。**
+
+    这是接节点时查出来的「静默缺席」:`canDeliver` 判的是「回答有没有超出
+    **工具输出**的支持」,而它的帧里原来只有 `task` + `draft` ——
+    **既没看 `last_result`、也没声明不看**。
+
+    实测（ALFWorld `pick_heat_then_place_in_recep-Apple-None-Fridge-10`）:
+    任务要「把**加热过的**苹果放进冰箱」,agent 只走了一步（冰箱还关着),
+    就交了「I placed the microwaved apple in the fridge.」—— **编的**,
+    而 `escalated=False`,没有任何东西拦它。原因就是这个:那句话在帧里
+    **没有任何反证**。
+
+    ★ 所以这条测试判的是**帧的正文**:证据要在里面,而且要在里面**看得见**
+    那次调用返回了什么（不是只有工具名）。
+    """
+    from experiments.core.frame import AgentCtx, compile_frame, ctx_from_steps, frame_for
+
+    steps = [_tool_step(observation="You arrive at fridge 1. The fridge 1 is closed.")]
+    ctx = ctx_from_steps("把加热过的苹果放进冰箱", steps)
+    frame = compile_frame(frame_for("canDeliver"), ctx)
+
+    assert "evidence" in {f.name for f in frame_for("canDeliver").fields}, (
+        "帧声明里没有证据这一栏 —— 那闸门就还是瞎的")
+    rendered = frame.render()
+    assert "The fridge 1 is closed." in rendered, (
+        "工具返回的内容没进交付闸门的帧 —— 编的完成报告在帧里就没有反证:\n" + rendered)
+    # ★ 而且它**不是**整段 history 塞进来:过的是证据,不是历史
+    assert "history" in dict(frame_for("canDeliver").excluded), (
+        "要有声明说明为什么给的是证据而不是整段历史")
+    # 空 ctx 时它是「缺上下文」而不是「缺判定依据」—— 第 0 步没有证据是正常状态
+    assert "evidence" in compile_frame(frame_for("canDeliver"),
+                                       AgentCtx(task="t", draft="d")).missing
+
+
+def test_an_unsupported_answer_is_sent_back_once_and_then_delivered() -> None:
+    """★★★ **`revise` 承诺了修订,那修订就必须真的发生**（而且只一次）。
+
+    `DECISION.md` 的 `can_deliver` 一节 + TS 侧的原话:「以前它只是被拼进
+    `halt` 字符串,草稿原样返回。」
+
+    ★ 上限 1 次也是判据:第二次还不合格就**如实交出去**并说明 ——
+    不无限重试,那会变成一个收费循环。
+    """
+    session = make_session()
+    seen: list[str] = []
+    # ★ 生成端**不看参数**:这条测试要量的是「闸门打回之后有没有真的重写」,
+    #   而不是「工具查的是哪个国家」。所以答案固定是那个首都 ——
+    #   参数由闸门随便挑,证据里那一次调用返回的也正是这句话。
+    session.model = CallableModel(
+        lambda messages: (seen.append(messages[-1].content), "Paris")[1],
+        model_id="fake")
+
+    class Gate:
+        """一个**什么都答「是」**的后端,只有 `unsupported` 第一次判 true。
+
+        ★ 计数器只在 **`canDeliver` 那两次请求**上走（按问题内容认,
+        不按第几次调用认)—— 把别的节点也算进去的话,
+        「第几次修订」就取决于前面问过几次,而不是闸门说了什么。
+
+        ★ 别的题一律给「是」:这条测试只让**一条**判据拦人。
+        `choice`（`pickInput`)必须真的给出选项 ——
+        给一个 `noul` 回去,`parse_answers` 会按「空选项」丢掉它,
+        于是整条路死在参数那一步,**而原因看起来像「闸门」**。
+        """
+
+        def __init__(self) -> None:
+            self.gates = 0
+
+        def decide(self, request):
+            qs = list(request.questions)
+            is_gate = "unsupported" in qs or "deliverable" in qs
+            if is_gate:
+                self.gates += 1
+            reject = is_gate and self.gates == 1
+            raw = {}
+            for qid, q in request.questions.items():
+                if q["type"] == "choice":
+                    opts = list(q["criteria"])
+                    # 挑哪个国家**无所谓** —— 上面那个生成端不看参数,
+                    # 工具也只是回一句「Paris」。这里只要诚实给出一个选项。
+                    want = opts[0]
+                    raw[qid] = {"type": "choice", "choice": want,
+                                "probabilities": {o: (0.9 if o == want
+                                                      else 0.1 / max(1, len(opts) - 1))
+                                                  for o in opts}}
+                    continue
+                if q["type"] == "score":
+                    # `gradeRisk` 的 `risk` —— **0 = 只读**(最低档),
+                    # 于是授权闸门放行。给 `noul` 回去的话它会按
+                    # `Answer(kind="score")` 收下、分数恒为 0 —— 那也能过,
+                    # 但那是**碰巧**,不是这条测试要说的事。
+                    raw[qid] = {"type": "score", "score": 0, "confidence": 0.9}
+                    continue
+                if qid == "needs_auth":
+                    # ★ 授权闸门（§8.5）**不接受概率绕过** —— 这一格给 0.9 就会
+                    # 判 `ask_human` 并把整步停下,而这条测试要说的是交付闸门
+                    # 打回之后有没有**真的重写**。两条闸门要分开测。
+                    raw[qid] = {"noul": 0.1}
+                    continue
+                raw[qid] = {"noul": 0.9 if (qid != "unsupported" or reject) else 0.1}
+            answers, dropped, missing = parse_answers(raw, qs)
+            return DecideResponse(answers=answers, provider="gate",
+                                  dropped=dropped, missing=missing)
+
+    ctrl = TypedController(Gate())
+
+    # ① 第一步:真的调一次工具（`canDeliver` 要拿它的返回逐句核对回答,
+    #    所以这一步不能跳 —— 跳了的话证据是空的,而空证据下闸门判什么都"对"）
+    first = ctrl.decide(session, _view(session))
+    assert first.kind == "tool", f"第一步该调工具:{first}"
+
+    # ② 第二步:带上前一步的历史 → `stepOk`/`isDone` 补跑 → 生成 → 过闸门
+    step = _tool_step(first.tool, country=first.arguments.get("country", ""),
+                      observation="Paris")
+    decision = ctrl.decide(session, _view(session, history=(step,)))
+
+    assert decision.kind == "answer", f"闸门最终要放行:{decision}"
+    assert len(seen) == 2, (
+        f"打回之后必须**真的重新生成一次** —— 生成被调用了 {len(seen)} 次")
+    assert any("Revision required" in p for p in seen), (
+        "第二次生成必须带着闸门给的理由 —— 否则是在同一个盲区里重写一遍")
+    assert ("canDeliver", "revise") in {(t.get("node"), t.get("answer"))
+                                        for t in ctrl.trace}
+
+
+def test_a_step_that_never_ran_has_no_step_ok() -> None:
+    """★ 上一步不是工具调用时,`stepOk` **没有对象可判**,不许问。
+
+    两种情况都要挡住:
+
+    - 第 0 步（还没有历史）;
+    - `__parse_error__` —— 那是 `run_loop` 为了让下一轮 prompt 带上纠正提示
+      塞进轨迹的**伪步骤**,它**不产生 `ToolCallEvent`**（`core/types.py`
+      的 `is_tool_call` 就是为这件事存在的）。拿它去问「这一步成没成」,
+      是在对一个**从未发生的调用**判成败。
+    """
+    session = make_session()
+    client = ScriptedClient(noul={"needsTool": 0.1})
+    ctrl = TypedController(client)
+
+    # 第 0 步:没有历史
+    ctrl.decide(session, _view(session))
+    assert "stepOk" not in client.questions(), "第 0 步没有东西可判,不该发 stepOk"
+
+    # 伪步骤:解析失败那一步
+    from experiments.core.types import Action, Step
+
+    err = Step(index=0, action=Action(kind="tool", name="__parse_error__", arguments={}),
+               observation="could not parse")
+    client.requests.clear()
+    ctrl.decide(session, _view(session, history=(err,)))
+    assert "stepOk" not in client.questions(), (
+        "伪步骤不产生工具事件,拿它判成败是在判一个从未发生的调用")
+
+
+def test_grade_risk_applies_the_hard_rule_before_the_probability_one() -> None:
+    """★★★ **两条闸门独立,而顺序就是那条硬规则**（§8.5）。
+
+    `DECISION.md` 的 `grade_risk` policy::
+
+        score:risk >= 2      → ask_human     ← 硬规则,**不接受概率绕过**
+        prob:needs_auth>=0.5 → ask_human
+        score:risk >= 1      → auto_audit
+        else                 → auto
+
+    `resolvePolicy` 是**顺序求值、第一条命中就返回**。所以把 `score:risk` 提到
+    `needs_auth` 前面不是风格问题 —— 反过来的话,一个「风险 3 但模型说不用授权」
+    的调用会被放过去。这条测试打的就是那一格:**风险够高 + 概率说不用批**。
+    """
+    from experiments.jloop.typed import _risk_action
+
+    # ★ 纯函数先钉一遍 —— 策略本身在这里,不在 `decide()` 的 if 里
+    assert _risk_action(3, 0.0) == "ask_human", "硬规则不许被概率绕过"
+    assert _risk_action(2, 0.0) == "ask_human"
+    assert _risk_action(0, 0.95) == "ask_human", "第二条是模型判断"
+    assert _risk_action(1, 0.0) == "auto_audit"
+    assert _risk_action(0, 0.0) == "auto"
+
+    # ★ 再走一次链路:`risk=3` 说不用批 → 仍然是 `ask`（授权闸门拦下）
+    session = make_session()
+    ctrl = TypedController(ScriptedClient(noul={"needs_auth": 0.0}, score=3))
+    decision = ctrl.decide(session, _view(session))
+
+    assert decision.kind == "ask", f"风险 3 必须问人,不许放过去:{decision}"
+    assert decision.raw.startswith("typed:"), (
+        "弃答/问人的原因要写明是我们这一侧 —— 否则日志上和「模型格式错了」一样")
+
+
+def test_auto_audit_leaves_a_trail_in_the_event_stream_not_just_in_memory() -> None:
+    """★★★ **`auto_audit` 承诺了留痕,那留痕就必须真的发生。**
+
+    `DECISION.md` 的原话:「以前这条分支和 `auto` 完全一样,只多打一行 trace。」
+    ★ 而「只多打一行 trace」在证据上等于没留 —— `trace` 是**内存里的调试列表**,
+    跑完就没了。这条痕必须进**事件流**（`events.jsonl`),那里是跑完之后
+    还读得到的唯一地方。
+
+    ★ 它**不进 `DecisionRecord`** 也是判据:留痕不是一次判定,记进去会污染
+    `correct` 那一列 —— 而那一列正是 RQ2 要量的东西（§8.1:代码按精确规则
+    写下来的一条记录,不是判定）。
+    """
+    session = make_session()
+    ctrl = TypedController(ScriptedClient(noul={"needs_auth": 0.0}, score=1))
+
+    decision = ctrl.decide(session, _view(session))
+    session.finish_events()
+
+    assert decision.kind == "tool", "risk=1 是中等风险:**放行,但留痕**"
+    audits = session.audit_records()
+    assert len(audits) == 1, f"auto_audit 没有留下痕:{audits}"
+    rec = audits[0]
+    assert rec.tool == "lookup_capital"
+    assert rec.risk == 1 and "risk" in rec.reason
+    # ★ 而它不是判定 —— 别把留痕算进判定次数
+    assert all(r.node != "audit" for r in session.decision_records())
+
+
+def test_the_risk_frame_describes_this_call_not_the_previous_one() -> None:
+    """★★ `gradeRisk` 的帧里 `target` 必须是**这一调**的参数。
+
+    `NODE_FRAMES["gradeRisk"]` 写的是 `FrameField("last_input", 200, "target")`
+    —— 也就是「`AgentCtx.last_input` 就是这一调的目标」。而 `ctx` 是从
+    **已完成的历史**拼出来的:第 0 步时它是空的,第 N 步时它是**上一步**的输入。
+
+    ⇒ 不显式填的话,闸门会对着一片空白（第 0 步,请求被 `field_missing` 拦下)
+    或者**上一步的输入**判这一调的风险 —— 而它会照答,答案是凭空生成的（§8.10）。
+    """
+    session = make_session()
+    client = ScriptedClient(noul={"needsTool": 0.9, "needs_auth": 0.1})
+    ctrl = TypedController(client)
+
+    # ★ 从**第 0 步**走（没有历史）—— 那一格才是「`ctx.last_input` 是空的」
+    #   那个 bug 的形状。从第 1 步走的话,`target` 会拿到**上一步**的输入:
+    #   帧里有东西,判定照答,而答案是凭空生成的（§8.10)—— 静默的那种错。
+    decision = ctrl.decide(session, _view(session))
+    assert decision.kind == "tool"
+
+    risk_reqs = [r for r in client.requests if "risk" in r.questions]
+    assert risk_reqs, "没有发出 gradeRisk 的请求"
+    frame = risk_reqs[-1].state["frame"]
+    # ★ 这一调要调 `lookup_capital`（唯一候选）,所以 target 就是它的参数名
+    assert "target:" in frame, f"帧里没有 target 这一行:\n{frame}"
+    assert "last_input" not in frame, "帧里漏了内部字段名 —— 那是给模型看的正文"

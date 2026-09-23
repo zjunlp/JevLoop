@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
 from experiments.core.events import (
+    AuditEvent,
     Clock,
     DecisionBatchEvent,
     Event,
@@ -284,6 +285,40 @@ class Session:
     def note_retry(self, ms: float) -> None:
         """重试/退避的耗时。**单独攒着** —— 混进模型时间里会让失败的臂看起来更慢。"""
         self._retry_ms += ms
+
+    def record_audit(self, *, step: int, tool: str, target: str, reason: str,
+                     risk: int | None) -> None:
+        """`gradeRisk` 判出 `auto_audit` 时**真的留下那一条痕**。
+
+        ★★ 为什么这条分支值得一个专门的记账口子:`DECISION.md` 的 `grade_risk`
+        一节写着「**`auto_audit` 承诺了留痕就必须真的留痕。以前这条分支和 `auto`
+        完全一样,只多打一行 trace。**」
+
+        和 `record_decision` 分开是**刻意的**:留痕不是判定,
+        把它记进 `DecisionRecord` 会污染 `correct` 那一列 ——
+        而那一列正是 RQ2 要量的东西（「置信度说 0.8 的那批判定对了多少」）。
+        §8.1:代码按精确规则写下来的一条记录,**不是**一次判定。
+
+        ★ `risk=None` 是允许的（判定没给出分数),**不补一个 0** ——
+        0 分的意思是「只读」,拿它冒充「未知」会让读日志的人以为闸门看清楚了。
+        """
+        self.events.append(AuditEvent(
+            run_id=self.run_id,
+            task_id=self.task.task_id,
+            step=step,
+            tool=tool,
+            target=target,
+            reason=reason,
+            risk=risk,
+            at=time.time() * 1000,
+            working_start=self.clock.elapsed(),
+            parent=self._span_stack[-1] if self._span_stack else None,
+        ))
+
+    def audit_records(self) -> list[AuditEvent]:
+        """这次 run 里真的留下来的痕。**空列表 ≠ 没有中等风险调用** ——
+        它只说明没有一次判定落进 `auto_audit` 那一档。"""
+        return [e for e in self.events if isinstance(e, AuditEvent)]
 
     def span(self, name: str):
         """给一段工作计时。**`with session.span("decision"):`** —— 成对发事件。

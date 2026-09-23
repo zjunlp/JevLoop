@@ -139,6 +139,27 @@ class AgentCtx:
     #:   都需要知道那个工具**做什么**,而不只是它**叫什么**。
     done_tools: str = ""
 
+    #: ★★★ **工具证据** —— 已经渲染成文本,给 `canDeliver` 用。
+    #:
+    #: 为什么需要它（2026-09-23 查出来的「静默缺席」）:`canDeliver` 判的是
+    #: 「回答有没有说**工具输出不支持**的内容」,而它的帧里**没有任何工具输出**
+    #: —— 只有 `task` + `draft`。**它既没看 `last_result`、也没声明不看。**
+    #:
+    #: 实测（ALFWorld `pick_heat_then_place_in_recep-Apple-None-Fridge-10`）:
+    #: 任务要「把**加热过的**苹果放进冰箱」,agent 只走了一步（冰箱还关着）,
+    #: 然后交了「I placed the microwaved apple in the fridge.」—— **编的**,
+    #: 而 `escalated=False`,没有任何东西拦它。交付闸门**本该**拦住这句,
+    #: 可它看不见任何工具输出,于是那句完成报告在帧里**没有任何反证**。
+    #:
+    #: ★ 和 `done_tools` 同一个形状:**判一件事,就得把这件事的材料放进帧**。
+    #:   但两者的形状不同 —— `done_tools` 是「这些工具是干什么的」（覆盖),
+    #:   这里是「这些调用**到底返回了什么**」（核对）。所以是两个字段。
+    #:
+    #: ★ 它和 `excluded` 里的 `history` 不冲突:**过的是证据,不是整段历史** ——
+    #:   条数、每条各自的输入/结果预算都由 `render_evidence()` 定,
+    #:   而整段 `history` 会把回答（`draft`,闸门的判定对象）挤出帧。
+    evidence: str = ""
+
     def records(self) -> list[StepRecord]:
         return list(self.history)
 
@@ -162,7 +183,59 @@ def ctx_from_steps(task: str, steps: Sequence[Step], *, draft: str = "",
         last_tool=last.tool if last else "",
         last_input=last.input if last else "",
         last_result=last.result if last else "",
+        # ★★ **工具证据在这里就装配好** —— 不是留给调用方记得拼。
+        #   第 10 轮 R2/R5 的教训是「一条不变量没人接收就等于没有」;
+        #   同一条道理:一个字段要调用方**记得**填,它迟早会是空的,
+        #   而空帧的判定看上去和一次正常判定一模一样（§8.10）。
+        evidence=render_evidence(history),
     )
+
+
+def render_evidence(history: Sequence[StepRecord], *,
+                    last: int = 3, input_chars: int = 60,
+                    result_chars: int = 600) -> str:
+    """把最近几步的**工具调用与它们的返回**渲染成 `canDeliver` 的判定材料。
+
+    ★★ 这个名字和 `StepRecord.__str__()`（帧里的人话版）分开,因为两者回答的
+    问题不同:
+
+    - `already_done` 给的是**形状** —— 调过什么、按什么顺序（每条结果只留 60 字符,
+      细节交给 `last_result`）。它服务的是「任务做完没有」。
+    - 这里给的是**证据** —— 交付闸门要拿它逐句核对回答,所以**结果才是主体**:
+      「回答里那句『我把苹果放进了冰箱』,哪一次调用的返回支持它?」
+
+    ★ **预算跟着载荷走,不跟着位置走**（TS 侧 `canDeliver` 的注释里记着这次事故）:
+    写操作的载荷在**输入**（`路径\\n内容`）而结果只有一句「已写入 X」;
+    读操作正好反过来。输入一律 clip 到 60、或者结果一律 clip 到 200,
+    都会让**唯一有信息的那半**被切掉,于是闸门**正确地**判出
+    「回答里有证据不支持的内容」—— **那是帧的问题,不是回答的问题。**
+
+    ★ 只取最后 `last` 条:再往前的调用,结论已经被后面的覆盖了,
+      而多给一条就少给 `draft`（判定对象本身）一份预算。
+    """
+    recent = list(history)[-last:]
+    out: list[str] = []
+    for i, rec in enumerate(recent):
+        writes = rec.tool in ("write_file", "write", "write_text")
+        inp = clip_text(rec.input, 600 if writes else input_chars)
+        # 最后一条给足空间:回答里的完成报告,核对的正是**最后一次**返回了什么
+        res = clip_text(rec.result, 60 if writes else (result_chars if i == len(recent) - 1 else 200))
+        out.append(f"{rec.tool}({inp}) -> {res}" if res else f"{rec.tool}({inp})")
+    return "\n".join(out)
+
+
+def clip_text(text: str, budget: int) -> str:
+    """截成 `budget` 字符,**截了就留下痕迹**。
+
+    ★ 痕迹不能省:判定模型看不到「这里少了 900 字」,它会当成「证据就这么多」
+    —— `canDeliver` 那次事故（clip 到 100 → `unsupported=0.67`）正是这个形状。
+    帧那一层由 `compile_frame` 统一记账（`truncations`）,这里管的是**帧内部**
+    再切一刀的两处（`history` 的每条、`evidence` 的每条）。
+    """
+    text = " ".join(str(text).split())
+    if len(text) <= budget:
+        return text
+    return text[:budget] + f"…[+{len(text) - budget}]"
 
 
 @dataclass(frozen=True)
@@ -392,9 +465,15 @@ NODE_FRAMES: dict[str, FrameSpec] = {
     "gradeRisk": FrameSpec(
         node="gradeRisk",
         fields=(
-            # 判的是**这一调**的风险 —— 没有 target 就没有可判的东西
-            FrameField("last_input", 200, "target", required=True),
-            FrameField("task", 300, "task"),
+            # 判的是**这一调**的风险;`target` 就是这一调的参数（`task` 是背景）
+            #
+            # ⚠️ **不是 required** —— 判据是「有没有参数」,不是「判不判得了」:
+            #    无参工具（`list_dir` / ALFWorld 的 `go to X` 那一类)
+            #    的调用**本来就没有 target**,它是**正常状态**,不是缺陷。
+            #    标成 required 会让每一步无参调用都撞一次 fatal ——
+            #    而那正是 §8.15 那条「天天误报和没有这条检查等价」的形状。
+            FrameField("last_input", 200, "target"),
+            FrameField("task", 300, "task", required=True),
         ),
         excluded=(("last_result", "判的是**调用之前**的风险,这时还没有结果"),),
     ),
@@ -442,8 +521,29 @@ NODE_FRAMES: dict[str, FrameSpec] = {
             #   这次事故的形状正是「有 draft 但被截短了」—— 那走 `truncations`,
             #   不在这里;这里是「压根没有」。
             FrameField("draft", 900, "answer", required=True),
+            # ★★★ **工具证据** —— 见 `AgentCtx.evidence`。
+            #
+            #   这是 2026-09-23 查出来的「静默缺席」的修法:闸门判的是
+            #   「回答有没有超出**工具输出**的支持」,而它原来**看不到任何工具输出**。
+            #   实测(ALFWorld 那题)agent 只走到冰箱门口(冰箱还关着)就交了
+            #   「I placed the microwaved apple in the fridge.」—— 一句编的完成报告,
+            #   而帧里没有任何反证,于是 `escalated=False`,没有任何东西拦它。
+            #
+            #   ★ 预算 600:证据是**被核对的对象**,而 `draft` 是被判的对象 ——
+            #     两者都要放得下。实测 100 字符那次的教训是「喂少了闸门会正确地误报」,
+            #     所以这一格宁大勿小(`MAX_REQUEST_CHARS` 兜底)。
+            FrameField("evidence", 600, "evidence"),
         ),
-        excluded=(("history", "判的是**回答**与任务,历史会把回答挤掉"),),
+        # ⚠️ `history` 仍然排除,但**理由变了**。原来那条写的是「历史会把回答挤掉」;
+        #    现在证据是单独一栏、有自己的预算,所以真正的理由换成了:
+        #    `history` 是**做过什么**的形状（每条结果只留 60 字符),
+        #    而闸门要的是**返回了什么**（逐句核对的材料）。
+        #    给前者等于给了一份更薄、更旧的副本,却还要占 `draft` 的预算。
+        excluded=(
+            ("history", "**过的是证据(`evidence`),不是整段历史** —— "
+                        "`history` 每条结果只留 60 字符,是「做过什么」的形状;"
+                        "闸门要逐句核对,那需要返回原文"),
+        ),
     ),
 }
 
@@ -504,6 +604,13 @@ MAX_OPTIONS = 32
 #: ★ **这是整个请求的预算,不是帧的预算** —— R5 的病就是只算了帧那一半。
 MAX_REQUEST_CHARS = 4000
 
+#: 一次请求**最多带几道题**。★ 合并省的是**往返次数**,不是容量 ——
+#: 这个数只用来挡「把七个节点一股脑塞进一次请求」那种写法:
+#: 七道题的问题与判据加起来约 1.5–2k 字符,和帧抢的是同一段上下文
+#: （实测 77 个候选时选中概率掉到 0.425,同一条道理）。
+#: 所以合并的判据是**证据形状相同、彼此独立**,不是「能塞多少塞多少」。
+MAX_QUESTIONS = 3
+
 
 @dataclass(frozen=True)
 class Question:
@@ -522,6 +629,19 @@ class Question:
     kind: str
     ask: str
     options: tuple[str, ...] = ()
+    #: ★★★ **这道题用哪个节点的帧。** 空 = 和 `node` 同名。
+    #:
+    #: 为什么需要它:两个节点是**一次判定问两件事**（`DECISION.md` 里 kind 是
+    #: `mixed`)—— `grade_risk` 问 `risk` + `needs_auth`,`can_deliver` 问
+    #: `deliverable` + `unsupported`。两道题共享**同一份帧**,而各自的
+    #: `node` 是问题 id（判定模型看到的措辞、账上的那一行）。
+    #:
+    #: ★ 名字分开是**必须的**:`NODE_FRAMES` 的键是**节点**名
+    #: （`gradeRisk` / `canDeliver`,和 TS 的 `loop.gradeRisk` 对齐）,
+    #: 而问题 id 是 `risk` / `needs_auth` —— 那是 `vocab.ts` 里
+    #: `criteria` 的键、「答案回到哪个字段」的名字。**两者混用会去查一个
+    #: 不存在的帧,而且报错长得像「你节点名打错了」。**
+    frame: str = ""
     #: ★ **判据**（`vocab.ts` 的 `criteria`）。
     #:
     #: - `noul` → `{"true": "什么条件下算 true", "false": "什么条件下算 false"}`
@@ -566,21 +686,52 @@ class Request:
     """**一次判定请求的完整形态**:帧（状态）+ 问题（问什么、选项是什么）。
 
     ★ 预算必须在这个粒度上算 —— 分开算就是 R5。
+
+    ★★ **一次请求可以带多道题**（`questions`）—— 那是判定模型的性质
+    （一次前向对所有问题并行打分,见 `core/deciding.py` 的模块头),
+    不是优化。七个节点接齐之后,**一批 = 一次 HTTP 往返**这条对应关系
+    必须在这里成立:一次请求只装一道题的话,
+    `DecisionBatchEvent.requests_in_batch / questions_in_batch` 恒等于 1,
+    于是「判定有没有被合并」这件事在账上永远看不出来。
+
+    ⚠️ `question` 是**单题**的老形状,留着是因为 `frame_ab.py` / 测试里
+    还在用它单发一题。两者同时给是不允许的 —— 那会让 `render()` 里
+    出现两道题而 `check()` 只校验一道。
     """
 
     frame: Frame
-    question: Question
+    question: Question | None = None
+    #: 一次请求里的全部问题。**留空 = 用 `question` 那一道**（老形状）。
+    questions: tuple[Question, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.questions and self.question is not None:
+            raise ValueError("`question` 和 `questions` 只能给一个 —— "
+                             "同时给会让正文里出现两道题而校验只过一道")
+        if not self.questions and self.question is None:
+            raise ValueError("一个请求至少要有一道题")
+
+    @property
+    def all_questions(self) -> tuple[Question, ...]:
+        return self.questions or ((self.question,) if self.question is not None else ())
 
     def render(self) -> str:
-        """判定的正文:帧 + 问题 + 选项编号。
+        """判定的正文:帧 + 每道题的问题与选项编号。
 
         ★ 选项**带序号**列出来 —— 判定模型返回的是序号或标签,
         而「第几个」在选项被截断时仍然要指向同一个东西。
+
+        ★ 多题时每道题带自己的 `# Question (<node>)` 小标题:不写的话
+        两道题的正文会连在一起,而**问题 id 不会到达模型**（`vocab.ts`）——
+        它只能靠措辞分辨哪道是哪道。
         """
-        parts = [self.frame.render(), "", f"# Question", self.question.ask]
-        if self.question.options:
-            parts.append("# Options")
-            parts.extend(f"{i}. {o}" for i, o in enumerate(self.question.options, start=1))
+        parts = [self.frame.render()]
+        multi = len(self.all_questions) > 1
+        for q in self.all_questions:
+            parts += ["", f"# Question{' (' + q.node + ')' if multi else ''}", q.ask]
+            if q.options:
+                parts.append("# Options")
+                parts.extend(f"{i}. {o}" for i, o in enumerate(q.options, start=1))
         return "\n".join(parts)
 
     def digest(self) -> str:
@@ -617,6 +768,72 @@ class Request:
         """**发请求之前**跑（§8.2 原话:「发请求之前就要校验」）。
 
         返回空列表 = 可以发。否则**调用方必须处理**,不许照发。
+
+        ★★ **每一道题都要过一遍,不是只看第一道。** 多题合并成一次请求
+        （见类文档）之后,「只校验 `self.question`」会让第二道题的问题
+        **完全绕过校验** —— 而它的病正是「校验发现 → 无人接收 → 请求照发」。
+        """
+        out: list[Violation] = []
+
+        for question in self.all_questions:
+            out.extend(self._check_question(question, ctx))
+
+        # ★ 一次请求能带几道题也要有人管 —— 它和帧、选项抢的是同一段上下文。
+        #   这里**必须拦**:它不像选项数那样是「偶尔多一点」,
+        #   而是调用点写错（比如想合并七个节点）时就一定越界。
+        if len(self.all_questions) > MAX_QUESTIONS:
+            nodes = "+".join(q.node for q in self.all_questions)
+            out.append(Violation(
+                code="too_many_questions",
+                detail=(f"{nodes}: 一次请求 {len(self.all_questions)} 道题 > {MAX_QUESTIONS}。"
+                        f"合并的判据是**证据形状相同、彼此独立**（例如 "
+                        f"`stepOk`+`isDone` 都看刚刚那一步),不是能塞多少塞多少 —— "
+                        f"七道题的问题与判据会挤掉帧那半边"),
+            ))
+
+        # R5 的另一半:整个请求的预算,不只是帧那一半
+        #
+        # ★ 多题时这一条更值钱:合并请求省的是**往返次数**,
+        #   而代价是**正文变长**。两者是同一个取舍的两面,所以必须在
+        #   请求这一级一起算（只算帧那一半就是 R5 的病）。
+        total = self.chars()
+        if total > MAX_REQUEST_CHARS:
+            nodes = "+".join(q.node for q in self.all_questions)
+            out.append(Violation(
+                code="request_over_budget",
+                detail=(f"{nodes}: 请求 {total} 字符 > {MAX_REQUEST_CHARS}"
+                        f"（帧 {len(self.frame.render())} + 问题与选项）"),
+            ))
+
+        # 帧里缺字段。**分两档** —— 这是把 §8.2 那条不变量从噪声里救出来的关键:
+        #
+        #   required 缺 → **判定的依据不在**,这次判定没有对象。发出去只会得到一个
+        #                 凭空生成的答案,而日志上它和一次正常判定长得一样（§8.10）。
+        #                 → fatal,调用方必须修帧 / 标 degraded / 弃答。
+        #   只是上下文缺 → 第 0 步没有 `last_result`、生成之前没有 `draft` ——
+        #                 **正常状态**,不进这个列表。
+        #
+        # ★ **不进列表不等于不说。** 它照旧渲染成 `(absent — last_result)`、
+        #   照旧记在 `Frame.missing` 上进日志 —— 信息一个字节没少,
+        #   少的是「每一步都喊一次」。
+        #   `Violation` 的含义是「必须处理」,把正常状态放进去就等于教会读的人跳过它。
+        if self.frame.missing_required:
+            nodes = "+".join(q.node for q in self.all_questions)
+            out.append(Violation(
+                code="field_missing",
+                detail=(f"{nodes}: 帧里缺**判定依据** "
+                        f"{list(self.frame.missing_required)} —— 这一次判定没有对象可判。"
+                        f"（另外缺的上下文：{sorted(set(self.frame.missing) - set(self.frame.missing_required))}）"),
+                fatal=True,
+            ))
+        return out
+
+    def _check_question(self, question: Question, ctx: AgentCtx | None) -> list[Violation]:
+        """一道题自己的那两条:选项数上限、候选里有没有做过的动作。
+
+        ★ 这两条**只能是每题一份** —— 帧是整个请求共用的,而选项是每题各自的。
+        原来把帧的字段检查也写在这里过,那样多题时同一条 `field_missing`
+        会被报 N 遍,而「天天误报」和「没有这条检查」在效果上没有区别。
         """
         out: list[Violation] = []
 
@@ -640,31 +857,23 @@ class Request:
         #   实测 77 个候选时选中概率掉到 0.425。所以**报,但不拦** ——
         #   和下面 R2 那条同一个处理（「不是 fatal,但必须报出来;
         #   没人看这个不变量」正是 R2 的病）。
-        if len(self.question.options) > MAX_OPTIONS:
+        if len(question.options) > MAX_OPTIONS:
             out.append(Violation(
                 code="options_over_budget",
-                detail=(f"{self.question.node}: {len(self.question.options)} 个选项 > {MAX_OPTIONS}。"
+                detail=(f"{question.node}: {len(question.options)} 个选项 > {MAX_OPTIONS}。"
                         f"实测 77 个候选时选中概率掉到 0.425 —— "
                         f"**要裁就裁在候选提供方那一侧,不是在这里切**"),
                 fatal=False,
             ))
 
-        # R5 的另一半:整个请求的预算,不只是帧那一半
-        total = self.chars()
-        if total > MAX_REQUEST_CHARS:
-            out.append(Violation(
-                code="request_over_budget",
-                detail=f"请求 {total} 字符 > {MAX_REQUEST_CHARS}（帧 {len(self.frame.render())} + 选项）",
-            ))
-
         # R2:候选里有没有**已经做过的动作**
-        if ctx is not None:
+        if ctx is not None and question.options:
             done = {r.tool for r in ctx.records()}
-            repeated = sorted(done & set(self.question.options))
+            repeated = sorted(done & set(question.options))
             if repeated:
                 out.append(Violation(
                     code="candidate_already_done",
-                    detail=(f"{self.question.node}: 候选里有做过的动作 {repeated}。"
+                    detail=(f"{question.node}: 候选里有做过的动作 {repeated}。"
                             f"§8.4 要求**每步重建**、把做过的删掉 —— "
                             f"固定候选会让模型去选一个已经不适用的动作（实测：写完文件后 "
                             f"`write_file` 还在候选里,模型会再选它）"),
@@ -672,27 +881,6 @@ class Request:
                     #    **但必须报出来** —— R2 的病正是「没人看这个不变量」。
                     fatal=False,
                 ))
-
-        # 帧里缺字段。**分两档** —— 这是把 §8.2 那条不变量从噪声里救出来的关键:
-        #
-        #   required 缺 → **判定的依据不在**,这次判定没有对象。发出去只会得到一个
-        #                 凭空生成的答案,而日志上它和一次正常判定长得一样（§8.10）。
-        #                 → fatal,调用方必须修帧 / 标 degraded / 弃答。
-        #   只是上下文缺 → 第 0 步没有 `last_result`、生成之前没有 `draft` ——
-        #                 **正常状态**,不进这个列表。
-        #
-        # ★ **不进列表不等于不说。** 它照旧渲染成 `(absent — last_result)`、
-        #   照旧记在 `Frame.missing` 上进日志 —— 信息一个字节没少,
-        #   少的是「每一步都喊一次」。
-        #   `Violation` 的含义是「必须处理」,把正常状态放进去就等于教会读的人跳过它。
-        if self.frame.missing_required:
-            out.append(Violation(
-                code="field_missing",
-                detail=(f"{self.question.node}: 帧里缺**判定依据** "
-                        f"{list(self.frame.missing_required)} —— 这一次判定没有对象可判。"
-                        f"（另外缺的上下文：{sorted(set(self.frame.missing) - set(self.frame.missing_required))}）"),
-                fatal=True,
-            ))
         return out
 
     @property
@@ -734,7 +922,8 @@ def candidate_provider(tool: Tool) -> Callable[[AgentCtx], list[str]] | None:
 __all__ = [
     "AgentCtx", "StepRecord", "Frame", "FrameField", "FrameSpec",
     "Question", "Request", "Violation", "MAX_OPTIONS", "MAX_REQUEST_CHARS",
+    "MAX_QUESTIONS",
     "NODE_FRAMES", "MAX_LISTED_CANDIDATES", "EVIDENCE_INPUT_CHARS",
     "EVIDENCE_WRITE_INPUT_CHARS", "compile_frame", "ctx_from_steps", "frame_for",
-    "candidate_provider",
+    "candidate_provider", "clip_text", "render_evidence",
 ]

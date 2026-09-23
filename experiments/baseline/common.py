@@ -337,6 +337,30 @@ def run_loop(session: Session, cfg: LoopConfig) -> AgentOutcome:
                                   thought=parsed.thought))
                 return AgentOutcome(steps=steps, final_answer=parsed.answer)
 
+            # ★★ **`ask` —— 该问人 / 该弃答。**
+            #
+            #   `Action.kind` 里早就有这一种（`core/types.py` 的原话:
+            #   「这是我们的设计独有的一种动作。**必须能被评测看见** ——
+            #   否则『拒答率』和『闸门假拒』这两个指标算不出来」),
+            #   `action_ask()` 也一直住在 `core/agent.py` 里 ——
+            #   但**循环从来没有过这条分支**,于是任何控制器返回的 `ask`
+            #   都会掉进下面的工具分支:拿一个不存在的工具名去 `call_tool`。
+            #
+            #   这是接 `gradeRisk` 时才发现的:`risk >= 2` 那条硬规则判出
+            #   `ask_human`（§8.5「授权闸门不接受概率绕过」),而那条路在循环里
+            #   **走不到** —— 一道写在判定里、没有写在循环里的闸门,
+            #   和没有这道闸门是一样的（§8.16 那条「要求写在文档里、
+            #   却没写在代码里,和没有这条要求是一样的」）。
+            #
+            #   ★ 停下,而不是重试:授权是**人的**决定,循环里没有别的东西
+            #     能回答它。带上 `escalated=True`,「闸门拦下了」这件事在结果里
+            #     就是看得见的,不会被读成「模型不会做」。
+            if parsed.kind == "ask":
+                return AgentOutcome(
+                    steps=steps, final_answer=None, escalated=True,
+                    error=f"该问人：{parsed.raw or parsed.answer}",
+                )
+
             # 工具（异常在 ToolExecutor 里已经转成观察 + 错误事件 —— 不再吞第二遍）
             observation = session.call_tool(parsed.tool, parsed.arguments)
             steps.append(

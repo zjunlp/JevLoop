@@ -71,7 +71,7 @@ from typing import Any
 # 词汇
 # ═══════════════════════════════════════════════════════════
 
-EVENT_TYPES = ("model", "tool", "decision_batch", "span", "answer")
+EVENT_TYPES = ("model", "tool", "decision_batch", "span", "answer", "audit")
 
 
 def now_iso() -> str:
@@ -219,6 +219,37 @@ class AnswerEvent(Event):
 
 
 @dataclass
+class AuditEvent(Event):
+    """`gradeRisk` 判出 `auto_audit` 时**真的**留下的那一条痕。
+
+    ★★ 为什么它必须是一条事件,而不是 `trace` 里的一行:
+
+    `DECISION.md` 的 `grade_risk` 一节写着「**`auto_audit` 承诺了留痕就必须真的
+    留痕。以前这条分支和 `auto` 完全一样,只多打一行 trace。**」
+    而 `trace` 是**内存里的调试列表** —— 跑完之后没人读得到,
+    于是「留痕」这件事在证据上等于没发生（和 `core/frame.py` 里那条
+    「违规只写进内存里一个 list 不算有人接收」是同一个形状）。
+
+    ★ 字段逐字对齐 TS 的 `AuditRecord`（`src/vocab-records.ts`）:
+    `step` / `tool` / `target` / `reason` / `risk` / `at`。
+    **同名同义是对照检查能成立的前提**（`AGENTS.md` §8.16）——
+    两份实现里同一个名字指两样东西时,对照会放过它。
+    """
+
+    type: str = "audit"
+    tool: str = ""
+    #: 目标（工具输入,截断过）
+    target: str = ""
+    #: 判定给出的理由,原样保留
+    reason: str = ""
+    #: 风险分（`gradeRisk` 的 `score:risk`）。★ 拿不到就是 `None`,**不编一个 0** ——
+    #:  0 分的意思是「只读」,不能用它冒充「未知」（TS 侧 `gradeRisk` 的原话）。
+    risk: int | None = None
+    #: 留痕时刻（epoch 毫秒,和 TS 的 `at: Date.now()` 同一把尺）
+    at: float = 0.0
+
+
+@dataclass
 class SpanEvent(Event):
     """一段工作。`begin` / `end` 成对 —— **给一步单独计时,不用手写。**
 
@@ -236,6 +267,7 @@ EVENT_CLASSES: dict[str, type[Event]] = {
     "decision_batch": DecisionBatchEvent,
     "span": SpanEvent,
     "answer": AnswerEvent,
+    "audit": AuditEvent,
 }
 
 

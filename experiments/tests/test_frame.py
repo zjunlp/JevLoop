@@ -362,8 +362,15 @@ def test_truncation_is_not_an_absence() -> None:
 def test_the_seven_nodes_all_declare_a_required_field() -> None:
     """★ 每个节点都得至少有一个**判定依据** —— 否则它就是在没有对象的情况下判。
 
-    反过来也成立:九个 `required` 之外的多余标记会让噪声回来。所以这条测试
-    同时钉住「至少一个」和「清单就是这九个」。
+    反过来也成立:多余标记的 `required` 会让噪声回来（「天天误报和没有这条检查
+    在效果上没有区别」）。所以这条测试同时钉住「至少一个」和「清单就是这几个」。
+
+    ⚠️ `gradeRisk` 的那一格从 `last_input` 改成了 `task`（2026-09-23,接节点时
+    发现的）:`target` 是**这一调的参数**,而无参工具（`list_dir` / ALFWorld 的
+    `go to X`）**本来就没有参数** —— 它是**正常状态**,不是「判定依据不在」。
+    标成 required 会让每一步无参调用都撞一次 fatal,而那正是 §8.15 那条
+    「这条不变量每一步都在响」的形状。风险的判据里 `task` 一直在,
+    所以这一个节点**仍然有依据**:它少了的是「这一调的目标」,不是「判什么」。
     """
     from experiments.core.frame import NODE_FRAMES
 
@@ -373,7 +380,7 @@ def test_the_seven_nodes_all_declare_a_required_field() -> None:
         "needsTool": ["task"],
         "pickTool": ["task"],
         "pickInput": ["task"],
-        "gradeRisk": ["last_input"],
+        "gradeRisk": ["task"],
         "stepOk": ["last_result"],
         "isDone": ["task"],
         "canDeliver": ["draft", "task"],

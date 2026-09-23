@@ -250,20 +250,26 @@ def test_mock_is_conservative_and_says_so() -> None:
     一律 0.5 —— 让 policy 的置信度门限**自己**走到 `escalate`。
     这恰好演示了「不确定就别猜」。
     """
+    # ★ 用**线协议的名字**（`type` / `criteria`）构造请求 —— 发出去的
+    #   就是这一份（`_wire()`）。第一版这里写的是 `kind` / `options`,
+    #   而 Mock 当时读的也是 `kind` —— **两边一起错,于是测试是绿的**,
+    #   真实请求（`type`）进来时每一道题都被当成是非题:
+    #   `choice` 拿不到选项、`score` 拿到的是 `noul`。见 `MockClient` 的说明。
     resp = MockClient().decide(_req({
-        "a": {"kind": "noul"},
-        "b": {"kind": "choice", "options": {"x": 0.5, "y": 0.5}},
-        "c": {"kind": "score"},
+        "a": {"type": "noul"},
+        "b": {"type": "choice", "criteria": {"x": "?", "y": "?"}},
+        "c": {"type": "score", "criteria": ["low", "high"]},
     }))
     assert resp.answers["a"].noul == 0.5
-    assert resp.answers["b"].top() == pytest.approx(0.5), "4 个选项时也是均分"
-    assert resp.answers["c"].score == 0
+    assert resp.answers["b"].top() == pytest.approx(0.5), "2 个选项时均分"
+    assert resp.answers["c"].score == 0, "「一律最低分」—— 0 是最低档"
     assert resp.degraded and resp.warnings, "mock 的答案不能看起来像真判定"
 
 
 def test_mock_splits_probability_across_all_options() -> None:
     """★ 选项越多,选中项概率越低 —— 这正是 `topGte` 与选项个数无关的体现（§8.3）。"""
-    resp = MockClient().decide(_req({"q": {"kind": "choice", "options": {c: 0.25 for c in "abcd"}}}))
+    resp = MockClient().decide(_req({"q": {"type": "choice",
+                                           "criteria": {c: "?" for c in "abcd"}}}))
     a = resp.answers["q"]
     assert len(a.probabilities) == 4
     assert a.top() == pytest.approx(0.25)
