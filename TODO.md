@@ -2,11 +2,15 @@
 
 JevLoop already demonstrates one thing: **the judgements in an agent loop can be taken away from the generative model** — and that this can be declared, measured and reproduced.
 
-What it is not yet is a harness you would run something real on. This file is the distance between those two sentences, ordered by what blocks the claim rather than by difficulty.
+What it is not yet is a harness you would run something real on. This file is the distance between those two sentences.
+
+**Part 1** is the loop's own design — what it decides, on what evidence, and how it bounds itself. **Part 2** is not about the loop at all; it is about handing this loop to someone who is not you.
 
 If you want to take one of these on, **open an issue saying so first**. We will scope it with you before you write code — cheaper for both of us than a large PR that has to be reshaped. `CONTRIBUTING.md` says what we merge and what we close.
 
 ---
+
+# Part 1 · The harness itself
 
 ## 1 · The tool surface is four tools wide, so the decision space is too
 
@@ -20,7 +24,21 @@ That leaves `grade_risk` close to untestable. **A risk ladder only means somethi
 
 **Where:** `src/tools.ts` — 142 lines holding the interface, the implementation and the side effects. **Size:** medium.
 
-## 2 · Decision frames have no cache policy, so the cost argument is missing a leg
+## 2 · Judgements sit on their thresholds, because the frames are thin
+
+**Why this blocks the claim.** This one is measured, and it undermines the numbers we already publish. On BFCL, `pickTool` came back at **0.71** against a **0.6** threshold — a margin of 0.11 — and adding one option to the candidate set flipped the same frame's answer.
+
+The cause was not the model. The frame carried `task` and a 108-character stub as `last_result`, and deliberately excluded `history`, so there was almost nothing to decide on. Change the candidates, and the distribution moves far enough to cross.
+
+Every per-node number in `bench/` inherits this. **A judgement next to its threshold is a coin that has not landed yet**, and reporting its accuracy without its margin overstates what we know.
+
+- [ ] Report the margin, not only the answer, for every node in `bench/`.
+- [ ] For each node decide one of two things: feed the frame enough evidence, or move the threshold off the thin region.
+- [ ] Record which nodes are thin *on purpose* — a wide frame is not automatically right, and `step_ok` excludes `task` for a reason we measured.
+
+**Where:** `src/frame.ts`, `src/decisions.ts`, `bench/oracle.ts`. **Size:** medium.
+
+## 3 · Decision frames have no cache policy, so the cost argument is missing a leg
 
 **Why this blocks the claim.** Cost is one of this project's two claims. Structural prompt caching prices a repeated prefix at roughly 0.1×, and published measurements of a harness with a deliberate cache shape report **99.9% of prompt tokens served as cache reads**. It is the single largest cost lever there is, and we use none of it.
 
@@ -32,7 +50,7 @@ Decision frames are unusually well suited to it: `task` is invariant, `history` 
 
 **Where:** `src/frame.ts`, `src/provider-http.ts`. **Size:** medium.
 
-## 3 · It does not run long, and compaction is not a clean slate
+## 4 · It does not run long, and compaction is not a clean slate
 
 **Why this blocks the claim.** The loop finishes after a few dozen steps. Folding solves "do not overflow this turn"; it does not solve either of the two things a long task actually needs.
 
@@ -46,7 +64,81 @@ Decision frames are unusually well suited to it: `task` is invariant, `history` 
 
 **Where:** `src/context.ts` and `src/conversation.ts` (both budgets exist). **Size:** large.
 
-## 4 · Internal hygiene
+## 5 · No delegation, and this architecture is unusually suited to it
+
+**Why this blocks the claim.** The loop is single-threaded. Every harness with a claim to production has some form of delegation — Claude Code, Hermes and Writer all do — and it is the main way context is kept out of the parent loop.
+
+The 2026 finding from Cognition is that multi-agent works when **writes stay single-threaded and the extra agents contribute intelligence rather than actions**. That is a description of what a decision model already is. Nobody has tried a sub-agent that *makes judgements* instead of doing work, and this is the project that could.
+
+- [ ] A delegated judgement: the parent hands over a frame, the child returns an answer rather than an action.
+- [ ] Context firewall: the child reads widely and returns something bounded, with the raw material kept out of the parent frame.
+- [ ] A depth cap, and idempotence under retry — a delegated call must not apply twice.
+
+**Where:** new. **Size:** large.
+
+## 6 · No failure-spend governance
+
+**Why this blocks the claim.** Retries and dead ends are the multiplier on the bill that no per-token discount fixes. The classification exists (`http-error.ts`) and the backoff is right (`retry.ts`) — but nothing bounds the total.
+
+- [ ] A circuit breaker: stop a model that re-issues a byte-identical failing call.
+- [ ] **A discarded attempt must produce no side effects.** If a stream fails midway, no tool call from that attempt may have run.
+- [ ] A cap on tool parallelism.
+
+**Where:** `src/agent.ts`, `src/tools.ts`. **Size:** medium.
+
+## 7 · The trust boundary stops at the tool name
+
+**Why this blocks the claim.** Two places in the code say the same thing: *the tool name the model returns is untrusted input, and it must be checked before the call*. That check is right. **The tool's output gets no such treatment** — a file's contents flow into `last_result`, into the frame, and into the decision model.
+
+The classic prompt-injection attack assumes an LLM: "ignore previous instructions". **A decision model does not follow instructions, so that attack does not obviously apply. What applies instead is displacement** — untrusted text moving a probability across a threshold. Item 2 above is the measurement of how close those thresholds are.
+
+**Nobody has studied this**, because nobody else routes judgements to a classifier. That makes it both the most serious gap on this list and the most publishable.
+
+- [ ] Treat tool output as untrusted at the frame boundary, the way the tool name already is.
+- [ ] Measure it: craft a file whose contents try to move `grade_risk`, and find out what it takes.
+- [ ] Decide what "sanitised" means for a decision frame. Stripping instructions is not obviously the right operation for a classifier.
+
+**Where:** `src/frame.ts`, `src/tools.ts`. **Size:** medium — and it is a paper.
+
+---
+
+# Part 2 · The boundaries around it
+
+These are not about the loop. They are about handing this loop to someone who is not you, and being answerable for what it does.
+
+## 8 · The security boundary
+
+There is no authentication — `src/server.ts` says so itself, in a warning it prints. Sandboxing covers path escape and nothing else. There is no ceiling on CPU, memory, disk or wall clock. One process, local files, one tenant.
+
+- [ ] Authentication, or an explicit written statement that this is loopback-only and will stay that way.
+- [ ] Resource limits at the tool layer: time, output size, and what a tool is allowed to write.
+- [ ] A container or namespace — or a documented decision not to have one.
+
+## 9 · The cost boundary
+
+The only ceiling is `maxSteps`, default **12**. Nothing caps tokens, money or time for a run. "Budget" in this repository means *context characters*, not spend.
+
+You can currently limit how many steps it takes. You cannot limit what it costs.
+
+- [ ] A per-run spend ceiling that **halts** the loop, rather than warning after the fact.
+- [ ] The same for wall clock.
+
+## 10 · The failure boundary
+
+Classification and backoff are better here than in most harnesses. What is missing is resuming: sessions persist and the UI restores them, but a run that died at step 7 cannot continue from step 7.
+
+- [ ] Resume a run from its last durable step.
+
+## 11 · The operations boundary
+
+No deployment shape. Sessions are local files, so two processes cannot share them. Traces and accounting exist, but they are rendered for a person, not exported for a monitor.
+
+- [ ] A deployment artefact — or a documented reason there is none.
+- [ ] Export metrics: decisions per task, calls per task, spend per task.
+
+---
+
+## 12 · Internal hygiene
 
 None of this makes the project worse. All of it makes the next change slower.
 
