@@ -222,9 +222,26 @@ interface NodeStat {
   unjudged: number
   rightProbs: number[]
   wrongProbs: number[]
+  /**
+   * 每次判定离门限的距离（TODO §2）。
+   *
+   * ★ 它**不需要标准答案** —— 对错要看金标，而「离翻掉多近」只看答案与策略。
+   *   所以这里也收 `unjudged` 的那些：判不了对错，不等于不知道它在瞎猜。
+   */
+  margins: number[]
   /** 出错的原话，报告里列出来 */
   why: string[]
 }
+
+/**
+ * 「贴边」的界线。
+ *
+ * ★ 0.10 不是拍的：§8.17 实测**只加一个候选**就把同一个帧的选中概率从
+ *   1.00 推到 0.71（差 0.29），并让 0.71 落在了 0.6 门限的 0.11 之内 ——
+ *   那一次判定翻掉了。**扰动一个候选能移动的量级就是这么大**，所以 margin
+ *   在这个量级以内的判定，是一枚还没落地的硬币。
+ */
+const THIN_MARGIN = 0.1
 
 async function main(): Promise<void> {
   const tasks = only ? TASKS.filter((t) => t.id.includes(only)) : TASKS
@@ -282,7 +299,7 @@ async function main(): Promise<void> {
   const byNode = new Map<string, NodeStat>()
   for (const r of runs) {
     for (const j of r.judgements) {
-      const s = byNode.get(j.node) ?? { node: j.node, right: 0, wrong: 0, unjudged: 0, rightProbs: [], wrongProbs: [], why: [] }
+      const s = byNode.get(j.node) ?? { node: j.node, right: 0, wrong: 0, unjudged: 0, rightProbs: [], wrongProbs: [], margins: [], why: [] }
       if (j.verdict === 'right') {
         s.right++
         s.rightProbs.push(j.prob)
@@ -293,6 +310,7 @@ async function main(): Promise<void> {
       } else {
         s.unjudged++
       }
+      if (j.margin) s.margins.push(j.margin.margin)
       byNode.set(j.node, s)
     }
   }
@@ -327,6 +345,30 @@ async function main(): Promise<void> {
     const b = median(s.wrongProbs)
     const gap = a !== undefined && b !== undefined ? (a - b).toFixed(2) : '  —  '
     console.log(`  ${cell(s.node, 20)}${cell(num(a), 12)}${cell(num(b), 12)}${gap}`)
+  }
+
+  // ── 离门限多近（TODO §2）────────────────────────────────────
+  //
+  // ★ 命中率**不能单独读**。贴在门限边上的判定是一枚还没落地的硬币：它这次
+  //   对了，输入差一点就翻 —— 而「差一点」有多大我们已经量过：**只加一个候选**
+  //   就把同一个帧的选中概率从 1.00 推到 0.71（§8.17）。
+  //
+  //   这个数**不需要标准答案**（margin 是「答案 + 策略」的性质，不是「对错」的
+  //   性质），所以 `未判` 的那些也在分母里 —— 而它们恰恰最需要被看见。
+  console.log('')
+  console.log(C.bold('  ── 离门限多近（margin） ────────────────────────────────'))
+  console.log(C.dim('  命中率高不等于判定稳：这一栏说的是「离翻掉还差多少」'))
+  console.log(C.dim(`  ${cell('节点', 20)}${cell('可算', 6)}${cell('中位', 9)}${cell('最小', 9)}${cell('贴边', 6)}占`))
+  for (const s of stats) {
+    if (s.margins.length === 0) continue
+    const thin = s.margins.filter((m) => m < THIN_MARGIN).length
+    const share = pct(thin, s.margins.length)
+    const sorted = [...s.margins].sort((a, b) => a - b)
+    console.log(
+      `  ${cell(s.node, 20)}${cell(s.margins.length, 6)}` +
+        `${cell(num(median(s.margins)), 9)}${cell(sorted[0]!.toFixed(3), 9)}` +
+        `${cell(thin, 6, thin ? C.yellow : undefined)}${thin ? C.yellow(share) : share}`,
+    )
   }
 
   // ── 错在哪 ─────────────────────────────────────────────────

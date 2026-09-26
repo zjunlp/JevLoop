@@ -151,6 +151,36 @@ export function isDecision(v: unknown): boolean {
 }
 
 /** 一次判定的完整结果 */
+/**
+ * 门限谓词的名字。报 margin 时要让人对得上 `DECISION.md` 里的写法。
+ *
+ * 住在 L0 而不是 `policy.ts`（L1）：`DecisionResult` 在 L0，而它要带上
+ * `MarginReport` —— L0 指不了 L1。**只定义一次**，两边引用，
+ * 免得同一个概念有两个形状（§8.16：同名不同义最难发现）。
+ */
+export type ThresholdKind = 'gte' | 'topGte' | 'probGte' | 'probLt' | 'topLt' | 'scoreGte'
+
+/**
+ * 一次判定**贴在哪条门限边上**（TODO §2）。
+ *
+ * 这个数不加进来，「命中率」会被读高：**贴在门限边上的判定是一枚还没落地的
+ * 硬币**，输入差一点就翻。实测 BFCL 上 `pickTool` 回来 0.71 对 0.6 门限，
+ * margin 只有 0.11，而**换掉候选集就翻了**（§8.17）。
+ *
+ * ★ 它**不需要标准答案** —— margin 是「答案 + 策略」的性质，不是「对错」的性质。
+ *   所以每个判定都报得出，包括标定台判不了的那些。
+ */
+export interface MarginReport {
+  /** 离得最近的那条门限卡的是哪个问题 */
+  id: string
+  kind: ThresholdKind
+  threshold: number
+  /** 被卡的那个量的取值（与谓词读的是同一个数） */
+  value: number
+  /** `|value - threshold|`。**越小越是硬币** */
+  margin: number
+}
+
 export interface DecisionResult<A = AnswerSet> {
   id: string
   step: number
@@ -186,6 +216,13 @@ export interface DecisionResult<A = AnswerSet> {
    * 只比 `frame.digest` 会漏掉「换掉候选集」那一类 —— 帧一动不动、答案却翻了。
    */
   requestDigest?: string
+  /**
+   * 这次判定离翻掉有多近（TODO §2）。
+   *
+   * 没有可比的带门限规则时缺省 —— **缺席要能看出来**，别用 0 冒充
+   * 「贴着门限」（§8.10）。
+   */
+  margin?: MarginReport
   /** true = 无人接住，该走兜底路径了 */
   escalate: boolean
 }

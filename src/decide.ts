@@ -34,7 +34,7 @@
 import type { Provider } from './seam-provider.ts'
 import type { DecisionSpec, DecisionResult } from './vocab-decision.ts'
 import type { QuestionSet, AnswerMap, AnswerSet } from './vocab.ts'
-import { resolvePolicy, type PolicyWarning } from './policy.ts'
+import { resolvePolicy, closestMargin, type PolicyWarning } from './policy.ts'
 import { validate, type BudgetWarning, type Checkpoint } from './budget.ts'
 import { frameDigest, requestDigest } from './frame-digest.ts'
 import { Meter } from './meter.ts'
@@ -310,6 +310,18 @@ export class Decider {
       const outcome = resolvePolicy(p.spec.policy, mine, (w) => policyWarnings.push(w))
       if (policyWarnings.length) this.#onPolicyWarn?.(p.spec.id, policyWarnings)
 
+      /*
+        ★ 这次判定离**翻掉**有多近（TODO §2）。
+
+        只算到**决定它的那条规则为止** —— 后面的规则根本没被问到，拿它们算
+        margin 是在报一个没发生过的比较。
+
+        ★ 它**不需要标准答案**：margin 是「答案 + 策略」的性质，不是「对错」的
+          性质。所以每个判定都报得出 —— 包括标定台判不了的那些，而那些恰恰
+          最需要知道「它是不是在瞎猜」。
+      */
+      const margin = closestMargin(p.spec.policy, mine, outcome.ruleIndex)
+
       const result: DecisionResult<AnswerSet> = {
         id: p.spec.id,
         step,
@@ -320,6 +332,8 @@ export class Decider {
         //   合并时它与上面那份合成帧不同，这正是应该看得见的差别。
         ...(p.artifact ? { frame: p.artifact } : {}),
         requestDigest: requestPrint,
+        // 贴在哪条门限边上（缺席 = 这次没有可比的带门限规则，**不用 0 冒充**）
+        ...(margin ? { margin } : {}),
         questions: p.questions,
         answers: mine,
         action: outcome.action,

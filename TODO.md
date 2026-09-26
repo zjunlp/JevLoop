@@ -32,11 +32,13 @@ The cause was not the model. The frame carried `task` and a 108-character stub a
 
 Every per-node number in `bench/` inherits this. **A judgement next to its threshold is a coin that has not landed yet**, and reporting its accuracy without its margin overstates what we know.
 
-- [ ] Report the margin, not only the answer, for every node in `bench/`.
+- [x] Report the margin, not only the answer, for every node in `bench/`. *(2026-09-26. `margin = |the quantity the predicate reads − its threshold|`, taken from the same rules the runtime used, and carried on the `decision` event. It needs no gold label, so `unjudged` judgements report one too. `bench/` prints the median, the minimum, and how many sat within `THIN_MARGIN`.)*
 - [ ] For each node decide one of two things: feed the frame enough evidence, or move the threshold off the thin region.
-- [ ] Record which nodes are thin *on purpose* — a wide frame is not automatically right, and `step_ok` excludes `task` for a reason we measured.
+- [x] Record which nodes are thin *on purpose* — a wide frame is not automatically right, and `step_ok` excludes `task` for a reason we measured. *(The register is each node's `FrameSpec.excluded` in `src/decisions.ts`: every field a judgement deliberately does not see, with the measurement that put it there. A frame is thin on purpose exactly when `excluded` says so and why.)*
 
-**Where:** `src/frame.ts`, `src/decisions.ts`, `bench/oracle.ts`. **Size:** medium.
+**Where:** `src/policy.ts` (threshold metadata + `closestMargin`), `src/frame.ts`, `src/decisions.ts`, `bench/oracle.ts`, `bench/run.ts`. **Size:** medium.
+
+**First reading, offline rule judge:** `pickTool` came back 14/14 correct and **14/14 within `THIN_MARGIN`** — every single one of them sitting 0.10 from the line, while every other node sat at 0.20–0.45. That is §2's claim reproduced in the report itself: the accuracy column said "solid", the margin column said "one nudge from flipping". (The rule table returns fixed probabilities, so those 14 identical margins are a property of the fixture, not a distribution — what it demonstrates is that the column catches the node §2 was written about.)
 
 ## 3 · Decision frames have no cache policy, so the cost argument is missing a leg
 

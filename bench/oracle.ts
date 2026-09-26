@@ -53,6 +53,7 @@ import { join } from 'node:path'
 
 import type { AgentEvent } from '../src/events.ts'
 import type { Answer } from '../src/vocab.ts'
+import type { MarginReport } from '../src/vocab-decision.ts'
 import { isToolName } from '../src/act.ts'
 import { LOCAL_TOOLS } from '../src/act-local.ts'
 import type { BenchTask, ExpectedCall } from './tasks.ts'
@@ -90,6 +91,14 @@ export interface Judgement {
   action: string
   /** 走这个分支的置信度（见模块头第 2、3 条） */
   prob: number
+  /**
+   * 这次判定**贴在哪条门限边上**（TODO §2）。
+   *
+   * ★ 它是**唯一不需要标准答案**的那个数：`prob` 说的是「模型给正确答案多少」，
+   *   要看金标；`margin` 说的是「离翻掉多近」，只看答案与策略。
+   *   所以 `unjudged` 的那些也有 margin —— 而那些恰恰最需要它。
+   */
+  margin?: MarginReport
   /** 一句话说清判据 —— 判错时要能直接看出错在哪 */
   why: string
 }
@@ -165,7 +174,9 @@ export class Oracle {
       return null
     }
     if (e.type !== 'decision') return null
-    const j = this.#judge(e)
+    // 帧的账与门限边上的距离都从事件里拿 —— 判据机**不改内核一个字节**，
+    // 只是把已经发出来的东西读一遍（模块头那句话），margin 也一样
+    const j: Judgement = { ...this.#judge(e), ...(e.margin ? { margin: e.margin } : {}) }
     // 「判不了」的那几支把 want 设成了实际动作，会自己判成 right ——
     // 在这里翻回 unjudged，**不能让它冒充判对**（模块头第 1 条）
     if (j.why.includes('判不了') || j.why.includes('认不出来') || j.why.includes('没有需要挑输入') || j.why.includes('还没有')) {

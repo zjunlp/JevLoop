@@ -29,7 +29,7 @@
  */
 
 import type { GateOverrides } from './gates.ts'
-import type { DecisionResult, FrameArtifact } from './vocab-decision.ts'
+import type { DecisionResult, FrameArtifact, MarginReport } from './vocab-decision.ts'
 import type { QuestionSet, AnswerSet } from './vocab.ts'
 import type { AuditRecord, MeterStats } from './vocab-records.ts'
 
@@ -72,6 +72,16 @@ export type AgentEvent =
        *   只比前者会漏掉「换掉候选集」那一类（§8.17 骗过我们一次的地方）。
        */
       requestDigest?: string
+      /**
+       * 这次判定**贴在哪条门限边上**（TODO §2）。
+       *
+       * ★ 不加它，「命中率」会被读高：**贴在门限边上的判定是一枚还没落地的
+       *   硬币**。实测 `pickTool` 0.71 对 0.6 门限、margin 只有 0.11，
+       *   而换掉候选集就翻了（§8.17）。
+       *
+       * 缺席 = 这次没有可比的带门限规则 —— **不用 0 冒充**（§8.10）。
+       */
+      margin?: MarginReport
       questions: QuestionSet
       answers: AnswerSet
       action: string
@@ -389,6 +399,8 @@ export function decisionEvent(d: DecisionResult<unknown>): AgentEvent {
     // 帧的账与请求的指纹：两者回答两个不同的问题，一起进事件（§8.14 / §8.17）
     ...(d.frame ? { frame: d.frame } : {}),
     ...(d.requestDigest ? { requestDigest: d.requestDigest } : {}),
+    // 贴在哪条门限边上 —— 命中率不能单独读（TODO §2）
+    ...(d.margin ? { margin: d.margin } : {}),
     questions: d.questions,
     answers: d.answers as AnswerSet,
     action: d.action,
