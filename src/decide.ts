@@ -12,6 +12,22 @@
  *
  * 后台挂了也不会崩：记一笔 degraded，然后交回上层，而不是瞎猜一个动作。
  *
+ * ── 为什么不能再拆（§12：超过 300 行必须说清）────────────────────
+ *
+ * 一句话：**这个文件负责「一次判定」**。
+ *
+ * 上面那六步是**一条序列**，而序列本身就是这里唯一的内容：②合成 state 必须在
+ * ①各自投影之后、③的预算校验必须在发请求之前、⑥的策略必须拿到④的答案。
+ * §12 的两个判据（「输入输出形状变了」「消费者不是同一批人」）在这里都不成立 ——
+ * 每一步吃的是同一个 `projected`，吐给同一条链的下一步，消费者只有 `agent.ts`。
+ * 按步拆成六个文件，等于把「顺序」这件事从一眼可见变成要跨文件拼。
+ *
+ * 反例对照：`decisions.ts`（L4）超线**不该拆**，理由是「七个节点是同一件事」；
+ * 这里是「六步是同一件事」。两类都是**内聚**，不是体量问题。
+ *
+ * ★ 真到了要拆的时候，第一条缝是**合并那一块**（②③两段，合帧 + 合题 + 撞了抛），
+ *   它有自己的输入输出形状（多投影 → 一次请求），可以单独测。
+ *
  * @module JevLoop/decide
  */
 
@@ -20,6 +36,7 @@ import type { DecisionSpec, DecisionResult } from './vocab-decision.ts'
 import type { QuestionSet, AnswerMap, AnswerSet } from './vocab.ts'
 import { resolvePolicy, type PolicyWarning } from './policy.ts'
 import { validate, type BudgetWarning, type Checkpoint } from './budget.ts'
+import { frameDigest, requestDigest } from './frame-digest.ts'
 import { Meter } from './meter.ts'
 
 export interface DeciderOptions {
@@ -129,11 +146,20 @@ export class Decider {
     if (specs.length === 0) return []
 
     // ① 各自投影
-    const projected = specs.map((spec) => ({
-      spec,
-      state: spec.state(ctx),
-      questions: (typeof spec.questions === 'function' ? spec.questions(ctx) : spec.questions) as QuestionSet,
-    }))
+    const projected = specs.map((spec) => {
+      /*
+        ★ 帧由**声明**编出来的节点，用那一份 —— 同一份 state 上还带着指纹、
+        截断记录、「故意不看什么」（§8.14）。手拼 dict 的节点没有 artifact，
+        行为与以前逐字一致（这是加这一层时唯一的兼容要求）。
+      */
+      const artifact = spec.frameArtifact?.(ctx)
+      return {
+        spec,
+        artifact,
+        state: artifact ? artifact.state : spec.state(ctx),
+        questions: (typeof spec.questions === 'function' ? spec.questions(ctx) : spec.questions) as QuestionSet,
+      }
+    })
 
     /*
       ② 合成 state。
@@ -185,6 +211,23 @@ export class Decider {
       }
     }
 
+    /*
+      ★ 「它**被问了**什么」—— 帧 + 问题 + 选项（§8.17 更正的那一条）。
+
+      只记帧指纹会漏掉「换掉候选集」那一类：`choice` 的选项不在帧里，
+      换掉候选，帧指纹一动不动而答案会翻。单节点时帧指纹就是那个节点自己的；
+      合并时发出去的是一份合成帧，所以按参与合并的节点名重算一个。
+    */
+    const requestPrint = requestDigest(
+      projected.length === 1 && projected[0]!.artifact
+        ? projected[0]!.artifact.digest
+        : frameDigest(
+            projected.map((p) => p.spec.id).join('+'),
+            state as Record<string, unknown>,
+          ),
+      questions,
+    )
+
     // ④ 发请求之前就检查预算
     for (const p of projected) {
       const warnings = validate(state, p.questions, this.checkpoint)
@@ -235,6 +278,9 @@ export class Decider {
           id: p.spec.id,
           step,
           state,
+          // 挂掉也要带上帧的账：事后要能查「它当时看到的是什么」
+          ...(p.artifact ? { frame: p.artifact } : {}),
+          requestDigest: requestPrint,
           questions: p.questions,
           answers: {},
           action: 'escalate',
@@ -270,6 +316,10 @@ export class Decider {
         // `state` / `questions` 报的是**实际发出去的那一份**：合并时就是合并后的帧。
         // 报各自的投影会让轨迹看起来像发了两次请求，而实际只发了一次。
         state,
+        // ★ 而 `frame` 是**这个节点自己**那一份（含它的指纹与「故意不看什么」）；
+        //   合并时它与上面那份合成帧不同，这正是应该看得见的差别。
+        ...(p.artifact ? { frame: p.artifact } : {}),
+        requestDigest: requestPrint,
         questions: p.questions,
         answers: mine,
         action: outcome.action,

@@ -15,8 +15,30 @@
  * 分开的理由：帧 bug 和策略 bug 是两类 bug，住在一起时无法分别测试
  * （第十轮 R2/R5 就是两条只能靠整个 agent 才能复现的帧 bug）。
  *
+ * ── 为什么不能再拆（§12：超过 300 行必须说清）────────────────────
+ *
+ * 一句话：**这个文件负责「把 agent 状态编译成一帧」**。
+ *
+ * 它看起来像两件事（① 声明 + 编译器；② 这个 loop 的派生投影），但那是同一件事
+ * 的两半：编译器**只做声明里写着的事**（取哪一格、超预算就截、缺了要报），
+ * 而它编进帧的那些**值**由这里的投影算出来（`describeDone` / `lastInput` /
+ * `toolsFor` / `fileOptions`）。两半共用同一个词汇 `AgentCtx`，消费者也是同一批
+ * ——`decisions.ts` 的七个节点。
+ *
+ * ★ **真有一条缝，但它不该在这次改动里切。** 把通用编译器单独拆成
+ *   `frame-compile.ts`，前提是 `AgentCtx` 先下沉到 L0；否则两个 L3 文件互相
+ *   import，`npm run check` 的层规则当场拦下（§11 只允许 **L2 内部**指向定义角，
+ *   L3 没有这个豁免）。那是一次需要单独决定、单独登记的搬迁，不是顺手的整理。
+ *
+ * 判据（§12 的原话是「输入输出形状变了」或「消费者不是同一批人」）：这里两样
+ * 都还没发生。**帧 bug 与候选 bug 已经分开了** —— 候选的取舍在 L4，这里只做
+ * 投影与有界化。
+ *
  * @module JevLoop/frame
  */
+
+import { clip } from './budget.ts'
+import { frameDigest } from './frame-digest.ts'
 
 // ═══════════════════════════════════════════════════════════
 // 判定需要的上下文
@@ -63,6 +85,249 @@ export interface AgentCtx {
   lastTool?: string
   lastResult?: string
   draft?: string
+}
+
+// ═══════════════════════════════════════════════════════════
+// 帧声明 —— §8.14：帧是**声明出来的，不是拼出来的**
+//
+// 这一节补的是一个真实的窟窿：在这之前，七个判定各自用一个
+// `state: (ctx) => ({...})` **手拼 dict**，于是下面四件事**没有任何办法被复查**：
+//
+//     喂少了（canDeliver 曾把证据 clip 到 100）、喂多了（stepOk 曾带着 task）、
+//     形状不对（needsTool 曾拿 `steps_done: 2` 这个计数）、少了一整个字段
+//     （needsTool 曾没有「还剩哪些」）
+//
+// 四次事故**全部在帧上，没有一次是判定模型判错了** —— 而四次读起来都像模型错。
+// 手拼的 dict 让「这个判定看了什么」只存在于函数体里，review 时看不见。
+//
+// 声明之后有两件事变成机器可查的：
+//   ① 每一栏读 `AgentCtx` 的**哪一格**是写出来的（`FrameField.from`）；
+//   ② 没被读的格子必须出现在 `excluded` 里，**每一条带一句理由**。
+// ⇒ 「删掉一个字段之后，没有任何东西记得它曾经在过」这句话不再成立：
+//   删掉一栏，它要么出现在 `excluded` 里，要么被 `frameSpecViolations` 当场挡下。
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * `AgentCtx` 的键，**运行时**的那一份。
+ *
+ * ★ 类型是 `Record<keyof AgentCtx, true>`：`AgentCtx` 以后**加一格就编译不过**，
+ *   于是加字段的人被迫在这里登记，而登记之后 `frameSpecViolations` 会要求
+ *   每个判定声明「看它」或「故意不看它（带理由）」。
+ *
+ * 这就是把一个**退不掉的检查**装在这件事上的做法（同 `scripts/check.ts` 的层表）。
+ */
+const CTX_KEYS: Record<keyof AgentCtx, true> = {
+  task: true,
+  cwd: true,
+  files: true,
+  readFiles: true,
+  history: true,
+  canWrite: true,
+  earlier: true,
+  lastTool: true,
+  lastResult: true,
+  draft: true,
+}
+
+/** `AgentCtx` 的全部键（运行时）。供完整性检查与测试使用 */
+export const AGENT_CTX_KEYS = Object.keys(CTX_KEYS) as (keyof AgentCtx)[]
+
+/**
+ * 帧里的一栏。
+ *
+ * `from` 是这一栏**读 ctx 的哪一格** —— 它让「这个判定看了什么」可以**枚举**。
+ * 没有它，「故意不看什么」就无从检查：一个手拼的 dict 里，读了哪几格只有
+ * 函数体自己知道。
+ */
+export interface FrameField {
+  /** 帧里这一栏叫什么（发给判定模型的键名） */
+  key: string
+  /** 读 `AgentCtx` 的哪一格。**这是「这个判定看了什么」的唯一来源** */
+  from: keyof AgentCtx
+  /** **字符串**的字符预算。超了要截，而且截了要报（§8.14 第一条不变量） */
+  chars?: number
+  /** **列表**最多几项。超了要截，同样要报。计数字段用 `chars` 给一个小上界即可 */
+  listMax?: number
+  /** 这一栏为什么在这个判定里。**写不出理由的字段不该在帧里** */
+  why: string
+  /**
+   * 派生值（比如把 `history` 压成一句话）。不给就是 `ctx[from]` 原样。
+   *
+   * 返回 `undefined` 表示**这一栏今天不适用** —— 那个键会被**省掉**，
+   * 并记进 `Frame.absent`。这和「`ctx` 里没有这一格」（`Frame.unfilled`）
+   * 是两件事，§8.15 那条「天天误报 = 没有检查」就死在这里：
+   * 「还没有」和「忘了喂」混成一个信号，等于每一步都在响。
+   */
+  project?: (ctx: AgentCtx) => unknown
+}
+
+/** 一条「故意不看」：ctx 的哪一格 + **为什么** */
+export type FrameExclusion = readonly [keyof AgentCtx, string]
+
+/**
+ * 一个判定的帧**声明**。
+ *
+ * `excluded` 是**必填**的，而且每条要写理由。理由不是文档礼貌 ——
+ * 它是这个机制唯一防得住的事：四次事故里有两次是「**不该看的看了**」，
+ * 而删掉一个字段之后没有任何东西记得它曾经在过，下一个人只会看到
+ * 「这里少了个字段」，然后好心地加回去。
+ */
+export interface FrameSpec {
+  /** 判定节点的 id（`loop.stepOk` 这种），与 `DecisionSpec.id` 一致 */
+  node: string
+  fields: readonly FrameField[]
+  excluded: readonly FrameExclusion[]
+}
+
+/** 一栏被截断了：原来多少、预算多少 */
+export interface Truncation {
+  key: string
+  from: number
+  to: number
+}
+
+/** 一栏没有进帧：声明里要看它，但 ctx 里没有 */
+export interface Unfilled {
+  key: string
+  from: keyof AgentCtx
+  why: string
+}
+
+/** 一栏今天不适用（声明里说清了为什么，见 `FrameField.project`） */
+export interface Absent {
+  key: string
+  why: string
+}
+
+/**
+ * 编好的帧 —— §8.14 说的那份**可复查的产物**。
+ *
+ * 正文之外还带三份记录与一个指纹，缺一不可：
+ *   · `truncated` 有界且**截了要报**；
+ *   · `unfilled` / `absent` 缺的要说，**不静默留白**；
+ *   · `excluded` 把「故意不看什么」带在产物上 —— 它随帧一起进日志，
+ *     所以事后读轨迹的人看得见当时**没喂**什么，而不只是喂了什么。
+ */
+export interface Frame {
+  node: string
+  state: Record<string, unknown>
+  /** 帧正文的指纹。回答「**它看到了什么**」 */
+  digest: string
+  truncated: readonly Truncation[]
+  unfilled: readonly Unfilled[]
+  absent: readonly Absent[]
+  excluded: readonly FrameExclusion[]
+}
+
+// ═══════════════════════════════════════════════════════════
+// 两种指纹 —— 实现在 `frame-digest.ts`（L0）
+//
+// ★ **为什么搬走**：`decide.ts`（L2）发请求时也要算「帧 + 问题 + 选项」的指纹，
+//   而它是 L2、这里是 L3，§11 不许 L2 import L3 —— 所以共用的东西必须下沉。
+//   同 `seam-provider.ts` 把失败分类下沉到 `http-error.ts` 的先例。
+//
+// 这里再导出，是为了让「帧」这条缝的消费方仍然只认一个入口。
+// ═══════════════════════════════════════════════════════════
+
+export { frameDigest, requestDigest, DIGEST_CHARS } from './frame-digest.ts'
+
+/**
+ * 按声明编译一帧。
+ *
+ * 编译器**只做声明里写着的事**：`from` 取哪一格、超预算就截并记录、
+ * 派生值为 `undefined` 就省掉那一栏。它不认识任何一个具体判定。
+ */
+export function compileFrame(spec: FrameSpec, ctx: AgentCtx): Frame {
+  const state: Record<string, unknown> = {}
+  const truncated: Truncation[] = []
+  const unfilled: Unfilled[] = []
+  const absent: Absent[] = []
+
+  for (const f of spec.fields) {
+    // ★ 「我们问了但它没给」是**独立于取值的**一件事：即使 `project` 兜了一个
+    //   默认值把字节补齐（下面那些 `?? ''`），这个信号也必须留下 ——
+    //   否则一次「忘了喂」在帧上看起来和一次正常的空值完全一样。
+    if (ctx[f.from] === undefined) unfilled.push({ key: f.key, from: f.from, why: f.why })
+
+    const raw = f.project ? f.project(ctx) : ctx[f.from]
+    if (raw === undefined) {
+      absent.push({ key: f.key, why: f.why })
+      continue
+    }
+
+    if (Array.isArray(raw)) {
+      const max = f.listMax ?? raw.length
+      if (raw.length > max) truncated.push({ key: f.key, from: raw.length, to: max })
+      state[f.key] = raw.slice(0, max)
+      continue
+    }
+
+    if (typeof raw === 'string') {
+      const budget = f.chars
+      if (budget === undefined) {
+        // 理论上有 `frameSpecViolations` 挡着；真漏了也不静默截 —— 原样进帧，
+        // 让「这一栏没有界」在**检查**里红，而不是在这里悄悄改行为。
+        state[f.key] = raw
+        continue
+      }
+      const clipped = clip(raw, budget)
+      if (clipped !== raw) truncated.push({ key: f.key, from: raw.length, to: budget })
+      state[f.key] = clipped
+      continue
+    }
+
+    state[f.key] = raw
+  }
+
+  return {
+    node: spec.node,
+    state,
+    digest: frameDigest(spec.node, state),
+    truncated,
+    unfilled,
+    absent,
+    excluded: spec.excluded,
+  }
+}
+
+/**
+ * 声明本身有没有毛病。**这是让 `excluded` 不再是装饰的那道检查。**
+ *
+ * 三类违规：
+ *   1. 某个 `AgentCtx` 格子既没被任何一栏读、也没被声明为「故意不看」——
+ *      那正是「删掉一个字段之后没有任何东西记得它曾经在过」的形状；
+ *   2. 同一格同时出现在 `fields` 和 `excluded` 里 —— 声明自相矛盾；
+ *   3. 理由为空 —— 等于没写（`excluded` 的全部价值就在那句为什么）。
+ */
+export function frameSpecViolations(specs: readonly FrameSpec[]): string[] {
+  const out: string[] = []
+  for (const spec of specs) {
+    const seen = new Set(spec.fields.map((f) => f.from))
+    const excluded = new Set<keyof AgentCtx>()
+
+    for (const [k, why] of spec.excluded) {
+      if (!why.trim()) out.push(`${spec.node}: '${k}' 的排除理由为空 —— 等于没声明`)
+      if (seen.has(k)) out.push(`${spec.node}: '${k}' 既在 fields 里又被排除，声明自相矛盾`)
+      excluded.add(k)
+    }
+    for (const f of spec.fields) {
+      if (!f.why.trim()) out.push(`${spec.node}: 字段 '${f.key}' 没写它为什么在这个判定里`)
+      // 有界是 §8.2 的硬要求：没有 `chars` 也没有 `listMax` 的一栏会原样进帧，
+      // 于是「帧必须有界」这句话在这一栏上不成立 —— 而它不会自己响。
+      const bound = f.chars ?? f.listMax
+      if (bound === undefined) {
+        out.push(`${spec.node}: 字段 '${f.key}' 没有界 —— 字符串给 chars、列表给 listMax`)
+      } else if (bound <= 0) {
+        out.push(`${spec.node}: 字段 '${f.key}' 的预算是 ${bound} —— 有界是硬要求`)
+      }
+    }
+    for (const k of AGENT_CTX_KEYS) {
+      if (!seen.has(k) && !excluded.has(k)) {
+        out.push(`${spec.node}: ctx.'${k}' 既没被看，也没声明「故意不看它」—— 补一条 excluded，并写为什么`)
+      }
+    }
+  }
+  return out
 }
 
 /**

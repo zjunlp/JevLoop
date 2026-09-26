@@ -151,7 +151,7 @@ None of this makes the project worse. All of it makes the next change slower.
 ## Already settled — do not re-litigate these
 
 - **How a judgement leaves the generative model.** `DECISION.md` compiles to typed questions plus a policy; `FrameSpec` declares what each judgement sees.
-- **What each judgement is allowed to look at.** Declared per node, with a digest, and the deliberately-excluded fields are written down with a reason.
+- **What each judgement is allowed to look at.** Declared per node as a `FrameSpec` in `src/decisions.ts`, compiled by `src/frame.ts`, and every field of `AgentCtx` must be either read by some field or listed in `excluded` **with a reason** — `frameSpecViolations()` fails the build otherwise. Frames carry a digest, and `truncated` / `unfilled` / `absent` are reported rather than silently dropped. *(Landed 2026-09-26. Before that this line was aspirational: there was no `FrameSpec` in `src/` at all — the declarations only existed in the frozen Python arm.)*
 - **What each judgement and each generation cost.** Counted separately, per task. Very few harnesses publish this at all, and none we know of split it this way.
 - **How often each judgement is right.** `bench/` grades the seven nodes independently instead of reporting one accuracy number.
 

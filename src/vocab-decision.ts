@@ -71,6 +71,31 @@ export const ACTIONS = [
 
 export type Action = (typeof ACTIONS)[number]
 
+/**
+ * 帧制品的**最小词汇**。
+ *
+ * 完整形状在 `frame.ts`（L3：`FrameSpec` / `compileFrame` / 两种指纹）——
+ * 这里只放**L2 的消费方**需要认得出的那几个键。理由和 `isDecision` 一样：
+ * 形状声明在词汇层、实现住在更高的层，否则 L2 就得 import L3（§11 不许）。
+ *
+ * ★ 字段名与 `frame.ts` 的 `Frame` **逐字对应** —— 同名不同义是
+ *   §8.16 记的那类最难发现的分歧，所以这里宁可少写几个键，也不改写名字。
+ */
+export interface FrameArtifact {
+  /** 实际进帧的正文（与 `DecisionResult.state` 是同一个对象） */
+  state: unknown
+  /** 帧正文的指纹：回答「**它看到了什么**」 */
+  digest: string
+  /** 有界且**截了要报** */
+  truncated: readonly { key: string; from: number; to: number }[]
+  /** 声明要看，而 ctx 里没有 —— 可能忘了喂 */
+  unfilled: readonly { key: string; from: string; why: string }[]
+  /** 今天不适用（声明里说清了为什么）—— 与 `unfilled` **必须分开** */
+  absent: readonly { key: string; why: string }[]
+  /** **故意不看**的 ctx 栏，每条带理由。它随帧进日志 */
+  excluded: readonly (readonly [string, string])[]
+}
+
 export interface DecisionSpec<Ctx, Q extends QuestionSet = QuestionSet> {
   /** 唯一标识。用「域.动作」的写法 */
   id: string
@@ -82,6 +107,18 @@ export interface DecisionSpec<Ctx, Q extends QuestionSet = QuestionSet> {
    * 而且上下文很短（512/1024 token），所以不能把原始对话塞进去。
    */
   state: (ctx: Ctx) => unknown
+  /**
+   * 这一份 state 是**怎么编出来的**（§8.14）。
+   *
+   * 声明了它的节点，帧由 `FrameSpec` 编译，并带上指纹 / 截断记录 / 缺失记录 /
+   * 「故意不看什么」。不声明就是手拼的 dict —— 那种帧**没有任何办法被复查**，
+   * 而这个项目出过的四次事故全部在帧上。
+   *
+   * ★ 给了它的时候，`state(ctx)` 必须与 `artifact.state` **逐字相同**：
+   *   `decide.ts` 优先用 artifact，别的调用方用 `state`，两者分叉就等于
+   *   发出去的帧和记下来的帧不是一份（§8.16 的「同名不同义」）。
+   */
+  frameArtifact?: (ctx: Ctx) => FrameArtifact
   /** 问题。可以是 ctx 的函数（选项随状态变化时必须这样写） */
   questions: Q | ((ctx: Ctx) => Q)
   policy: PolicyRule<AnswerMap<Q>>[]
@@ -136,6 +173,19 @@ export interface DecisionResult<A = AnswerSet> {
    *   排查只能靠手工再发一次请求（§8.10）。
    */
   warnings?: string[]
+  /**
+   * 这一帧是怎么编出来的（§8.14）。**声明了帧的节点才有。**
+   *
+   * ★ 它回答「它看到了什么」；「它被问了什么」要看 `requestDigest`。
+   *   两个问题以前共用一个串，而差别正好骗过这个项目一次（§8.17）。
+   */
+  frame?: FrameArtifact
+  /**
+   * **请求**的指纹：帧 + 问题 + 选项（§8.17 更正的那一条）。
+   *
+   * 只比 `frame.digest` 会漏掉「换掉候选集」那一类 —— 帧一动不动、答案却翻了。
+   */
+  requestDigest?: string
   /** true = 无人接住，该走兜底路径了 */
   escalate: boolean
 }

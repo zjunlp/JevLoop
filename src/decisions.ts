@@ -67,8 +67,397 @@ import { parseGates, splitGates, type GateOverrides } from './gates.ts'
 import { compilePolicy, compileQuestions } from './decision-compile.ts'
 
 import { toolsFor, fileOptions, pickInputInstructions, describeDone, lastInput } from './frame.ts'
-import type { AgentCtx } from './frame.ts'
+import type { AgentCtx, FrameSpec } from './frame.ts'
+import { compileFrame } from './frame.ts'
 export type { AgentCtx, StepRecord } from './frame.ts'
+
+// ═══════════════════════════════════════════════════════════
+// 七个判定的**帧声明**（§8.14：帧是声明出来的，不是拼出来的）
+//
+// 放在一处是有意的：这七份**要能并排读**。「为什么 `pickTool` 看得到历史
+// 摘要而 `pickInput` 看不到」「为什么只有 `stepOk` 没有 task」—— 这些问题
+// 以前要靠逐个读函数体回答，而函数体里只有当时写它的人才知道答案。
+//
+// 每一栏的 `why` 不是文档礼貌，是**产生这一栏的那次实测**。§8.14 记着：
+// 四次事故全部在帧上、没有一次是判定模型判错了，而四次读起来都像模型错。
+// 那四次的经验只活在这里和 `docs/` 里 —— 删掉 `why`，下一个人会把
+// 「这里少了个字段」当成 bug 然后好心地加回去。
+//
+// `frameSpecViolations()` 会检查：`AgentCtx` 的**每一格**要么被某栏读、
+// 要么出现在 `excluded` 里且写明了为什么。**没有第三种状态。**
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 上文进决策帧的字符上限。
+ *
+ * 200 是**背景**的量级：要能说清「前面问过什么」，但不能挤掉这一轮真正
+ * 要看的东西（任务 400、上次结果 300）。帧上下文只有 512/1024，
+ * 多轮的代价必须显式地小（§8.2）。
+ */
+const EARLIER_MAX_CHARS = 200
+
+/**
+ * 一行「已经做过什么」的预算。
+ *
+ * ★ 这一栏此前**根本没有预算** —— `describeDone()` 的返回值原样进帧。
+ *   而 §8.2 要求帧必须有界，所以这是一处漏掉的界。300 高于任何现实取值
+ *   （工具名去重后最多几十个），因此**补上它不改变今天的输出**；
+ *   它防的是以后工具变多时这一栏悄悄长起来。
+ */
+const DONE_LINE_MAX_CHARS = 300
+
+/** 把声明编成 `state` —— 节点不再手拼 dict，帧的形状由声明决定 */
+function framed(spec: FrameSpec) {
+  const compile = (ctx: AgentCtx) => compileFrame(spec, ctx)
+  return {
+    state: (ctx: AgentCtx) => compile(ctx).state,
+    // ★ 同一份编译结果交给 `decide.ts`，让它把指纹 / 截断 / 「故意不看什么」
+    //   带进 `decision` 事件。没有这一条，`compileFrame` 算出来的指纹
+    //   **没有任何消费者** —— 那正是 §8.16 记的「声明了却没消费方」。
+    frameArtifact: compile,
+  }
+}
+
+/** 1 · 这一步需要动手吗 */
+const FRAME_NEEDS_TOOL: FrameSpec = {
+  node: 'loop.needsTool',
+  fields: [
+    { key: 'task', from: 'task', chars: 400, why: '整个判定的主体：问的是「这个任务还有没有没做的动作」' },
+    {
+      key: 'earlier',
+      from: 'earlier',
+      chars: EARLIER_MAX_CHARS,
+      project: (ctx) => ctx.earlier ?? '',
+      why: '多轮下「再读一遍那个文件」里的「那个」唯一能落地的地方（§8.2）',
+    },
+    {
+      key: 'already_done',
+      from: 'history',
+      chars: DONE_LINE_MAX_CHARS,
+      project: (ctx) => describeDone(ctx),
+      why:
+        '★ 必须是一份**清单**，不是一个计数。原来这里是 `steps_done: 2`，' +
+        '实测任务「把 alpha.ts 里的 totalOf 抄到新文件 summary.ts」读完 alpha.ts 后判了' +
+        '「不需要工具」，**文件从没被写出来** —— 因为「读过」和「写过」在计数里长得一样',
+    },
+    {
+      key: 'files_known',
+      from: 'files',
+      chars: 200,
+      listMax: 15,
+      project: (ctx) => ctx.files ?? [],
+      why: '任务里的「这两个文件」是一个**指代**，没有它落不到具体路径上',
+    },
+    {
+      key: 'already_read',
+      from: 'readFiles',
+      chars: 200,
+      listMax: 15,
+      project: (ctx) => ctx.readFiles ?? [],
+      why: '分不出「读了一个还是两个」，就无法确认任务说的「这两个」读完了没有（实测 0.86 误判）',
+    },
+    {
+      key: 'last',
+      from: 'lastResult',
+      chars: 300,
+      project: (ctx) => ctx.lastResult ?? '（还没有做过任何动作）',
+      why: '刚刚发生了什么 —— 判「还要不要动手」时最近一步的结果是主要依据',
+    },
+  ],
+  excluded: [
+    ['cwd', '路径不进判定：目标由 `target` 那一栏（gradeRisk）或候选（pickInput）表达，工作目录本身没有信息'],
+    ['canWrite', '「能不能写」是**代码**按精确规则判的（§8.1 第三行），不该让判定模型再判一遍'],
+    ['lastTool', '工具名单独列出来会诱导它去评判「上一个工具选得对不对」——那是 `stepOk` 的职责'],
+    ['draft', '草稿是生成之后才有的东西；这一步根本还没到生成'],
+  ],
+}
+
+/** 2 · 调哪个工具 */
+const FRAME_PICK_TOOL: FrameSpec = {
+  node: 'loop.pickTool',
+  fields: [
+    { key: 'task', from: 'task', chars: 400, why: '选工具的唯一依据是任务要什么' },
+    {
+      key: 'earlier',
+      from: 'earlier',
+      chars: EARLIER_MAX_CHARS,
+      project: (ctx) => ctx.earlier ?? '',
+      why: '挑工具时「上文」尤其重要 ——「那个文件」要靠它才能落到具体路径',
+    },
+    {
+      key: 'already_done',
+      from: 'history',
+      chars: DONE_LINE_MAX_CHARS,
+      project: (ctx) => describeDone(ctx),
+      why: '★ 用一句话讲清「已经做过什么」，不丢一个数组让模型自己解析 —— 实测只放数组时它会重复选做过的动作',
+    },
+    {
+      key: 'files_known',
+      from: 'files',
+      chars: 200,
+      listMax: 20,
+      project: (ctx) => ctx.files ?? [],
+      why: '「还有没有可读的文件」决定 read_file 还在不在候选里',
+    },
+    {
+      key: 'already_read',
+      from: 'readFiles',
+      chars: 200,
+      listMax: 10,
+      project: (ctx) => ctx.readFiles ?? [],
+      why: '少了它会重复读同一个文件（§8.2：帧里没有的信号它判不出来）',
+    },
+    {
+      key: 'last_result',
+      from: 'lastResult',
+      chars: 300,
+      project: (ctx) => ctx.lastResult ?? '',
+      why: '上一步的结果决定下一步该做什么',
+    },
+  ],
+  excluded: [
+    ['cwd', '同 needsTool：工作目录本身没有信息，目标由候选表达'],
+    ['canWrite', '「能不能写」是代码的规则，不是判定 —— 它决定 `write_file` 进不进候选，不进帧'],
+    ['lastTool', '★ 候选本身**已经按做过的动作重建过**（§8.4）；再把「上一个是什么」放进来，会让「还有哪些工具」和「已经做过什么」互相打架'],
+    ['draft', '还没到生成那一步'],
+  ],
+}
+
+/** 3 · 挑哪个输入 */
+const FRAME_PICK_INPUT: FrameSpec = {
+  node: 'loop.pickInput',
+  fields: [
+    { key: 'task', from: 'task', chars: 400, why: '判「要读哪个文件」必须知道任务要什么' },
+    {
+      key: 'tool',
+      from: 'lastTool',
+      chars: 40,
+      project: (ctx) => ctx.lastTool ?? '',
+      why: '同一个输入槽对不同工具含义不同：read_file 挑的是「读哪个」',
+    },
+    {
+      key: 'already_read',
+      from: 'readFiles',
+      chars: 200,
+      listMax: 10,
+      project: (ctx) => ctx.readFiles ?? [],
+      why: '读过的要从候选里去掉，判定得看得见「读过哪些」才知道剩哪些',
+    },
+    {
+      key: 'candidates',
+      from: 'files',
+      chars: 200,
+      listMax: 20,
+      project: (ctx) => ctx.files ?? [],
+      why: '候选的**全集**。真正发出去的是 fileOptions 的重建结果，这一栏是让判定知道总体有多少',
+    },
+  ],
+  excluded: [
+    ['cwd', '同前：目标由候选表达，不由工作目录表达'],
+    [
+      'history',
+      '★ 候选（`fileOptions`）本身已经是「还没读过的那些」这个闭集的投影；再给一遍历史会让「还剩哪些」和「做过什么」两个信号互相打架（§8.4 的同一个坑）',
+    ],
+    ['canWrite', '写路径的候选不由这里产生 —— `write_content` 生成路径，判定不参与'],
+    ['earlier', '这一步是在一个已经选定的工具内部挑参数，指代关系由 task + 候选表达就够了'],
+    ['lastResult', '结果的**内容**与「挑哪个文件」无关；它是 `stepOk` 与 `canDeliver` 的依据'],
+    ['draft', '还没到生成那一步'],
+  ],
+}
+
+/** 4 · 这次调用多危险 */
+const FRAME_GRADE_RISK: FrameSpec = {
+  node: 'loop.gradeRisk',
+  fields: [
+    {
+      key: 'tool',
+      from: 'lastTool',
+      chars: 40,
+      project: (ctx) => ctx.lastTool ?? 'unknown',
+      why: '风险的第一依据是哪个工具 —— 但**认不出来时不编一个数**',
+    },
+    {
+      key: 'base_risk',
+      from: 'lastTool',
+      chars: 12,
+      project: (ctx) => {
+        const t = ctx.lastTool
+        return t && isToolName(LOCAL_TOOLS, t) ? LOCAL_TOOLS[t].baseRisk : undefined
+      },
+      why:
+        '工具的静态风险基线（`act-local.ts` 的 `baseRisk`）。' +
+        '★ 认不出的工具名**不放这一栏** —— 0 分的意思是「只读」，不能用它冒充「未知」。' +
+        '这就是 `absent` 与 `unfilled` 必须分开的原因：这一栏「今天不适用」是**正常状态**',
+    },
+    {
+      key: 'target',
+      from: 'history',
+      chars: 200,
+      project: (ctx) => lastInput(ctx),
+      why: '判风险要看**这一调的目标**，不是工具名 —— `rm -rf /` 和 `ls` 的危险程度差在参数上',
+    },
+    { key: 'task', from: 'task', chars: 300, why: '同一个动作在不同任务下风险不同（写配置文件 vs 写 /etc）' },
+  ],
+  excluded: [
+    ['cwd', '工作目录由 target 的路径体现；单列出来是冗余'],
+    ['files', '目录里有哪些文件与「这一次调用多危险」无关'],
+    ['readFiles', '读过什么与风险无关'],
+    ['canWrite', '能不能写是另一道门；这里问的是**已经决定要做的这一调**有多危险'],
+    ['earlier', '多轮的上文不改变这一次调用的风险'],
+    [
+      'lastResult',
+      '★ 上一步的**输出内容**绝不能进这一栏：它是不可信文本，而这一栏的输出会驱动授权闸门 —— 让它读工具输出，等于让工具输出有机会推动风险分',
+    ],
+    ['draft', '还没到生成那一步'],
+  ],
+}
+
+/** 5 · 这一步成功了吗 */
+const FRAME_STEP_OK: FrameSpec = {
+  node: 'loop.stepOk',
+  fields: [
+    {
+      key: 'tool',
+      from: 'lastTool',
+      chars: 40,
+      project: (ctx) => ctx.lastTool ?? 'unknown',
+      why: '判据里写着「the target it names is the one that was requested」，得知道是哪个工具',
+    },
+    {
+      key: 'input',
+      from: 'history',
+      chars: 200,
+      project: (ctx) => lastInput(ctx),
+      why: '判据包含「返回的目标就是请求的那个」—— 没有请求就没有可比的对象',
+    },
+    { key: 'output', from: 'lastResult', chars: 500, project: (ctx) => ctx.lastResult ?? '', why: '这一步的**唯一证据**' },
+    {
+      key: 'already_read',
+      from: 'readFiles',
+      chars: 12,
+      project: (ctx) => (ctx.readFiles ?? []).length,
+      why: '一个计数就够：这一步判的是单次成功与否，不需要读过的清单',
+    },
+  ],
+  excluded: [
+    [
+      'task',
+      '★★ 四次事故里最贵的一次。帧里带着 task、问题写着「for the task」、判据写着「what the task needed」，' +
+        '三处一起把**这一步**的判定拉到了**任务级**。实测任务「读一下 invoice.ts」第一步 list_dir 返回文件列表，' +
+        '它确实成功了，但没回答「这个文件定义了哪些函数」，于是 ok=0.470 判否 → stop → **整个循环结束**：' +
+        '任何需要多于一个工具的任务都跑不完。「任务完成了吗」是 isDone 的职责',
+    ],
+    ['cwd', '与「这一次调用本身成没成」无关'],
+    ['files', '同上：成功与否看的是这一次的输入与输出'],
+    ['canWrite', '与这一步的成败无关'],
+    ['earlier', '★ 上文会把判定拉向「整体进展如何」，而这一栏问的是刚刚那一次调用'],
+    ['draft', '草稿在这一步之后才有'],
+  ],
+}
+
+/** 6 · 任务完成了吗 */
+const FRAME_IS_DONE: FrameSpec = {
+  node: 'loop.isDone',
+  fields: [
+    { key: 'task', from: 'task', chars: 400, why: '判的是「任务要求的都做了」—— 没有任务就没有判据' },
+    {
+      key: 'already_read',
+      from: 'readFiles',
+      chars: 200,
+      listMax: 15,
+      project: (ctx) => ctx.readFiles ?? [],
+      why:
+        '★ 这个问题靠**覆盖**就能答：任务说的那两个文件读了没有。' +
+        '原来没有这一栏时，判定只能从被截断的结果里去找函数名（实测 0.22 误判 keep_going）',
+    },
+    {
+      key: 'steps',
+      from: 'history',
+      chars: 260,
+      project: (ctx) =>
+        (ctx.history ?? []).slice(-5).map((h) => `${h.tool}(${clip(h.input, 60)}) → ${clip(h.result, 200)}`),
+      why:
+        '★ 结果留 **200 字符不是 80**，这是量出来的：任务「这两个文件各导出了什么函数」，' +
+        '80 字符时 alpha.ts 那条正好断在 `Order` 接口之后、**函数名 totalOf 在截断点之后** —— ' +
+        '结果留 80 判 keep_going(0.35)，留 200 判 finish(0.96)。' +
+        '**内容看得到时它是直接判断，不是推理**，余量大得多',
+    },
+  ],
+  excluded: [
+    ['cwd', '与「任务做完没有」无关'],
+    ['files', '「目录里有什么」不等于「任务要求的做完了没」—— 正是 needsTool 记的那个陷阱的另一面'],
+    ['canWrite', '与完成度无关'],
+    ['earlier', '多轮的上文属于「之前问过什么」；完成度由 task + 覆盖 + 步骤本身决定'],
+    ['lastTool', '单列上一个工具会把判定拉向「刚才那步怎么样」—— 那是 stepOk 的层级'],
+    ['lastResult', '最近一条结果已经**逐字**在 `steps` 里了，单列出来是重复的语气加强'],
+    ['draft', '还没到生成那一步'],
+  ],
+}
+
+/** 7 · 这个回答能交付吗 */
+const FRAME_CAN_DELIVER: FrameSpec = {
+  node: 'loop.canDeliver',
+  fields: [
+    { key: 'task', from: 'task', chars: 400, why: '判据是「任务要求的事做了、并如实报告」，两边都要有任务' },
+    {
+      key: 'answer',
+      from: 'draft',
+      chars: 900,
+      project: (ctx) => ctx.draft ?? '',
+      why: '★ 判的对象就是**刚生成的这份草稿** —— 它不在帧里，这一栏就没有意义',
+    },
+    {
+      key: 'evidence',
+      from: 'history',
+      chars: 600,
+      project: (ctx) =>
+        (ctx.history ?? []).slice(-3).map((h, i, all) => {
+          // ★ 预算跟着**载荷**走，不跟着位置走。以前是「最后一条 600、其余 200」，
+          //   而输入一律 clip 到 60。那对 read_file 对，对 write_file 两样都反了：
+          //   写操作的载荷是**输入**（`路径\n内容`），结果只有一句「已写入 X」。
+          //   实测：交付闸门核对一份如实报告「写进去的和原文不一样」的回答时，
+          //   `unsupported` 判 0.70；把写的输入给到 600、结果压到 60 之后同一个回答判 0.21。
+          const writes = h.tool === 'write_file'
+          const inputBudget = writes ? 600 : 60
+          const resultBudget = writes ? 60 : i === all.length - 1 ? 600 : 200
+          return `${h.tool}(${clip(h.input, inputBudget)}) → ${clip(h.result, resultBudget)}`
+        }),
+      why:
+        '★ 交付闸门要拿工具结果**逐句核对**回答，所以这一栏的预算比别处宽。' +
+        '实测把证据 clip 到 100 字符时，它**正确地**判出 unsupported=0.67 —— ' +
+        '判定是对的，是帧喂少了；改成 600 后立刻通过（§8.2 的原型事故）',
+    },
+  ],
+  excluded: [
+    ['cwd', '与「回答有没有证据支撑」无关'],
+    ['files', '目录清单不是证据；证据是**做过什么、看到了什么**'],
+    ['readFiles', '读过哪些文件同样不是证据本身'],
+    ['canWrite', '与交付判据无关'],
+    ['earlier', '★ 多轮的上文会把「这份草稿说的是不是这一轮做过的事」冲淡；交付核对的是**这一轮**的证据'],
+    ['lastTool', '单列上一个工具会把判定拉向「刚才那步」，而它要核对的是整份草稿'],
+    [
+      'lastResult',
+      '★ 最近一条结果已经逐字在 `evidence` 里了。单列一份会让**最近一步**获得不成比例的权重，' +
+        '而交付核对要求的是「每一句都能追溯到某条证据」',
+    ],
+  ],
+}
+
+/**
+ * 七个声明的注册表，按节点 id 索引。
+ *
+ * 导出是为了让**上面**的层（`agent.ts`、测试、以及将来的轨迹视图）拿得到
+ * 「这个判定该看什么」，而不必去读它的函数体。
+ */
+export const FRAME_SPECS: Readonly<Record<string, FrameSpec>> = {
+  'loop.needsTool': FRAME_NEEDS_TOOL,
+  'loop.pickTool': FRAME_PICK_TOOL,
+  'loop.pickInput': FRAME_PICK_INPUT,
+  'loop.gradeRisk': FRAME_GRADE_RISK,
+  'loop.stepOk': FRAME_STEP_OK,
+  'loop.isDone': FRAME_IS_DONE,
+  'loop.canDeliver': FRAME_CAN_DELIVER,
+}
 
 // ═══════════════════════════════════════════════════════════
 // DECISION.md 的编译
@@ -338,15 +727,6 @@ function askOf(id: string, expect: readonly string[]): string {
 // 判定模型出厂往往是未校准的，阈值该用你自己的标注数据算出来。
 // ═══════════════════════════════════════════════════════════
 
-/**
- * 上文进决策帧的字符上限。
- *
- * 200 是**背景**的量级：要能说清「前面问过什么」，但不能挤掉这一轮真正
- * 要看的东西（任务 400、上次结果 300）。帧上下文只有 512/1024，
- * 多轮的代价必须显式地小（§8.2）。
- */
-const EARLIER_MAX_CHARS = 200
-
 /*
  * 门限**不在这里** —— 它们现在住在 `DECISION.md` 的 `policy:` 里
  * （`prob:ok >= 0.6` 这样写）。这里曾经有一个 `T` 对象，理由是
@@ -368,47 +748,7 @@ export const needsTool = defineDecision({
   id: 'loop.needsTool',
   describe: '这一步需要调用工具，还是可以直接回答？',
 
-  state: (ctx: AgentCtx) => ({
-    task: clip(ctx.task, 400),
-    // ★ 多轮：这一句是「再读一遍那个文件」里的"那个"唯一能落地的地方。
-    //   §8.2：帧里没有的，模型判不出来 —— 不是判错，是压根看不见。
-    //   有界（200 字符）是因为帧本身有预算，而它是**背景**不是主体。
-    earlier: clip(ctx.earlier ?? '', EARLIER_MAX_CHARS),
-    /*
-      ★ **「已经做过什么」是一个清单，不是一个数。**
-
-      这里原本是 `steps_done: history.length` —— 只有条数。实测代价
-      （2026-09-21）：任务「把 alpha.ts 里的 totalOf 抄到一个新文件
-      summary.ts 里」，读完 alpha.ts 之后这个节点判了「不需要工具」，
-      于是 loop 直接去生成回答，**文件从没被写出来**。
-
-      它当时看得到的是：任务、`steps_done: 2`、以及最后那个工具的输出。
-      而「读过」和「写过」在那三个字段里**长得一样** —— 没有任何东西告诉它
-      **写还没发生**（§8.2：帧里没有的，它判不出来）。
-
-      `pickTool` 一直用的是 `describeDone(ctx)`（一行清单），这里少的就是它。
-      同一个事实两处写法不同，两边就会给出不一致的判断。
-    */
-    already_done: describeDone(ctx),
-    /*
-      ★ **「有哪几个文件」和「读过哪几个」—— 这两个事实 `pickTool` 一直有，
-      这里一直没有。**
-
-      实测（2026-09-21）：任务「这两个 TypeScript 文件里各导出了一个函数，
-      分别叫什么名字？」，读完 alpha.ts 和 beta.ts 之后这个节点判「还要用工具」
-      （0.86），于是 loop 又去读了**任务不需要的** `notes.md`。
-
-      它当时看到的是 `already_done: "already called: list_dir, read_file
-      (3 steps)"` —— **去重后的工具名加一个总步数**。从里面分不出读了
-      一个文件还是两个，也就无法确认任务说的「这两个」读完了没有。
-
-      任务里的「这两个」是一个**指代**，而帧里没有任何东西能让它落地
-      （§8.2：帧里没有的，它判不出来）。
-    */
-    files_known: (ctx.files ?? []).slice(0, 15),
-    already_read: (ctx.readFiles ?? []).slice(0, 15),
-    last: clip(ctx.lastResult ?? '（还没有做过任何动作）', 300),
-  }),
+  ...framed(FRAME_NEEDS_TOOL),
 
   // 问题与策略都来自 DECISION.md 的 needs_tool 块
   ...compiled<{ needs_tool: NoulQuestion }>('needs_tool', ['needs_tool']),
@@ -430,21 +770,7 @@ export const pickTool = defineDecision({
   id: 'loop.pickTool',
   describe: '下一步调用哪个工具（选项随已做的动作动态重建）',
 
-  state: (ctx: AgentCtx) => ({
-    task: clip(ctx.task, 400),
-    // ★ 多轮：同上。挑工具时「上文」尤其重要 ——
-    //   「那个文件」要靠它才能落到一个具体路径上。
-    earlier: clip(ctx.earlier ?? '', EARLIER_MAX_CHARS),
-    // ★ 用一句话讲清"已经做过什么"，而不是丢一个数组让模型自己解析。
-    //   决策帧的表达方式直接决定判定质量 —— 实测：只放数组时，
-    //   模型会重复选已经做过的动作。
-    already_done: describeDone(ctx),
-    files_known: (ctx.files ?? []).slice(0, 20),
-    // 模型必须知道读过哪些 —— 帧里没有的信号它判不出来（见 §8.2），
-    // 少了这个它会重复读同一个文件。
-    already_read: (ctx.readFiles ?? []).slice(0, 10),
-    last_result: clip(ctx.lastResult ?? '', 300),
-  }),
+  ...framed(FRAME_PICK_TOOL),
 
   // ★ 候选**每步重建**（`toolsFor`），而 markdown 表达不了函数 ——
   //   所以问题由代码算，`ask` 原文和策略仍来自文件。
@@ -479,12 +805,7 @@ export const pickInput = defineDecision({
   id: 'loop.pickInput',
   describe: '给已选定的工具挑一个输入（读/写哪个文件）',
 
-  state: (ctx: AgentCtx) => ({
-    task: clip(ctx.task, 400),
-    tool: ctx.lastTool ?? '',
-    already_read: (ctx.readFiles ?? []).slice(0, 10),
-    candidates: (ctx.files ?? []).slice(0, 20),
-  }),
+  ...framed(FRAME_PICK_INPUT),
 
   // 同 `pickTool`：候选由 `fileOptions` 每步重建，问题留代码，策略来自文件
   // `satisfies` 在这里而不是在 `choice(...)` 上：要断言的是**这个对象**
@@ -518,22 +839,7 @@ export const gradeRisk = defineDecision({
   id: 'loop.gradeRisk',
   describe: '给这次工具调用打风险分，驱动分级审批',
 
-  state: (ctx: AgentCtx) => {
-    const t = ctx.lastTool
-    // ★ 工具的静态风险基线。`act-local.ts` 里四个工具都声明了 `baseRisk`，
-    //   但**一直没有任何读取方** —— 声明了却不喂进帧，等于没声明：
-    //   帧里没有的信号判定模型看不见（见 docs/CODE-STYLE.md §8.2）。
-    //
-    //   工具名是不可信输入（模型给的），认不出来时**不编一个数**，
-    //   直接不放这个字段 —— 0 分的意思是"只读"，不能用它冒充"未知"。
-    const base = t && isToolName(LOCAL_TOOLS, t) ? { base_risk: LOCAL_TOOLS[t].baseRisk } : {}
-    return {
-      tool: t ?? 'unknown',
-      ...base,
-      target: clip(lastInput(ctx), 200),
-      task: clip(ctx.task, 300),
-    }
-  },
+  ...framed(FRAME_GRADE_RISK),
 
   // 问题与策略都来自 DECISION.md 的 grade_risk 块。
   // 那条硬闸门（risk 够高就必须授权）现在写在文件里 —— 见那个块的 policy。
@@ -556,25 +862,7 @@ export const stepOk = defineDecision({
   id: 'loop.stepOk',
   describe: '刚才那次工具调用是否达到了预期效果',
 
-  state: (ctx: AgentCtx) => ({
-    tool: ctx.lastTool ?? 'unknown',
-    input: clip(lastInput(ctx), 200),
-    output: clip(ctx.lastResult ?? '', 500),
-    // ★ **没有 `task`**，而且这是修出来的，不是一开始就这么写的。
-    //
-    //   帧里带着 task，问题又写着「produced a usable result **for the task**」、
-    //   判据写着「the output contains **what the task needed**」—— 三处一起
-    //   把这一步的判定拉到了**任务级**。而「任务完成了吗」是 `isDone` 的职责。
-    //
-    //   实测（这个 bug 就是这么发现的）：任务「读一下 invoice.ts」，
-    //   第一步 `list_dir` 返回文件列表 —— 它**确实成功**了，但它没有回答
-    //   「这个文件定义了哪些函数」，于是 `ok=0.470 < 0.6` 判否，
-    //   动作是 `stop`，**整个循环结束**。任何需要多于一个工具的任务都跑不完。
-    //
-    //   `stepOk` 的 `describe` 一直写的是「刚才那次**工具调用**是否达到预期效果」。
-    //   越界的是帧和措辞，不是这个节点的意图。
-    already_read: (ctx.readFiles ?? []).length,
-  }),
+  ...framed(FRAME_STEP_OK),
 
   // 问题与策略都来自 DECISION.md 的 step_ok 块
   ...compiled<{ ok: NoulQuestion }>('step_ok', ['ok']),
@@ -596,43 +884,7 @@ export const isDone = defineDecision({
   id: 'loop.isDone',
   describe: '任务是否已经完成，可以开始生成回答了',
 
-  state: (ctx: AgentCtx) => ({
-    task: clip(ctx.task, 400),
-    /*
-      ★ 和 `needsTool` 同一处遗漏，后果不同。
-
-      `steps` 里每条结果只留 80 字符 —— 实测（2026-09-21）任务
-      「这两个 TypeScript 文件里各导出了一个函数，分别叫什么名字？」，
-      `read_file(alpha.ts)` 那条显示到 `Order` 接口就被切了，
-      **函数名 `totalOf` 在截断点之后**。于是它只看得见两个函数名里的一个，
-      判「还没做完」（0.22）—— **在给定帧下它判得没错。**
-
-      而这个问题（任务要求的事做完了吗）其实靠**覆盖**就能答：
-      任务说的那两个文件读了没有。`already_read` 就是这个事实。
-    */
-    already_read: (ctx.readFiles ?? []).slice(0, 15),
-    /*
-      ★ **结果留 200 字符，不是 80。**
-
-      实测（2026-09-21，帧里只有这一处不同）：
-      任务「这两个 TypeScript 文件里各导出了一个函数，分别叫什么名字？」，
-      两个文件都读完了 ——
-
-          结果留 80   done = 0.35  → keep_going ✗   帧 392 字符
-          结果留 200  done = 0.96  → finish     ✓   帧 534 字符
-
-      80 字符在 `alpha.ts` 那条正好断在 `Order` 接口之后，**函数名 `totalOf`
-      在截断点之后**。于是它看得见两个函数名里的一个，判「还没做完」——
-      **在给定帧下它判得没错**，而那个 `…[+108]` 的截断标记还会让它以为
-      「得再读一次」（重读也一样会被截断）。
-
-      试过另一条路：**不放结果、只放「做了什么」**（帧只 199 字符，靠
-      `already_read` 的覆盖去推）。它过线（0.63）但**最低值 0.61，离门限
-      只有 0.01** —— 而把问题也改成覆盖口径之后反而掉到 0.48。所以：
-      **内容看得到时它是直接判断，不是推理**，余量大得多，那条路留着。
-    */
-    steps: (ctx.history ?? []).slice(-5).map((h) => `${h.tool}(${clip(h.input, 60)}) → ${clip(h.result, 200)}`),
-  }),
+  ...framed(FRAME_IS_DONE),
 
   // 问题与策略都来自 DECISION.md 的 is_done 块
   ...compiled<{ done: NoulQuestion }>('is_done', ['done']),
@@ -656,32 +908,7 @@ export const canDeliver = defineDecision({
   id: 'loop.canDeliver',
   describe: '生成的回答是否完整、准确、可以直接交付',
 
-  state: (ctx: AgentCtx) => ({
-    task: clip(ctx.task, 400),
-    answer: clip(ctx.draft ?? '', 900),
-    // 最近一次结果给足空间：交付闸门要拿它逐句核对回答，
-    // 截太短会让闸门正确地判出「回答里有证据不支持的内容」——
-    // 那是帧的问题，不是回答的问题（实测在 100 字符预算下误报）
-    evidence: (ctx.history ?? []).slice(-3).map((h, i, all) => {
-      /*
-        ★ **预算跟着载荷走，不跟着位置走。**
-
-        以前是「最后一条 600、其余 200」，而**输入一律 clip 到 60**。
-        那个分配对 `read_file` 是对的（输入是文件名，结果才是内容），
-        对 `write_file` **两样都反了**：写操作的载荷是**输入**
-        （`路径\n内容`），而结果只有一句「已写入 X（N 字符）」。
-
-        实测（2026-09-21）：交付闸门核对一份如实报告「写进去的和原文不一样」
-        的回答时，`unsupported` 判 **0.70**；把写操作的输入给到 600、
-        结果压到 60 之后，同一个回答判 **0.21**。**那个「有证据不支持的内容」
-        完全是因为内容在帧里看不见**（§8.2：帧里没有的，它判不出来）。
-      */
-      const writes = h.tool === 'write_file'
-      const inputBudget = writes ? 600 : 60
-      const resultBudget = writes ? 60 : i === all.length - 1 ? 600 : 200
-      return `${h.tool}(${clip(h.input, inputBudget)}) → ${clip(h.result, resultBudget)}`
-    }),
-  }),
+  ...framed(FRAME_CAN_DELIVER),
 
   // 问题与策略都来自 DECISION.md 的 can_deliver 块
   ...compiled<{ deliverable: NoulQuestion; unsupported: NoulQuestion }>('can_deliver', ['deliverable', 'unsupported']),

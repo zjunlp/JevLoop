@@ -29,7 +29,7 @@
  */
 
 import type { GateOverrides } from './gates.ts'
-import type { DecisionResult } from './vocab-decision.ts'
+import type { DecisionResult, FrameArtifact } from './vocab-decision.ts'
 import type { QuestionSet, AnswerSet } from './vocab.ts'
 import type { AuditRecord, MeterStats } from './vocab-records.ts'
 
@@ -56,6 +56,22 @@ export type AgentEvent =
       id: string
       /** 实际发给模型的决策帧 */
       state: unknown
+      /**
+       * 这一帧是怎么编出来的（§8.14）—— 指纹、截断记录、缺失记录、
+       * **以及「这个判定故意不看什么」**。声明了帧的节点才有。
+       *
+       * ★ 它随帧一起进事件，所以事后读轨迹的人看得见当时**没喂**什么，
+       *   而不只是喂了什么 —— §8.14 说「删掉一个字段之后，没有任何东西
+       *   记得它曾经在过」，这一栏就是那个「东西」。
+       */
+      frame?: FrameArtifact
+      /**
+       * **请求**的指纹：帧 + 问题 + 选项。
+       *
+       * ★ `frame.digest` 回答「它看到了什么」，这个回答「它**被问了**什么」。
+       *   只比前者会漏掉「换掉候选集」那一类（§8.17 骗过我们一次的地方）。
+       */
+      requestDigest?: string
       questions: QuestionSet
       answers: AnswerSet
       action: string
@@ -370,6 +386,9 @@ export function decisionEvent(d: DecisionResult<unknown>): AgentEvent {
     step: d.step,
     id: d.id,
     state: d.state,
+    // 帧的账与请求的指纹：两者回答两个不同的问题，一起进事件（§8.14 / §8.17）
+    ...(d.frame ? { frame: d.frame } : {}),
+    ...(d.requestDigest ? { requestDigest: d.requestDigest } : {}),
     questions: d.questions,
     answers: d.answers as AnswerSet,
     action: d.action,

@@ -282,6 +282,10 @@ const LAYER: Record<string, number> = {
   'context-prune': 0,
   // `estimate` 同 `context-prune`：零依赖纯函数，谁都能用，放最底下
   estimate: 0,
+  // `frame-digest` 同理：两种指纹都是零依赖纯函数（只有 node:crypto），
+  // 而消费方跨两层 —— `frame.ts`(L3) 编完帧要算、`decide.ts`(L2) 发请求要算。
+  // §11 不许 L2 import L3，所以共用的东西下沉（同 `http-error.ts` 的先例）。
+  'frame-digest': 0,
   // `surface` 零 import：表面机制（追加 / 替换一段）不认识任何领域概念。
   // 同 context-prune / estimate 的先例 —— 依赖面为零就放最底下。
   surface: 0,
