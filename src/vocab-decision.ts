@@ -42,7 +42,7 @@ export interface PolicyRule<A> {
  * 只是得到一个没有消费方能处理的动作。界面那句「N 道授权闸门」也是靠
  * `action === 'ask_human'` 数出来的，写成别名那道闸门就不算数了。
  *
- * 这就是 `tools.ts` 对工具名做过的事（`ToolName` 从 `TOOLS` 推出），在 action 上重做一遍。
+ * 这就是 `act.ts` 对工具名做过的事（`ToolNameOf` 从注册表推出），在 action 上重做一遍。
  *
  * ⚠️ **`PolicyRule.action` 仍然是 `string`，这是有意的。** policy 引擎是通用的
  * ——测试拿 `'a'` / `'ok'` 这种名字就能驱动它。封闭只该在**真实边界**上强制，

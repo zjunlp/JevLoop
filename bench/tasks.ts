@@ -30,7 +30,7 @@
 
 /** 一次期望发生的工具调用 */
 export interface ExpectedCall {
-  /** 工具名，和 `tools.ts` 里的 `name` 逐字一致 */
+  /** 工具名，和 `act-local.ts` 的 `LOCAL_TOOLS` 里的 `name` 逐字一致 */
   tool: string
   /** 需要挑输入的工具（`read_file` / `write_file`）要写明挑哪个 */
   input?: string

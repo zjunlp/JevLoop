@@ -18,7 +18,8 @@
  *
  * **做了**：
  *   · 同一个 `generator`（同模型、同 key、同 baseUrl）
- *   · 同一批工具，而且**是同一份实现**（`src/tools.ts` 的 `callTool`）
+ *   · 同一批工具，而且**是同一份实现**（`src/act.ts` 的 `callTool` +
+ *     `src/act-local.ts` 的 `LOCAL_TOOLS`）
  *   · 同一个工作目录夹具、同一个 `maxSteps`
  *   · 同一个验收判据（`bench/oracle.ts` 的 `answerOk` / `checkArtifacts`）
  *
@@ -39,7 +40,8 @@
  */
 
 import type { Generator } from '../src/llm.ts'
-import { callTool, isToolName, TOOLS } from '../src/tools.ts'
+import { callTool, isToolName } from '../src/act.ts'
+import { LOCAL_TOOLS } from '../src/act-local.ts'
 
 /** 一次工具调用 */
 export interface ReactCall {
@@ -76,10 +78,10 @@ const SYSTEM = [
   '  {"action":"write_file","input":"out.md\\n<the whole file content>"}',
   '  {"action":"answer","input":"<what you did, as prose>"}',
   '',
-  `Available actions: ${Object.keys(TOOLS).join(', ')}.`,
-  `  list_dir   ${TOOLS.list_dir.description}`,
-  `  read_file  ${TOOLS.read_file.description}`,
-  `  write_file ${TOOLS.write_file.description}`,
+  `Available actions: ${Object.keys(LOCAL_TOOLS).join(', ')}.`,
+  `  list_dir   ${LOCAL_TOOLS.list_dir.description}`,
+  `  read_file  ${LOCAL_TOOLS.read_file.description}`,
+  `  write_file ${LOCAL_TOOLS.write_file.description}`,
   '',
   'Do not use the "done" action: when the task is finished, reply with the "answer" action.',
 ].join('\n')
@@ -180,14 +182,14 @@ export async function runReact(opts: {
         break
       }
 
-      if (!isToolName(act.action)) {
-        transcript.push(`Observation: there is no action called '${act.action}'. Available: ${Object.keys(TOOLS).join(', ')}`)
+      if (!isToolName(LOCAL_TOOLS, act.action)) {
+        transcript.push(`Observation: there is no action called '${act.action}'. Available: ${Object.keys(LOCAL_TOOLS).join(', ')}`)
         continue
       }
 
       calls.push({ tool: act.action, input: act.input })
       const toolAt = performance.now()
-      const observation = await callTool(act.action, act.input, opts.cwd)
+      const observation = await callTool(LOCAL_TOOLS, act.action, act.input, opts.cwd)
       toolMs += performance.now() - toolAt
       transcript.push(`Action: ${act.action}(${act.input.split('\n')[0]})\nObservation: ${observation}`)
     }

@@ -1,26 +1,30 @@
 /**
- * JevLoop · 工具
+ * JevLoop · L2 接缝 —— 工具的**本地文件系统提供者**
  *
- * 工具是唯一产生真实副作用的地方，所以这里有两道约束：
- *   1. **路径锁死在工作目录内** —— 任何 `..` 逃逸都被拒绝
- *   2. 每个工具声明一个**静态**风险基线，作为判定节点的参考
+ * 缝的另一角（定义在 `act.ts`）：
  *
- * 「这个调用到底危不危险」由 loop.gradeRisk 判定，不由工具自己决定 ——
- * 静态基线只是给判定模型看的提示。
+ *     定义     `Tool` 接口 + 注册表契约   （act.ts）
+ *     提供者   四个工具的真实副作用        ← 这里
+ *     消费     gradeRisk / pickTool       （decisions.ts / agent.ts）
  *
- * @module JevLoop/tools
+ * 这里住着全仓库**唯一**产生真实副作用的地方：四个工具的实现、以及那道
+ * 「路径锁死在工作目录内」的检查。**换后端就是换这个文件** —— 指向沙箱、
+ * 远程 FS 或一个测试桩，内核（`agent.ts` / `decisions.ts`）一行都不用动。
+ *
+ * ★ 这个文件只 import 定义角（`act.ts`），别的什么都不 import。
+ *   那不是巧合：`scripts/check.ts` 的 layers 规则规定 L2 内部只允许
+ *   「提供者 → 定义角」这一个方向（docs/CODE-STYLE.md §11）。
+ *
+ * 两道契约（不可信的工具名、执行结果永远回传）**不在**这里，在 `act.ts` ——
+ * 它们属于契约而非某个实现，否则换后端时会被漏掉。
+ *
+ * @module JevLoop/act-local
  */
 
 import { readFile, writeFile, readdir, mkdir, stat } from 'node:fs/promises'
 import { resolve, relative, dirname, sep } from 'node:path'
 
-export interface Tool {
-  name: string
-  description: string
-  /** 静态风险基线 0..3。判定节点会参考它，但最终判定由模型做 */
-  baseRisk: number
-  run(input: string, cwd: string): Promise<string>
-}
+import type { ToolRegistry } from './act.ts'
 
 /** 把用户给的路径解析到 cwd 内，逃逸就抛 */
 function safePath(cwd: string, p: string): string {
@@ -33,11 +37,14 @@ function safePath(cwd: string, p: string): string {
 }
 
 /**
- * `satisfies` 而不是 `: Record<string, Tool>` ——
- * 后者会把键擦成 `string`，于是 `ToolName` 只能是 `string`，
- * `defaultInput` 的 switch 就永远需要一个什么都接的 `default` 分支。
+ * 本地文件系统这一份工具表。**注册表住在这里，不在定义角里** ——
+ * 定义角不认识任何一个具体工具。
+ *
+ * `satisfies` 而不是 `: ToolRegistry` —— 后者会把键擦成 `string`，于是
+ * `ToolName` 只能是 `string`，`defaultInput` 的 switch 就永远需要一个
+ * 什么都接的 `default` 分支。
  */
-export const TOOLS = {
+export const LOCAL_TOOLS = {
   list_dir: {
     name: 'list_dir',
     description: '列出工作目录里的文件（不含子目录内容）',
@@ -101,42 +108,12 @@ export const TOOLS = {
       return '任务标记为完成'
     },
   },
-} satisfies Record<string, Tool>
-
-/** 工具名的**封闭**联合。来自 TOOLS 的实际键，不是 `string` */
-export type ToolName = keyof typeof TOOLS
+} satisfies ToolRegistry
 
 /**
- * 模型返回的工具名是不可信输入 —— 调用前必须过这一道。
+ * 工具名的**封闭**联合。来自这份注册表的实际键，不是 `string`。
  *
- * 不过会怎样：`defaultInput` 静默返回 `''`，`callTool` 返回
- * 「错误：没有这个工具」，**而这个错误被当成普通工具输出喂给了 `stepOk` 判定**。
- * 判定模型看到的是一段文本，它无法区分「工具跑出来的结果」和「工具根本不存在」。
+ * 它跟着注册表落在提供者这一侧：`keyof` 只能从**具体的表**推出，
+ * 而定义角不认识任何一个具体工具（见 `act.ts` 的 `ToolNameOf`）。
  */
-export function isToolName(v: string): v is ToolName {
-  return Object.hasOwn(TOOLS, v)
-}
-
-/**
- * 全部工具名，顺序即 `TOOLS` 的声明顺序。
- *
- * 用来展示或做基于名字的校验。**要判断一个字符串是不是工具名请用
- * `isToolName()`** —— 它走 `Object.hasOwn`，不会被 `__proto__`
- * 这类继承来的键骗过去。
- */
-export const toolNames = (): ToolName[] => Object.keys(TOOLS) as ToolName[]
-
-/**
- * 执行一次工具调用。
- *
- * 判定节点已经决定「放行 / 需要授权」了，这里只负责执行 ——
- * 但**执行结果永远要回传**，因为判定「成功了吗」需要看到它。
- */
-export async function callTool(name: ToolName, input: string, cwd: string): Promise<string> {
-  const tool = TOOLS[name]
-  try {
-    return await tool.run(input, cwd)
-  } catch (err) {
-    return `错误：${(err as Error).message}`
-  }
-}
+export type ToolName = keyof typeof LOCAL_TOOLS

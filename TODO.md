@@ -18,11 +18,11 @@ If you want to take one of these on, **open an issue saying so first**. We will 
 
 That leaves `grade_risk` close to untestable. **A risk ladder only means something if there is something genuinely risky to climb it.** The breadth of the decision space also decides how far "judgements can leave the model" can be verified at all: four tools only ever demonstrate file operations, and that is a narrow claim to build a paper on.
 
-- [ ] Split the tool seam — interface from implementation (`act.ts` + `act-local.ts`). The intended shape is in `docs/CODE-STYLE.md` §10.
+- [x] Split the tool seam — interface from implementation (`act.ts` + `act-local.ts`). The intended shape is in `docs/CODE-STYLE.md` §10. *(2026-09-26. The registry could not stay in `tools.ts` — see §10 for why the landed shape differs from the plan.)*
 - [ ] Add tools with real consequences: shell execution, git operations.
 - [ ] Give every level of the risk ladder something real to point at.
 
-**Where:** `src/tools.ts` — 142 lines holding the interface, the implementation and the side effects. **Size:** medium.
+**Where:** `src/act.ts` (the contract) + `src/act-local.ts` (the local file-system provider and the registry); `tools.ts` is gone. **Still module-level**, so the kernel cannot yet be pointed at another provider without editing it — making the table injectable is the second cut, and it belongs with the shell/git tools. **Size:** medium.
 
 ## 2 · Judgements sit on their thresholds, because the frames are thin
 
@@ -84,7 +84,7 @@ The 2026 finding from Cognition is that multi-agent works when **writes stay sin
 - [ ] **A discarded attempt must produce no side effects.** If a stream fails midway, no tool call from that attempt may have run.
 - [ ] A cap on tool parallelism.
 
-**Where:** `src/agent.ts`, `src/tools.ts`. **Size:** medium.
+**Where:** `src/agent.ts`, `src/act-local.ts`. **Size:** medium.
 
 ## 7 · The trust boundary stops at the tool name
 
@@ -98,7 +98,7 @@ The classic prompt-injection attack assumes an LLM: "ignore previous instruction
 - [ ] Measure it: craft a file whose contents try to move `grade_risk`, and find out what it takes.
 - [ ] Decide what "sanitised" means for a decision frame. Stripping instructions is not obviously the right operation for a classifier.
 
-**Where:** `src/frame.ts`, `src/tools.ts`. **Size:** medium — and it is a paper.
+**Where:** `src/frame.ts`, `src/act-local.ts`. **Size:** medium — and it is a paper.
 
 ---
 

@@ -364,7 +364,7 @@ CWD_ROOT=./你的项目 PORT=7800 npm run serve
 - **不是大模型的替代品。** 起草、写代码、总结仍然需要它。
 - **不是「零幻觉」。** 判定模型给不出你问的类型之外的答案，但答案仍然可能是错的。阈值就是为这个准备的。
 - **不是准确率上的优势。** 上面那次和 ReAct 的对比是 7 条任务、各跑 1 遍、单一模型 —— 本 loop 被验收 6/7，ReAct 是 7/7。
-- **没有做过生产加固。** 工具沙箱只覆盖路径逃逸。把它指向任何你在乎的东西之前，先读 [`src/tools.ts`](src/tools.ts)。
+- **没有做过生产加固。** 工具沙箱只覆盖路径逃逸。把它指向任何你在乎的东西之前，先读 [`src/act-local.ts`](src/act-local.ts)。
 
 ## 目录结构
 
@@ -385,7 +385,7 @@ CWD_ROOT=./你的项目 PORT=7800 npm run serve
 |---|---|
 | 判定由谁回答 | [`src/seam-provider.ts`](src/seam-provider.ts) 定义接口；`provider-http` / `provider-mock` / `provider-fallback` 实现它 |
 | 用什么写回答 | [`src/llm.ts`](src/llm.ts) |
-| 工具能做什么 | [`src/tools.ts`](src/tools.ts) |
+| 工具能做什么 | [`src/act-local.ts`](src/act-local.ts)；它们必须满足的契约在 [`src/act.ts`](src/act.ts) |
 | 界面 | [`web/`](web/) 和 [`src/server.ts`](src/server.ts) |
 | 命令行 | [`src/cli.ts`](src/cli.ts) |
 

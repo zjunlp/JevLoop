@@ -59,7 +59,8 @@ import type {
 } from './vocab.ts'
 import type { PolicyRule } from './vocab-decision.ts'
 import { clip } from './budget.ts'
-import { TOOLS, isToolName } from './tools.ts'
+import { isToolName } from './act.ts'
+import { LOCAL_TOOLS } from './act-local.ts'
 import { parseDecisionDoc, type DecisionDoc, type DocBlock } from './decisiondoc.ts'
 import { hasThreshold, predicateQuestion } from './decision-compile.ts'
 import { parseGates, splitGates, type GateOverrides } from './gates.ts'
@@ -519,13 +520,13 @@ export const gradeRisk = defineDecision({
 
   state: (ctx: AgentCtx) => {
     const t = ctx.lastTool
-    // ★ 工具的静态风险基线。`tools.ts` 里四个工具都声明了 `baseRisk`，
+    // ★ 工具的静态风险基线。`act-local.ts` 里四个工具都声明了 `baseRisk`，
     //   但**一直没有任何读取方** —— 声明了却不喂进帧，等于没声明：
     //   帧里没有的信号判定模型看不见（见 docs/CODE-STYLE.md §8.2）。
     //
     //   工具名是不可信输入（模型给的），认不出来时**不编一个数**，
     //   直接不放这个字段 —— 0 分的意思是"只读"，不能用它冒充"未知"。
-    const base = t && isToolName(t) ? { base_risk: TOOLS[t].baseRisk } : {}
+    const base = t && isToolName(LOCAL_TOOLS, t) ? { base_risk: LOCAL_TOOLS[t].baseRisk } : {}
     return {
       tool: t ?? 'unknown',
       ...base,

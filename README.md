@@ -441,7 +441,7 @@ It has no authentication and binds to loopback only. `HOST=0.0.0.0` means *anyon
 - **Not a replacement for an LLM.** Drafting, coding and summarising still need one.
 - **Not "zero hallucination".** A decision model can't return an answer outside the type you asked for, but the answer can still be wrong. That's what the threshold is for.
 - **Not a general accuracy claim.** Our own ReAct comparison above is seven tasks, one run each, on one model — and this loop was accepted on 6 of 7 against ReAct's 7 of 7.
-- **Not production-hardened.** Tool sandboxing covers path escape only. Read [`src/tools.ts`](src/tools.ts) before pointing it at anything you care about.
+- **Not production-hardened.** Tool sandboxing covers path escape only. Read [`src/act-local.ts`](src/act-local.ts) before pointing it at anything you care about.
 
 ## Layout
 
@@ -462,7 +462,7 @@ Everything else is plumbing. The parts you are most likely to want to replace:
 |---|---|
 | where judgements get answered | [`src/seam-provider.ts`](src/seam-provider.ts) defines the interface; `provider-http` / `provider-mock` / `provider-fallback` implement it |
 | what writes the answer | [`src/llm.ts`](src/llm.ts) |
-| what the tools can do | [`src/tools.ts`](src/tools.ts) |
+| what the tools can do | [`src/act-local.ts`](src/act-local.ts); the contract they must satisfy is [`src/act.ts`](src/act.ts) |
 | the UI | [`web/`](web/) and [`src/server.ts`](src/server.ts) |
 | the CLI | [`src/cli.ts`](src/cli.ts) |
 

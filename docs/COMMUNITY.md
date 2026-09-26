@@ -25,7 +25,6 @@ The bar this list is trying to meet: someone who has never talked to us clones t
 
 Candidates, all of them things the repo has already decided it wants:
 
-- **Split the `Tool` seam** (`tools.ts` → `act.ts` + `act-local.ts`). See §10. Put the intended shape in the issue body — see "deliberately not doing" below for why it does not belong in a new doc.
 - **`web/app.js` / `web/app.css`** — the front-end half of the 待拆 queue (§12). The most independent piece of work in the repo.
 - **`--offline` for the demo** — see item 2.
 - **The remaining Chinese in failure paths** — see item 4. This is the ideal `good first issue`: mechanical, verifiable, and it requires no architectural decisions.
@@ -68,7 +67,7 @@ This is by design at the library level: the generation path has no fallback, and
 
 ## 6. Check Windows
 
-**Why:** untested, and untested is a guess. `src/tools.ts` is path-locked to `cwd`, and the demo writes raw ANSI escapes.
+**Why:** untested, and untested is a guess. `src/act-local.ts` is path-locked to `cwd`, and the demo writes raw ANSI escapes.
 
 **Done when:** either someone has run `npm run demo` and `npm test` on Windows and the README says so, or the README says Windows is untested.
 

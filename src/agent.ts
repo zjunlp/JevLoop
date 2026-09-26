@@ -41,7 +41,8 @@ import { clip } from './budget.ts'
 import { buildDecisions, GENERATOR_INSTRUCTION, type DecisionSet } from './decisions.ts'
 import type { GateOverrides } from './gates.ts'
 import { hasFileOptions, type AgentCtx, type StepRecord } from './frame.ts'
-import { callTool, isToolName, type ToolName } from './tools.ts'
+import { callTool, isToolName } from './act.ts'
+import { LOCAL_TOOLS, type ToolName } from './act-local.ts'
 import { assertNever } from './util.ts'
 import {
   foldEvidence,
@@ -435,7 +436,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     // 模型返回的工具名是**不可信输入**，调用前必须过这一道（docs/CODE-STYLE.md §6 允许的真实边界）。
     // 不过会怎样：`callTool` 返回「错误：没有这个工具」，而这个字符串会被当成
     // 普通工具输出喂给 `stepOk` —— 判定模型分不清「工具跑出来的结果」和「工具不存在」。
-    if (!isToolName(picked)) {
+    if (!isToolName(LOCAL_TOOLS, picked)) {
       halt = 'unknown_tool'
       trace(`  model returned a tool that does not exist: '${picked}' → stopping (never fed to the next decision as a result)`)
       break
@@ -499,7 +500,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     // ── 唯一有真实副作用的地方 ──
     emit({ type: 'tool:call', step, tool, input })
     const toolT0 = Date.now()
-    const result = await callTool(tool, input, ctx.cwd)
+    const result = await callTool(LOCAL_TOOLS, tool, input, ctx.cwd)
     emit({ type: 'tool:result', step, tool, output: result, ms: Date.now() - toolT0 })
     pending.result = result
     ctx.lastResult = result

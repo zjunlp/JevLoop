@@ -298,7 +298,11 @@ const LAYER: Record<string, number> = {
   'provider-retry': 2,
   decide: 2,
   llm: 2,
-  tools: 2,
+  // 工具缝拆成三角（docs/CODE-STYLE.md §10）：定义角 + 本地提供者。
+  // 注册表（`LOCAL_TOOLS`）住在提供者那一侧 —— 定义角不认识任何一个具体工具，
+  // 而 L2 内部只允许「提供者/消费者 → 定义角」，所以注册表不能自己单独成文件。
+  act: 2,
+  'act-local': 2,
   // `session-store` 有 IO（读写盘），所以是 L2 而不是 L1。
   // 它只认「一轮问答」这个形状，不认识 agent、不认识判定 —— 所以放在
   // 接缝那一层，和 `llm` / `tools` 同级。
@@ -364,10 +368,16 @@ const FACADE = 'index'
 /**
  * L2 内部的合法方向：提供者与消费者 → **定义角**。
  *
- * 定义角是 `seam-provider.ts`。反向（定义 import 某个具体提供者）永远违规 ——
+ * 反向（定义 import 某个具体提供者）永远违规 ——
  * 那会让「换一个后端」重新需要改内核，也就是能力缝失效。
+ *
+ * ★ 原来这里是**一个字符串**（`'seam-provider'`），因为那时全仓库只有一条缝
+ * 有定义角。工具缝于 2026-09-26 拆出 `act.ts` 之后，假设不再成立：
+ * 第二条缝一出现，`act-local.ts` import `act.ts` 就会被判违规 ——
+ * 而那不是代码错，是**检查器只认得一条缝**。所以常量泛化成集合，
+ * 和拆分在同一次改动里做（docs/CODE-STYLE.md §12 规矩 3）。
  */
-const SEAM_DEFINITION = 'seam-provider'
+const SEAM_DEFINITIONS = new Set(['seam-provider', 'act'])
 
 /**
  * 检查 `src/` 内所有相对 import 的方向。
@@ -415,7 +425,7 @@ function layerViolations(dir: string): Violation[] {
       // 同层：只有两种合法情形
       if (their === me) {
         if (me === 0) continue // 词汇互相指涉
-        if (me === 2 && target === SEAM_DEFINITION) continue // 提供者/消费者 → 定义角
+        if (me === 2 && SEAM_DEFINITIONS.has(target)) continue // 提供者/消费者 → 定义角
       }
 
       const where = sf.getLineAndCharacterOfPosition(spec.getStart(sf)).line + 1
@@ -424,7 +434,7 @@ function layerViolations(dir: string): Violation[] {
         line: where,
         rule: 'layers',
         detail: `${LAYER_NAME[me]} 依赖 ${LAYER_NAME[their]}（${target}.ts）—— 依赖只能指向编号更小的层`
-          + (their === me ? `；同层只允许 L0 内部、以及 L2 指向 ${SEAM_DEFINITION}.ts` : ''),
+          + (their === me ? `；同层只允许 L0 内部、以及 L2 指向 ${[...SEAM_DEFINITIONS].join('.ts / ')}.ts` : ''),
       })
     }
   }

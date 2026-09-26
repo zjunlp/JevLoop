@@ -620,7 +620,8 @@ test('★ 缺省会用生成器现造输入 —— 而且能建一个**还不存
 // ═══════════════════════════════════════════════════════════
 
 test('A1: 空目录不能变成一个叫「(目录为空)」的文件', async () => {
-  const { callTool } = await import('../src/tools.ts')
+  const { callTool } = await import('../src/act.ts')
+  const { LOCAL_TOOLS } = await import('../src/act-local.ts')
   const { fileOptions, hasFileOptions, unreadFiles } = await import('../src/frame.ts')
   const { mkdtemp, rm } = await import('node:fs/promises')
   const { join } = await import('node:path')
@@ -628,7 +629,7 @@ test('A1: 空目录不能变成一个叫「(目录为空)」的文件', async ()
 
   const cwd = await mkdtemp(join(tmpdir(), 'JevLoop-empty-'))
   try {
-    const result = await callTool('list_dir', '.', cwd)
+    const result = await callTool(LOCAL_TOOLS, 'list_dir', '.', cwd)
     // 这是 agent.ts 的解析方式，原样照抄 —— 测的就是「它解析出什么」
     const files = result.split('\n').filter((l) => l && !l.endsWith('/'))
     assert.deepEqual(files, [], `空目录不该解析出文件，实际 ${JSON.stringify(files)}`)
@@ -646,7 +647,8 @@ test('A1: 空目录不能变成一个叫「(目录为空)」的文件', async ()
 })
 
 test('A1: 非空目录仍然逐行返回文件名，子目录带 /', async () => {
-  const { callTool } = await import('../src/tools.ts')
+  const { callTool } = await import('../src/act.ts')
+  const { LOCAL_TOOLS } = await import('../src/act-local.ts')
   const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
   const { join } = await import('node:path')
   const { tmpdir } = await import('node:os')
@@ -656,7 +658,7 @@ test('A1: 非空目录仍然逐行返回文件名，子目录带 /', async () =>
     await writeFile(join(cwd, 'b.ts'), '', 'utf8')
     await writeFile(join(cwd, 'a.ts'), '', 'utf8')
     await mkdir(join(cwd, 'sub'))
-    assert.equal(await callTool('list_dir', '.', cwd), 'a.ts\nb.ts\nsub/')
+    assert.equal(await callTool(LOCAL_TOOLS, 'list_dir', '.', cwd), 'a.ts\nb.ts\nsub/')
   } finally {
     await rm(cwd, { recursive: true, force: true })
   }
