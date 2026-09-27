@@ -105,7 +105,18 @@ export function resolvePolicy<A extends AnswerSet>(
         message: `第 ${i + 1} 条（action=${r.action}）的 when 抛异常：${(err as Error)?.message ?? String(err)}。已按'条件不满足'处理`,
       })
     }
-    if (hit) return { action: r.action, reason: r.reason ?? `命中第 ${i + 1} 条规则`, ruleIndex: i, warnings }
+    if (hit) {
+      /*
+        ★ **reason 必须带数字。**
+
+        它不只是日志 —— `agent.ts` 把 `canDeliver` 的 reason **原样放进改写指令**
+        （「上一次的回答没有通过交付闸门：${deliver.reason}」）。所以一句
+        `else → revise` 会变成一句给生成模型的、没有任何信息的要求，而它只能
+        编一个理由出来（实测：编成了「内容抄多了」）。
+      */
+      const base = r.reason ?? `命中第 ${i + 1} 条规则`
+      return { action: r.action, reason: `${base}${readingsFor(rules, answers, i)}`, ruleIndex: i, warnings }
+    }
   }
 
   return {
@@ -199,6 +210,50 @@ export function closestMargin<A extends AnswerSet>(
     }
   }
   return best
+}
+
+/**
+ * 把一条门限的**读数**写成一句人能读的话：实测多少、门限多少、差多少。
+ *
+ * ★ 它存在的唯一理由是：**兜底规则的 reason 里没有任何数字。**
+ *   `compilePolicy` 把 reason 造成 `` `${fn.text} → ${action}` ``，于是
+ *   `else → revise` 就是全部信息 —— 而**改写器拿到的正是这句话**。
+ *
+ *   ★ 而 `reason` **不只是日志**：`agent.ts` 把 `canDeliver` 的 reason **原样拼进
+ *   改写指令**（「上一次的回答没有通过交付闸门：${deliver.reason}」）。所以一句
+ *   `else → revise` 会变成一句给生成模型的、零信息的要求 —— 它只能猜自己为什么
+ *   被打回。**兜底恰恰是最需要数字的那条规则**，因为它的含义就是「前面都没过」。
+ */
+function readingOf(spec: ThresholdSpec, answers: AnswerSet): string | undefined {
+  const v = spec.probe(answers)
+  if (v === undefined) return undefined // 这条门限对这类答案不适用
+  return `${spec.id}=${v.toFixed(3)}（${spec.kind} 门限 ${spec.threshold}，差 ${Math.abs(v - spec.threshold).toFixed(3)}）`
+}
+
+/**
+ * 命中一条规则时，**该把哪些数字一起报出来**。
+ *
+ * 命中的规则自己有门限 → 报它自己那一个。
+ * 命中的是**兜底**（`else`）→ 把**它前面求过值的每一道门限**都报出来 ——
+ * 因为兜底的含义正是「前面都没过」，而「都没过」不给出数字就是一句空话。
+ */
+function readingsFor<A extends AnswerSet>(
+  rules: readonly PolicyRule<A>[],
+  answers: A,
+  upto: number,
+): string {
+  const own = thresholdOf(rules[upto]?.when)
+  if (own) {
+    const r = readingOf(own, answers)
+    return r ? `（实测 ${r}）` : ''
+  }
+  const parts = rules
+    .slice(0, upto)
+    .map((r) => thresholdOf(r.when))
+    .filter((s): s is ThresholdSpec => s !== undefined)
+    .map((s) => readingOf(s, answers))
+    .filter((x): x is string => x !== undefined)
+  return parts.length ? `（前面 ${parts.length} 道门限都没过：${parts.join('、')}）` : ''
 }
 
 /**

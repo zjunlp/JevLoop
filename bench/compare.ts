@@ -268,7 +268,19 @@ async function runJevOnce(task: BenchTask): Promise<Sample> {
       generator,
       maxSteps: MAX_STEPS,
       onAskHuman: async () => true,
-      ...(task.writeInput !== undefined ? { provideWriteInput: () => task.writeInput } : {}),
+      /*
+        ★ 「关掉写入」是 `null`，不是「不传」。
+
+        `undefined` = 用**缺省**来源（会拿生成器现造内容）；`null` = 真的关掉。
+        `agent.ts` 里那条「不能用 `??`」的注释讲的就是这个区别 ——
+        而 2026-09-26 我把「不传」当成了「关掉」，于是 `cannot-write`
+        其实是一条正常的写任务，三条臂说「已完成」全是真的。
+      */
+      ...(task.noWrite
+        ? { provideWriteInput: null }
+        : task.writeInput !== undefined
+          ? { provideWriteInput: () => task.writeInput }
+          : {}),
       onEvent: (e) => {
         const now = performance.now()
         if (e.type === 'generate') {

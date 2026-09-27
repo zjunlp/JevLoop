@@ -146,9 +146,13 @@ async function runTask(task: BenchTask): Promise<TaskRun> {
       // 不是「有没有人来点确认」。`gradeRisk` 该问而没问照样判错。
       onAskHuman: async () => true,
       // 写哪个文件、写什么内容，两者都是生成，不属于判定 —— 由台子给（三分法）
-      ...(task.writeInput !== undefined
-        ? { provideWriteInput: () => task.writeInput }
-        : {}),
+      // ★ `noWrite` 要传 `null`（= 真的关掉），而不是「不传」（= 用缺省来源）。
+      //   两个台子必须同一个口径，否则同一条任务在两边量到的是两件事。
+      ...(task.noWrite
+        ? { provideWriteInput: null as null }
+        : task.writeInput !== undefined
+          ? { provideWriteInput: () => task.writeInput }
+          : {}),
         onEvent: (e: AgentEvent) => {
           const j = oracle.feed(e)
           if (j) judgements.push(j)
