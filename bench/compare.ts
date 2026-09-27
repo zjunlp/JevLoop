@@ -64,6 +64,14 @@ type Shape = 'JevLoop' | 'ReAct' | 'Workflow'
 /** 一条路跑一条任务的结果 */
 interface Sample {
   shape: Shape
+  /**
+   * **判定请求次数**（一次 HTTP 往返算一次）。
+   *
+   * ★ 墙钟的大头在往返里不在计算里（12 次 × 254ms 握手 = 3.0s）。
+   *   `decisions / requests` = 平均一批装了几道题 —— 合并有没有生效看它。
+   *   ReAct 与 Workflow 两条臂恒为 0：它们没有判定。
+   */
+  requests: number
   task: string
   modelCalls: number
   /**
@@ -199,6 +207,7 @@ function failedSample(shape: Shape, task: string, err: unknown): Sample {
     shape,
     task,
     decisions: 0,
+    requests: 0,
     modelCalls: 0,
     inputTokens: 0,
     outputTokens: 0,
@@ -276,6 +285,7 @@ async function runJevOnce(task: BenchTask): Promise<Sample> {
       // **只数生成**：判定不花这个钱，那正是这条 loop 的主张
       modelCalls: s.modelCalls,
       decisions: s.decisions,
+      requests: s.requests,
       // `MeterStats` 上的是**生成器**报的真值。判定那一边的记录里没有 token ——
       // 因为判定不花生成的钱，那正是这条 loop 的主张（判定模型那边确实也发
       // token，但走的是另一个后端、另一个价目表，不计在这一列里）
@@ -327,6 +337,7 @@ async function runWorkflowArm(task: BenchTask): Promise<Sample> {
           // 一个模型都没调 —— 这是它最强的地方，也是它唯一强的地方
           modelCalls: 0,
           decisions: 0,
+          requests: 0,
           inputTokens: 0,
           outputTokens: 0,
           latencyMs: performance.now() - t0,
@@ -366,6 +377,7 @@ async function runReActOnce(task: BenchTask): Promise<Sample> {
         task: task.id,
         modelCalls: r.modelCalls,
         decisions: 0,
+        requests: 0,
         inputTokens: r.inputTokens,
         outputTokens: r.outputTokens,
         latencyMs: r.latencyMs,
@@ -385,6 +397,7 @@ async function runReActOnce(task: BenchTask): Promise<Sample> {
       task: task.id,
       modelCalls: r.modelCalls,
       decisions: 0,
+      requests: 0,
       inputTokens: r.inputTokens,
       outputTokens: r.outputTokens,
       latencyMs: r.latencyMs,
@@ -451,6 +464,28 @@ async function main(): Promise<void> {
       console.log(C.red(`      ✗ ${f.problem}`))
       console.log(C.dim('      → 「纯计算」那一列会是空的：减法需要一个成立的基线，宁可不给数'))
     }
+  }
+
+  /*
+    ★★ **判定往返次数**：墙钟优化的那一个数。
+
+    上面那两行握手基线说的就是它 —— 12 次判定 × 254ms 是 3.0s，
+    **比这条 loop 自己的计算还多一倍**。所以「一次任务发了几次判定请求」
+    决定了墙钟的下限，而合并（一次请求多道题）是降低它的唯一手段。
+
+    `判定/请求` = 平均一批装了几道题：**1.0 表示合并完全没生效**。
+  */
+  const jevSamples = all.filter((s) => s.shape === 'JevLoop')
+  if (jevSamples.length) {
+    const reqs = median(jevSamples.map((s) => s.requests))
+    const decs = median(jevSamples.map((s) => s.decisions))
+    const per = reqs > 0 ? (decs / reqs).toFixed(2) : '—'
+    console.log(
+      C.dim(`  ★ 判定往返/任务：`).concat(
+        C.bold(`${reqs}`),
+        C.dim(`  （判定 ${decs} 次，平均一批 ${per} 道题 —— 1.00 表示合并没生效）`),
+      ),
+    )
   }
 
   // ── 逐任务 ──

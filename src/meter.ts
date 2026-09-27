@@ -117,6 +117,9 @@ export class Meter {
 
     return {
       decisions: this.decisions.length,
+      // ★ 请求数 = **不同的批号个数**。上面那个 `byBatch` 已经算好了这件事，
+      //   复用它 —— 「同一条记录数两遍」和「同一次请求数两遍」是同一类错误（§8.16）
+      requests: byBatch.size,
       decisionMs: round(decisionMs),
       avgDecisionMs: round(avgDecisionMs),
       modelCalls: this.modelCalls.length,

@@ -74,6 +74,21 @@ export interface AuditRecord {
 
 export interface MeterStats {
   decisions: number
+  /**
+   * **判定请求的次数**（一次 HTTP 往返算一次）。
+   *
+   * ★ 为什么必须单列：墙钟的大头**不在计算里，在往返里**。README 实测
+   *   12 次判定 × 254ms 握手 = **3.0s**，比这条 loop 自己的计算还多一倍。
+   *   所以「一条任务发了几次判定请求」是墙钟优化的**那一个数**。
+   *
+   * ★★ TS 侧此前**没有这个数** —— `questions_in_batch` / `requests_in_batch`
+   *   只存在于冻结的 Python 实验臂（`experiments/core/events.py`），而 AGENTS.md
+   *   §8.18 是按**那边**写的。**看不见要优化的东西，就优化不了它**；
+   *   这也是这个项目第四次撞上「文档里有、代码里没有」的形状。
+   *
+   * `decisions / requests` 就是**平均一批装了几道题** —— 合并有没有生效看它。
+   */
+  requests: number
   decisionMs: number
   avgDecisionMs: number
   modelCalls: number
