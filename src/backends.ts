@@ -36,6 +36,24 @@ export type FallbackNotice = (error: unknown, from: string, to: string) => void
  */
 export const PINNED_JEV_MODEL = 'jev-1.13.0'
 
+/**
+ * 官方 Jev 端点。
+ *
+ * ★ 单独一个常量，因为「**是不是官方端点**」现在是一个要判的问题：
+ *   换成本地部署之后，后端名字要带上主机名（见 `resolveProvider`），
+ *   否则两次跑的数不可比。
+ */
+const OFFICIAL_JEV_URL = 'https://api.typesafe.ai'
+
+/** 取主机名。给的串不是 URL 就原样退回 —— 报错信息里给个能看的就行 */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
+}
+
 /** 判定后端的选择。 */
 export interface ProviderChoice {
   /** 官方 Jev 的 baseUrl，默认 `https://api.typesafe.ai` */
@@ -98,9 +116,30 @@ export function resolveProvider(choice: ProviderChoice = {}): Provider {
   }
 
   const apiKey = choice.apiKey ?? process.env.TYPESAFE_API_KEY
+  const jevUrl = choice.jevUrl ?? process.env.JEVOS_JEV_URL ?? OFFICIAL_JEV_URL
   const jev = new HttpProvider({
-    baseUrl: choice.jevUrl ?? 'https://api.typesafe.ai',
-    name: 'jev',
+    /*
+      ★★ **`JEVOS_JEV_URL` 此前没有任何消费方**（2026-09-26 实测：全仓零匹配）。
+
+      `.env` 与 `.env.example` 都写着它，`.env` 里也设了值 —— 于是「把循环指向
+      另一个 Jev 端点」看起来是支持的，**而实际上会被静默忽略**：改它，请求照样
+      发去托管 API。这是这个项目第五次撞上「文档里有、代码里没有」。
+
+      它挡住的正是这件事：判定侧的墙钟几乎全是**往返**（实测 418ms/次 × 10 次），
+      而把端点换成本地部署是唯一能把它归零的手段。**没有这个变量，那条路走不通。**
+
+      优先级：显式参数 > 环境变量 > 官方默认。`.env` 里那一行现在是**生效的**。
+    */
+    baseUrl: jevUrl,
+    /*
+      ★ **端点换得动之后，主机名就是后端身份的一部分。**
+
+      以前只有官方一个端点，`name: 'jev'` 就够了。现在同一个 `jev` 可能是托管的、
+      也可能是本地部署的 —— 两者的墙钟差一个数量级（握手 418ms vs ~0）。
+      报告里只写 `jev`，两次跑的数就没法比，也看不出哪次是哪次 ——
+      正是 `bench/run.ts` 那句「一份不写后端名字的命中率没有意义」。
+    */
+    name: jevUrl === OFFICIAL_JEV_URL ? 'jev' : `jev@${hostOf(jevUrl)}`,
     /*
       ★ **钉住版本，不用 `jev-latest` 别名。**
 
