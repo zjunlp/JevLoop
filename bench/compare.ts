@@ -40,7 +40,7 @@ import { tmpdir } from 'node:os'
 import { Decider, Meter, runAgent, loadEnv, resolveProvider, resolveGenerator } from '../src/index.ts'
 import { RuleJudge } from '../examples/rule-judge.ts'
 import { TASKS, type BenchTask } from './tasks.ts'
-import { answerOk, missing, checkArtifacts, matchesCall } from './oracle.ts'
+import { answerOk, missing, checkArtifacts, matchesCall, failureMode, type FailureMode } from './oracle.ts'
 import { runReact, REACT_SYSTEM } from './react.ts'
 import { hasWorkflow, runWorkflow, workflowLines } from './workflow.ts'
 import { C, withRetry } from './util.ts'
@@ -72,6 +72,21 @@ interface Sample {
    *   ReAct 与 Workflow 两条臂恒为 0：它们没有判定。
    */
   requests: number
+  /**
+   * **失败的模式**（`bench/oracle.ts` 的 `failureMode`）。
+   *
+   * ★ 三方比较里最危险的一格：没做到，却给了一个像样的答案（`quiet`）。
+   *   三条臂各有特征性失败 —— workflow 跑不起来、agent 可能编、我们未知。
+   */
+  failure: FailureMode
+  /**
+   * 它**实际说了什么**。
+   *
+   * ★ 必须随 `Sample` 一起留着：一个「静 = 1」的计数没有原文是读不出东西的 ——
+   *   读的人无从判断那是一次编造、一次含糊、还是一次被截断的降级消息。
+   *   `why` 只说了「没通过哪条判据」，没说它答了什么。
+   */
+  answer: string
   task: string
   modelCalls: number
   /**
@@ -219,6 +234,9 @@ function failedSample(shape: Shape, task: string, err: unknown): Sample {
     modelMs: 0,
     modelWallMs: 0,
     passed: false,
+    answer: '',
+    // 跑不起来 = **响的**失败：它当场就说自己做不了（workflow 的特征性失败）
+    failure: 'loud',
     why: [`跑不起来：${(err as Error).message.slice(0, 60)}`],
   }
 }
@@ -281,6 +299,8 @@ async function runJevOnce(task: BenchTask): Promise<Sample> {
     const s = meter.stats
     return {
       shape: 'JevLoop' as const,
+      failure: failureMode(result.answer, task, why),
+      answer: result.answer,
       task: task.id,
       // **只数生成**：判定不花这个钱，那正是这条 loop 的主张
       modelCalls: s.modelCalls,
@@ -349,6 +369,8 @@ async function runWorkflowArm(task: BenchTask): Promise<Sample> {
           modelMs: 0,
           modelWallMs: 0,
           passed: why.length === 0,
+          failure: failureMode(r.answer, task, why),
+          answer: r.answer,
           why,
         }
       }),
@@ -388,6 +410,8 @@ async function runReActOnce(task: BenchTask): Promise<Sample> {
         modelMs: r.modelMs,
         modelWallMs: r.modelMs,
         passed: false,
+        answer: '',
+        failure: 'loud',
         why: [`跑不起来：${r.failed.slice(0, 60)}`],
       }
     }
@@ -404,10 +428,12 @@ async function runReActOnce(task: BenchTask): Promise<Sample> {
       pureMs: r.modelMs,
       toolMs: r.toolMs,
       computeMs: computeOf(r.modelMs, 0, r.modelCalls),
+      answer: r.answer,
       decisionMs: 0,
       modelMs: r.modelMs,
       modelWallMs: r.modelMs,
       passed: why.length === 0,
+      failure: failureMode(r.answer, task, why),
       why,
     }
   })
@@ -510,6 +536,18 @@ async function main(): Promise<void> {
           pad(Math.round(median(xs.map((s) => s.outputTokens))), 10) +
           (xs.every((s) => s.passed) ? C.green('✓') : C.red(`✗ ${xs.find((s) => !s.passed)?.why.join('；').slice(0, 40)}`)),
       )
+      /*
+        ★ **失败时把「它说了什么」打出来。**
+
+        上面那一栏只给「没通过」，而「没通过」有两种完全不同的样子：
+        **说了做不到**（响的）和**编了一个**（静的）。而后者正是这个比较里
+        最危险的一格 —— 一个「静 = 1」的计数，没有原文是读不出东西的。
+      */
+      const bad = xs.find((s) => !s.passed)
+      if (bad && bad.answer.trim()) {
+        const oneline = bad.answer.replace(/\s+/g, ' ').trim().slice(0, 150)
+        console.log(C.dim(`  ${''.padEnd(22)}↳ ${bad.failure === 'quiet' ? C.red('静(编了)') : bad.failure === 'loud' ? '响(承认了)' : '未分类'}：${oneline}`))
+      }
     }
     // 分解：读到「40.7s」时**下一步能查什么**，全在这一行里
     const jx = all.filter((s) => s.task === task.id && s.shape === 'JevLoop')
@@ -589,6 +627,43 @@ async function main(): Promise<void> {
         '    不花生成的钱**，不是「省了 13 次大模型调用」—— 同样任务 ReAct 只要 3–4 次。',
     ),
   )
+  console.log('')
+
+  /*
+    ── 失败的模式（做不到的时候，它说了吗）─────────────────────────
+
+    ★★ **这一栏是三方比较里最危险的一格。**
+
+    三条臂各有特征性的失败，而危险程度差得很远：
+
+        Workflow     没写过计划 ⇒ **跑不起来** —— 它当场就说「我做不了」
+        Agent loop   给一个像样的答案，而那是编的
+        JevLoop      ？  ← 这一格从没量过，而它正是「可控」这个词的全部内容
+
+    怎么算出来的（`oracle.ts` 的 `failureMode`）：
+
+        passed  通过验收（在那两条「做不到」的任务上，**通过 = 如实承认了**）
+        loud    **响的**：没通过，但它说了做不到（或干脆没产出回答）
+        quiet   **静的**：没通过，**又没有承认** —— ★ 编了一个
+        failed  没通过，而这条任务**没声明什么算「承认」** ⇒ **判不了**
+
+    ★ 最后那个桶是有意留的：**只有在「承认」被定义过的地方才判得了诚实。**
+      普通任务上大部分是 `passed`，剩下的记 `failed` 而不是替它们猜一个。
+  */
+  console.log('')
+  console.log(C.bold('  ── 失败的模式（做不到的时候，它说了吗）──────────────────'))
+  console.log(C.dim('  ★ 最危险的是「静」：没做到，却给了一个像样的答案 —— 人看不出来'))
+  console.log(C.dim(`  ${pad('形状', 12)}${pad('通过', 7)}${pad('响的', 7)}${pad('静的', 7)}${pad('判不了', 8)}`))
+  for (const shape of ['JevLoop', 'ReAct', 'Workflow'] as const) {
+    const xs = all.filter((s) => s.shape === shape)
+    if (!xs.length) continue
+    const n = (m: FailureMode): number => xs.filter((s) => s.failure === m).length
+    const quiet = n('quiet')
+    console.log(
+      `  ${pad(shape, 12)}${pad(n('passed'), 7)}${pad(n('loud'), 7)}` +
+        `${quiet ? C.red(String(quiet).padEnd(7)) : String(quiet).padEnd(7)}${pad(n('failed'), 8)}`,
+    )
+  }
   console.log('')
 
   // ── 对手拿到的指令 ──
