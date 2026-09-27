@@ -22,6 +22,18 @@ ask: The agent still has work to do before it can answer the task — an action 
 - true — the task still requires an action that has not happened: reading something, listing something, writing something, running something
 - false — every action the task asks for has already been taken, and there is enough information to answer
 
+frame:
+  + task          400                   —— 整个判定的主体：问的是「这个任务还有没有没做的动作」
+  + earlier       200    earlierMaybe   —— 多轮下「再读一遍那个文件」里的「那个」唯一能落地的地方（§8.2）
+  + already_done  300    describeDone   —— ★ 必须是一份**清单**，不是一个计数。原来这里是 `steps_done: 2`，实测任务「把 alpha.ts 里的 totalOf 抄到新文件 summary.ts」读完 alpha.ts 后判了「不需要工具」，**文件从没被写出来** —— 因为「读过」和「写过」在计数里长得一样
+  + files_known   15     filesMaybe     —— 任务里的「这两个文件」是一个**指代**，没有它落不到具体路径上
+  + already_read  15     readMaybe      —— 分不出「读了一个还是两个」，就无法确认任务说的「这两个」读完了没有（实测 0.86 误判）
+  + last          300    lastOrNone     —— 刚刚发生了什么 —— 判「还要不要动手」时最近一步的结果是主要依据
+  - cwd                                 —— 路径不进判定：目标由 `target` 那一栏（gradeRisk）或候选（pickInput）表达，工作目录本身没有信息
+  - canWrite                            —— 「能不能写」是**代码**按精确规则判的（§8.1 第三行），不该让判定模型再判一遍
+  - lastTool                            —— 工具名单独列出来会诱导它去评判「上一个工具选得对不对」——那是 `stepOk` 的职责
+  - draft                               —— 草稿是生成之后才有的东西；这一步根本还没到生成
+
 policy:
   - prob:needs_tool >= 0.5 → use_tool
   - else → answer
@@ -58,6 +70,18 @@ ask: Which tool should the agent call next?
 - write_file — 要写的内容已经拿到，且目标路径明确
 - done — 已有足够证据回答任务，工具循环可以结束了
 
+frame:
+  + task          400                   —— 选工具的唯一依据是任务要什么
+  + earlier       200    earlierMaybe   —— 挑工具时「上文」尤其重要 ——「那个文件」要靠它才能落到具体路径
+  + already_done  300    describeDone   —— ★ 用一句话讲清「已经做过什么」，不丢一个数组让模型自己解析 —— 实测只放数组时它会重复选做过的动作
+  + files_known   20     filesMaybe     —— 「还有没有可读的文件」决定 read_file 还在不在候选里
+  + already_read  10     readMaybe      —— 少了它会重复读同一个文件（§8.2：帧里没有的信号它判不出来）
+  + last_result   300    resultMaybe    —— 上一步的结果决定下一步该做什么
+  - cwd                                 —— 同 needsTool：工作目录本身没有信息，目标由候选表达
+  - canWrite                            —— 「能不能写」是代码的规则，不是判定 —— 它决定 `write_file` 进不进候选，不进帧
+  - lastTool                            —— ★ 候选本身**已经按做过的动作重建过**（§8.4）；再把「上一个是什么」放进来，会让「还有哪些工具」和「已经做过什么」互相打架
+  - draft                               —— 还没到生成那一步
+
 policy:
   - top >= 0.6 → call
   - else → escalate
@@ -81,6 +105,18 @@ dynamic: unreadFiles(ctx) —— 还没读过的文件，每步重建
 ask: Which file should this tool call target?
 
 - 还没读过的文件 — 候选由 `unreadFiles(ctx)` 每步算出来，这里不列举
+
+frame:
+  + task          400                   —— 判「要读哪个文件」必须知道任务要什么
+  + tool          40     toolOrEmpty    —— 同一个输入槽对不同工具含义不同：read_file 挑的是「读哪个」
+  + already_read  10     readMaybe      —— 读过的要从候选里去掉，判定得看得见「读过哪些」才知道剩哪些
+  + candidates    20     filesMaybe     —— 候选的**全集**。真正发出去的是 fileOptions 的重建结果，这一栏是让判定知道总体有多少
+  - cwd                                 —— 同前：目标由候选表达，不由工作目录表达
+  - history                             —— ★ 候选（`fileOptions`）本身已经是「还没读过的那些」这个闭集的投影；再给一遍历史会让「还剩哪些」和「做过什么」两个信号互相打架（§8.4 的同一个坑）
+  - canWrite                            —— 写路径的候选不由这里产生 —— `write_content` 生成路径，判定不参与
+  - earlier                             —— 这一步是在一个已经选定的工具内部挑参数，指代关系由 task + 候选表达就够了
+  - lastResult                          —— 结果的**内容**与「挑哪个文件」无关；它是 `stepOk` 与 `canDeliver` 的依据
+  - draft                               —— 还没到生成那一步
 
 policy:
   - top >= 0.5 → use
@@ -114,6 +150,19 @@ ask: This call must be explicitly authorised by a human before it runs
 
 - true — it can destroy data, spend money, or leave the machine
 - false — it only reads or writes inside the working directory
+
+frame:
+  + tool          40     toolOrUnknown  —— 风险的第一依据是哪个工具 —— 但**认不出来时不编一个数**
+  + base_risk     12     localToolRisk  —— 工具的静态风险基线（`act-local.ts` 的 `baseRisk`）。★ 认不出的工具名**不放这一栏** —— 0 分的意思是「只读」，不能用它冒充「未知」。这就是 `absent` 与 `unfilled` 必须分开的原因：这一栏「今天不适用」是**正常状态**
+  + target        200    lastInput      —— 判风险要看**这一调的目标**，不是工具名 —— `rm -rf /` 和 `ls` 的危险程度差在参数上
+  + task          300                   —— 同一个动作在不同任务下风险不同（写配置文件 vs 写 /etc）
+  - cwd                                 —— 工作目录由 target 的路径体现；单列出来是冗余
+  - files                               —— 目录里有哪些文件与「这一次调用多危险」无关
+  - readFiles                           —— 读过什么与风险无关
+  - canWrite                            —— 能不能写是另一道门；这里问的是**已经决定要做的这一调**有多危险
+  - earlier                             —— 多轮的上文不改变这一次调用的风险
+  - lastResult                          —— ★ 上一步的**输出内容**绝不能进这一栏：它是不可信文本，而这一栏的输出会驱动授权闸门 —— 让它读工具输出，等于让工具输出有机会推动风险分
+  - draft                               —— 还没到生成那一步
 
 policy:
   - score:risk >= 2 → ask_human
@@ -186,6 +235,18 @@ ask: The agent has done everything the task requires — no further tool call is
 - true — the goal stated in the task has been reached, and the answer can be written from what has already been gathered
 - false — something the task still asks for is missing
 
+frame:
+  + task          400                   —— 判的是「任务要求的都做了」—— 没有任务就没有判据
+  + already_read  15     readMaybe      —— ★ 这个问题靠**覆盖**就能答：任务说的那两个文件读了没有。原来没有这一栏时，判定只能从被截断的结果里去找函数名（实测 0.22 误判 keep_going）
+  + steps         260    recentSteps    —— ★ 结果留 **200 字符不是 80**，这是量出来的：任务「这两个文件各导出了什么函数」，80 字符时 alpha.ts 那条正好断在 `Order` 接口之后、**函数名 totalOf 在截断点之后** —— 结果留 80 判 keep_going(0.35)，留 200 判 finish(0.96)。**内容看得到时它是直接判断，不是推理**，余量大得多
+  - cwd                                 —— 与「任务做完没有」无关
+  - files                               —— 「目录里有什么」不等于「任务要求的做完了没」—— 正是 needsTool 记的那个陷阱的另一面
+  - canWrite                            —— 与完成度无关
+  - earlier                             —— 多轮的上文属于「之前问过什么」；完成度由 task + 覆盖 + 步骤本身决定
+  - lastTool                            —— 单列上一个工具会把判定拉向「刚才那步怎么样」—— 那是 stepOk 的层级
+  - lastResult                          —— 最近一条结果已经**逐字**在 `steps` 里了，单列出来是重复的语气加强
+  - draft                               —— 还没到生成那一步
+
 policy:
   - prob:done >= 0.6 → finish
   - else → keep_going
@@ -223,6 +284,18 @@ ask: The answer states something that the tool output does not support
 
 - true — it claims a fact, file or result that was never observed
 - false — everything it says traces back to a tool result
+
+frame:
+  + task          400                   —— 判据是「任务要求的事做了、并如实报告」，两边都要有任务
+  + answer        900    draftMaybe     —— ★ 判的对象就是**刚生成的这份草稿** —— 它不在帧里，这一栏就没有意义
+  + evidence      600    writeEvidence  —— ★ 交付闸门要拿工具结果**逐句核对**回答，所以这一栏的预算比别处宽。实测把证据 clip 到 100 字符时，它**正确地**判出 unsupported=0.67 —— 判定是对的，是帧喂少了；改成 600 后立刻通过（§8.2 的原型事故）
+  - cwd                                 —— 与「回答有没有证据支撑」无关
+  - files                               —— 目录清单不是证据；证据是**做过什么、看到了什么**
+  - readFiles                           —— 读过哪些文件同样不是证据本身
+  - canWrite                            —— 与交付判据无关
+  - earlier                             —— ★ 多轮的上文会把「这份草稿说的是不是这一轮做过的事」冲淡；交付核对的是**这一轮**的证据
+  - lastTool                            —— 单列上一个工具会把判定拉向「刚才那步」，而它要核对的是整份草稿
+  - lastResult                          —— ★ 最近一条结果已经逐字在 `evidence` 里了。单列一份会让**最近一步**获得不成比例的权重，而交付核对要求的是「每一句都能追溯到某条证据」
 
 policy:
   - prob:unsupported >= 0.5 → revise

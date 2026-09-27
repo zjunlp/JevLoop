@@ -569,3 +569,25 @@ test('★★ step_ok 的帧**真的**由文件决定：改一个字，帧就变'
   const cut = compileFrame(spec, long).truncated.find((t) => t.key === 'output')
   assert.equal(cut?.to, 500, 'output 的界来自 DECISION.md 的 `+ output 500`')
 })
+
+
+test('★★ 七个块的帧**全部**在文件里 —— 没有一个是靠代码回退的', () => {
+  // ★ 这条钉的是**主张**，不是实现：对外说的是「帧声明在文件里」。
+  //   少一个块在代码里，那句话就多一个例外 —— 而例外不会自己响。
+  //   以后真要加一个「只写在代码里」的节点，就得来改这条测试：**那是一次决定，
+  //   应该看起来像一次决定**（同 CODE-STYLE §12 规矩 4 对豁免路径的要求）。
+  const missing = doc.blocks.filter((b) => !b.frame).map((b) => b.id)
+  assert.deepEqual(missing, [], `这些块还没把 frame 搬进文件：${missing.join('、')}`)
+})
+
+test('★ 文件里的帧是**有界**的：每一栏都有正数界，每一条排除都有理由', () => {
+  for (const b of doc.blocks) {
+    for (const f of b.frame?.fields ?? []) {
+      assert.ok(Number.isInteger(f.bound) && f.bound > 0, `${b.id}.${f.key} 的界是 ${f.bound}`)
+      assert.ok(f.why.trim().length > 0, `${b.id}.${f.key} 没写为什么`)
+    }
+    for (const e of b.frame?.excluded ?? []) {
+      assert.ok(e.why.trim().length > 0, `${b.id} 的排除项 ${e.field} 没写为什么`)
+    }
+  }
+})
