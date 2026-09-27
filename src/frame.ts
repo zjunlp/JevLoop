@@ -213,11 +213,32 @@ export interface Frame {
   state: Record<string, unknown>
   /** 帧正文的指纹。回答「**它看到了什么**」 */
   digest: string
+  /**
+   * 这一帧的每一栏**读的是 ctx 的哪一格**。
+   *
+   * ★ 它必须随产物一起走，因为「两个判定能不能共用一帧」**只能靠它回答**
+   *   （见 `mergeConflicts`）：产物上只带 `state` 的话，读它的人分不出某个键
+   *   是从 `history` 来的还是从 `files` 来的 —— 而 L2 的 `decide.ts` 要在
+   *   **不 import L3** 的前提下判这件事。
+   */
+  fields: readonly { key: string; from: keyof AgentCtx }[]
   truncated: readonly Truncation[]
   unfilled: readonly Unfilled[]
   absent: readonly Absent[]
   excluded: readonly FrameExclusion[]
 }
+
+/**
+ * 两个（或更多）判定**能不能共用一帧** —— 也就是能不能塞进同一次请求。
+ *
+ * 实现在 `frame-merge.ts`（L0），因为 `decide.ts`（L2）合并时也要用它，
+ * 而 §11 不许 L2 import 这个文件（L3）。同 `frameDigest` 的下沉理由。
+ *
+ * ★★ 它把 §8.18 的散文变成机器检查 —— 那一条写的「`stepOk` 与 `isDone`
+ *   两份帧合不成一份」是**人推出来的**，而合并本身不拦。详见那个文件的头注。
+ */
+export { mergeConflicts } from './frame-merge.ts'
+export type { MergeableFrame, MergeConflict } from './frame-merge.ts'
 
 // ═══════════════════════════════════════════════════════════
 // 两种指纹 —— 实现在 `frame-digest.ts`（L0）
@@ -283,6 +304,8 @@ export function compileFrame(spec: FrameSpec, ctx: AgentCtx): Frame {
     node: spec.node,
     state,
     digest: frameDigest(spec.node, state),
+    // 每一栏读的是哪一格 —— 随帧走，`decide.ts` 合并时要靠它判能不能合
+    fields: spec.fields.map((f) => ({ key: f.key, from: f.from })),
     truncated,
     unfilled,
     absent,

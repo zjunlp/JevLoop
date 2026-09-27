@@ -33,6 +33,7 @@ import {
   type FrameSpec,
 } from '../src/frame.ts'
 import { FRAME_SPECS, needsTool, stepOk, gradeRisk, pickTool } from '../src/decisions.ts'
+import { mergeConflicts } from '../src/frame-merge.ts'
 
 /** 一个「什么都发生过」的 ctx —— 让每一栏都有东西可编 */
 function fullCtx(): AgentCtx {
@@ -304,5 +305,59 @@ test('★★ 换掉候选集：帧指纹不动，请求指纹要动（§8.17 那
     before.requestDigest,
     after.requestDigest,
     '★ 候选集换了，请求指纹必须换 —— 只比帧指纹会放过这一类',
+  )
+})
+
+// ═══════════════════════════════════════════════════════════
+// ⑥ 合并的合法性 —— 从声明算出来，不靠人记
+//
+// ★ 这一节把 §8.18 的散文变成可执行的断言。那一条写着「`stepOk` 与 `isDone`
+//   两份帧合不成一份」，理由是**人推出来的**；而在这之前，合并**不会拦** ——
+//   谁并到一起它会静默成功，然后违反一个已经声明过的契约。
+// ═══════════════════════════════════════════════════════════
+
+test('§8.18 的结论现在由规则自己推出：needsTool + pickTool 可合，stepOk + isDone 不可', () => {
+  const ctx = fullCtx()
+  const f = (id: string) => compileFrame(FRAME_SPECS[id]!, ctx)
+
+  // 今天真的在合并的那一对 —— 规则必须放行，否则这条检查就成了摆设
+  assert.equal(mergeConflicts([f('loop.needsTool'), f('loop.pickTool')]).ok, true)
+
+  // §8.18 说合不成的那一对 —— 规则要自己说出**是哪一格**
+  const si = mergeConflicts([f('loop.stepOk'), f('loop.isDone')])
+  assert.equal(si.ok, false, 'stepOk 的帧故意没有 task，而 isDone 必须有 —— 必须冲突')
+  const task = si.conflicts.find((c) => c.field === 'task')
+  assert.ok(task, `冲突里必须点名 'task'，实际 ${JSON.stringify(si.conflicts.map((c) => c.field))}`)
+  assert.equal(task.excludedBy, 'loop.stepOk')
+  assert.equal(task.readBy, 'loop.isDone')
+  assert.ok(task.reason.trim().length > 0, '★ 理由要原样带出来 —— 不然读报错的人只能去翻代码')
+})
+
+test('★ A（投机扇出 pickInput + gradeRisk）被机器挡下，而不只是被人判死', () => {
+  const ctx = fullCtx()
+  const v = mergeConflicts([
+    compileFrame(FRAME_SPECS['loop.pickInput']!, ctx),
+    compileFrame(FRAME_SPECS['loop.gradeRisk']!, ctx),
+  ])
+  assert.equal(v.ok, false, 'pickInput 故意不看 history，而 gradeRisk 要从 history 里取 target')
+  assert.ok(
+    v.conflicts.some((c) => c.field === 'history'),
+    `冲突里必须点名 'history'，实际 ${JSON.stringify(v.conflicts.map((c) => c.field))}`,
+  )
+})
+
+test('★★ 违规合并在 decideMany 里**真的会抛**（不然这条规则只是个建议）', async () => {
+  const { Decider } = await import('../src/decide.ts')
+  const { MockProvider } = await import('../src/provider-mock.ts')
+  const { stepOk: a, isDone: b } = await import('../src/decisions.ts')
+
+  const decider = new Decider({ provider: new MockProvider() })
+  // 同 `agent.ts`：`decideMany` 收的是**擦掉每节点具体类型**的形状（它按问题
+  // id 分发），所以这里显式擦一次
+  const specs = [a, b] as unknown as Parameters<typeof decider.decideMany>[0]
+  await assert.rejects(
+    () => decider.decideMany(specs, fullCtx()),
+    /不合法：.*'task'.*stepOk.*isDone/s,
+    '把 stepOk 和 isDone 并成一次请求必须被拦下，并说清是 task 那一格',
   )
 })

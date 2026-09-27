@@ -286,6 +286,10 @@ const LAYER: Record<string, number> = {
   // 而消费方跨两层 —— `frame.ts`(L3) 编完帧要算、`decide.ts`(L2) 发请求要算。
   // §11 不许 L2 import L3，所以共用的东西下沉（同 `http-error.ts` 的先例）。
   'frame-digest': 0,
+  // `frame-merge` 同它：`mergeConflicts` 跨 L2/L3 共用（决定合并是否合法，
+  // L2 的 `decide.ts` 必须查得了），而它对领域一无所知 ——
+  // 只收「看了什么 / 故意不看什么」，出「能不能合」。零 import、纯函数。
+  'frame-merge': 0,
   // `surface` 零 import：表面机制（追加 / 替换一段）不认识任何领域概念。
   // 同 context-prune / estimate 的先例 —— 依赖面为零就放最底下。
   surface: 0,

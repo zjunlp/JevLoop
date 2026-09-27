@@ -82,10 +82,20 @@ export type Action = (typeof ACTIONS)[number]
  *   §8.16 记的那类最难发现的分歧，所以这里宁可少写几个键，也不改写名字。
  */
 export interface FrameArtifact {
+  /** 这份帧属于哪个判定节点 —— 合并冲突时要说是谁和谁 */
+  node: string
   /** 实际进帧的正文（与 `DecisionResult.state` 是同一个对象） */
   state: unknown
   /** 帧正文的指纹：回答「**它看到了什么**」 */
   digest: string
+  /**
+   * 每一栏读的是 ctx 的哪一格。
+   *
+   * ★ 它在这儿（而不是只在 `Frame` 上）是因为**合并的合法性只能靠它判**：
+   *   「A 故意不看 history，而 B 要看 history」—— 这件事 L2 的 `decide.ts`
+   *   必须查得了，而它不许 import L3 的 `frame.ts`。
+   */
+  fields: readonly { key: string; from: string }[]
   /** 有界且**截了要报** */
   truncated: readonly { key: string; from: number; to: number }[]
   /** 声明要看，而 ctx 里没有 —— 可能忘了喂 */

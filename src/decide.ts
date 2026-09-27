@@ -37,6 +37,7 @@ import type { QuestionSet, AnswerMap, AnswerSet } from './vocab.ts'
 import { resolvePolicy, closestMargin, type PolicyWarning } from './policy.ts'
 import { validate, type BudgetWarning, type Checkpoint } from './budget.ts'
 import { frameDigest, requestDigest } from './frame-digest.ts'
+import { mergeConflicts } from './frame-merge.ts'
 import { Meter } from './meter.ts'
 
 export interface DeciderOptions {
@@ -169,6 +170,34 @@ export class Decider {
     */
     let state: unknown = projected[0]!.state
     if (projected.length > 1) {
+      /*
+        ★★ **合并的合法性从声明算出来，不靠人记。**
+
+        `FrameSpec.excluded` 声明了「这个判定故意不看 X」。如果另一个判定要看 X，
+        合成一帧就等于把 X 塞进它的视野 —— 而在这段检查之前，合并**不会拦这件事**：
+        它会静默成功，然后违反一个已经写下来的契约（而那份契约存在的全部意义
+        就是不让这种事发生，§8.14）。
+
+        §8.18 记的「`stepOk` 与 `isDone` 两份帧合不成一份」**正是这条规则自己
+        推出来的**，不用人去记：`stepOk` 排除 `task`，而 `isDone` 读 `task`。
+
+        ★ 只查**声明过帧**的节点（`artifact` 存在）。手拼 dict 的第三方节点没有
+          可读的声明，硬猜一个只会误报 —— 那种情况由调用方自己负责。
+      */
+      const framed = projected.flatMap((p) => (p.artifact ? [p.artifact] : []))
+      const verdict = mergeConflicts(framed)
+      if (!verdict.ok) {
+        throw new Error(
+          `合并 ${projected.map((x) => x.spec.id).join(' 和 ')} 不合法：` +
+            verdict.conflicts
+              .map(
+                (c) =>
+                  `'${c.field}' 被 ${c.excludedBy} 声明为「故意不看」（${c.reason}），而 ${c.readBy} 要读它`,
+              )
+              .join('；') +
+            ' —— 合成一帧会把不该看的塞进它的视野',
+        )
+      }
       const merged: Record<string, unknown> = {}
       for (const p of projected) {
         const obj = p.state as Record<string, unknown> | null
