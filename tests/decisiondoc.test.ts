@@ -417,6 +417,7 @@ const singleQ = (type: 'noul' | 'choice' | 'score', id: string): DocBlock => ({
   kind: type,
   when: '',
   dynamic: '',
+  frame: null,
   rationale: '',
   line: 1,
   questions: [{ id, type, ask: 'x', options: [], line: 2 }],
@@ -535,4 +536,36 @@ test('谓词必须与目标问题的类型匹配 —— 否则是一条永不触
   assert.ok(compilePredicate('prob:ok >= 0.5', noulB))
   assert.ok(compilePredicate('score:risk >= 2', scoreB))
   assert.ok(compilePredicate('picked:tool = a', choiceB))
+})
+
+
+// ═══════════════════════════════════════════════════════════
+// `frame:` —— 帧的声明从代码搬进文件
+//
+// ★ 这两条测的是**接线**，不是解析：解析对了而消费方还在用代码那份，
+//   结果就是「文件里写了、运行时忽略」—— 那正是这个项目记过五次的形状。
+// ═══════════════════════════════════════════════════════════
+
+test('★ 仓库自带的 DECISION.md 里，step_ok 的 frame 解析出来了', () => {
+  const b = doc.blocks.find((x) => x.id === 'step_ok')
+  assert.ok(b?.frame, 'step_ok 必须声明 frame —— 它是迁移的第一个')
+  assert.equal(b!.frame!.fields.length, 4, '四栏：tool / input / output / already_read')
+  assert.ok(
+    b!.frame!.excluded.some((e) => e.field === 'task'),
+    '★ 最贵的那条排除（task）必须在文件里 —— 它带着产生它的那次实测',
+  )
+  assert.ok(
+    b!.frame!.excluded.every((e) => e.why.trim().length > 0),
+    '每一条排除都要写为什么（解析器会报，这里再钉一次）',
+  )
+})
+
+test('★★ step_ok 的帧**真的**由文件决定：改一个字，帧就变', async () => {
+  const { compileFrame } = await import('../src/frame.ts')
+  const { FRAME_SPECS } = await import('../src/decisions.ts')
+  const spec = FRAME_SPECS['loop.stepOk']!
+  const long = { task: 't', cwd: '/w', lastTool: 'read_file', lastResult: 'x'.repeat(2000) }
+  // 文件里写的是 500 —— 这个数变了，帧就该跟着变，而不是回退到代码里那份
+  const cut = compileFrame(spec, long).truncated.find((t) => t.key === 'output')
+  assert.equal(cut?.to, 500, 'output 的界来自 DECISION.md 的 `+ output 500`')
 })

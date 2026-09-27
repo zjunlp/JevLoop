@@ -100,6 +100,7 @@ import {
   KINDS,
   type BlockKind,
   type DocBlock,
+  type DocFrame,
   type DecisionDoc,
   type DocOption,
   type DocPolicyRule,
@@ -111,7 +112,7 @@ import {
 } from './decision-shape.ts'
 
 export { isGate } from './decision-shape.ts'
-export type { BlockKind, DecisionDoc, DocBlock, DocOption, DocPolicyRule, DocProblem, DocQuestion, DocSummary, Primitive } from './decision-shape.ts'
+export type { BlockKind, DecisionDoc, DocBlock, DocFrame, DocFrameField, DocFrameExclusion, DocOption, DocPolicyRule, DocProblem, DocQuestion, DocSummary, Primitive } from './decision-shape.ts'
 
 // ═══════════════════════════════════════════════════════════
 // 词法
@@ -205,11 +206,70 @@ function newDraft(id: string, line: number): DraftQuestion {
   return { id, line, ask: '', options: [], named: 0 }
 }
 
+/** 一行 frame 的**理由分隔符**。用双破折号，和选项的单个 `—` 区分开 */
+const RE_FRAME_WHY = /——/
+
+/**
+ * 解析一行 `frame:` 内容。
+ *
+ *     + task          400                  —— 整个判定的主体
+ *     + already_done  300   describeDone   —— ★ 必须是一份清单，不是一个计数
+ *     - cwd                                —— 路径不进判定
+ *
+ * ★ **理由必填**，而且缺失要报出来。`excluded` 的全部价值就是那句为什么 ——
+ *   §8.14 记着「删掉一个字段之后没有任何东西记得它曾经在过」，而理由就是那个「东西」。
+ */
+function pushFrameLine(trimmed: string, line: number, frame: DocFrame, problems: DocProblem[]): void {
+  const sees = trimmed.startsWith('+ ')
+  const body = trimmed.slice(2)
+
+  const cut = RE_FRAME_WHY.exec(body)
+  const why = cut ? body.slice(cut.index + 2).trim() : ''
+  const head = (cut ? body.slice(0, cut.index) : body).trim()
+
+  if (!why) {
+    problems.push({
+      line,
+      message: `frame 行 '${trimmed.slice(0, 40)}' 没有写为什么（用 —— 接一句理由）—— ` +
+        (sees ? '每一栏都要说清它为什么在这个判定里' : '每一条「故意不看」都要说清为什么'),
+    })
+  }
+
+  const tok = head.split(/\s+/).filter(Boolean)
+  if (tok.length === 0) {
+    problems.push({ line, message: `frame 行 '${trimmed.slice(0, 40)}' 是空的` })
+    return
+  }
+
+  if (!sees) {
+    if (tok.length > 1) {
+      problems.push({ line, message: `frame 的排除项 '${tok[0]}' 只写格名 —— 收到多余的 '${tok.slice(1).join(' ')}'` })
+    }
+    frame.excluded.push({ field: tok[0]!, why, line })
+    return
+  }
+
+  const bound = Number(tok[1])
+  if (!Number.isInteger(bound) || bound <= 0) {
+    problems.push({
+      line,
+      message: `frame 的 '${tok[0]}' 缺一个正的界（写在第 2 列，如 \`${tok[0]} 200\`）—— 有界是硬要求（§8.2）`,
+    })
+    return
+  }
+  if (tok.length > 3) {
+    problems.push({ line, message: `frame 的 '${tok[0]}' 最多三列：格名 / 界 / 投影名（收到 '${tok.slice(3).join(' ')}'）` })
+  }
+  frame.fields.push({ key: tok[0]!, bound, ...(tok[2] ? { project: tok[2] } : {}), why, line })
+}
+
 function interpretBlock(section: RawSection, problems: DocProblem[]): DocBlock {
   let kind: BlockKind | null = null
   let sawKind = false
   let when = ''
   let dynamic = ''
+  let frame: DocFrame | null = null
+  let inFrame = false
   const questions: DraftQuestion[] = []
   const policy: DocPolicyRule[] = []
   const rationale: string[] = []
@@ -229,6 +289,7 @@ function interpretBlock(section: RawSection, problems: DocProblem[]): DocBlock {
     if (trimmed === '') {
       rationale.push('')
       inPolicy = false
+      inFrame = false
       continue
     }
 
@@ -239,6 +300,21 @@ function interpretBlock(section: RawSection, problems: DocProblem[]): DocBlock {
       usedSubheading = true
       inPolicy = false
       continue
+    }
+
+    /*
+      ── `frame:` 区域 ────────────────────────────────────────────
+
+      ★ **必须排在 `- ` 的选项处理之前**：两种语法都以 `-` 开头，靠 `inFrame`
+        分辨。顺序反了的话，`- cwd —— 路径不进判定` 会被当成一个叫 `cwd`
+        的**选项**，而它是排除项 —— 而那正好是「声明被静默读错」的形状。
+    */
+    if (inFrame) {
+      if (trimmed.startsWith('+ ') || trimmed.startsWith('- ')) {
+        pushFrameLine(trimmed, line, frame!, problems)
+        continue
+      }
+      inFrame = false // 别的行都表示这个区域结束了
     }
 
     const item = RE_ITEM.exec(trimmed)
@@ -298,8 +374,13 @@ function interpretBlock(section: RawSection, problems: DocProblem[]): DocBlock {
         else problems.push({ line, message: `kind 只能是 ${KINDS.join(' / ')}，收到 '${value}'` })
       } else if (key === 'when') when = value
       else if (key === 'dynamic') dynamic = value
+      else if (key === 'frame') {
+        if (value) problems.push({ line, message: '`frame:` 不带值 —— 它的内容写在下面几行（`+ 看什么` / `- 故意不看什么`）' })
+        frame = { fields: [], excluded: [] }
+        inFrame = true
+      }
       else if (key === 'ask') current.ask = value
-      else problems.push({ line, message: `不认识的键 '${key}'（只有 kind / when / dynamic / ask / policy 是键）` })
+      else problems.push({ line, message: `不认识的键 '${key}'（只有 kind / when / dynamic / frame / ask / policy 是键）` })
       continue
     }
 
@@ -323,6 +404,7 @@ function interpretBlock(section: RawSection, problems: DocProblem[]): DocBlock {
     kind: kind ?? 'rule',
     when,
     dynamic,
+    frame,
     questions: resolved,
     policy,
     rationale: rationale.join('\n').trim(),

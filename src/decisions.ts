@@ -68,7 +68,7 @@ import { compilePolicy, compileQuestions } from './decision-compile.ts'
 
 import { toolsFor, fileOptions, pickInputInstructions, describeDone, lastInput } from './frame.ts'
 import type { AgentCtx, FrameSpec } from './frame.ts'
-import { compileFrame } from './frame.ts'
+import { compileFrame, AGENT_CTX_KEYS } from './frame.ts'
 export type { AgentCtx, StepRecord } from './frame.ts'
 
 // ═══════════════════════════════════════════════════════════
@@ -106,9 +106,115 @@ const EARLIER_MAX_CHARS = 200
  */
 const DONE_LINE_MAX_CHARS = 300
 
+// ═══════════════════════════════════════════════════════════
+// `frame:` 里的**投影注册表** —— 文件写不出函数，所以派生值只能点名
+//
+// ★ **封闭集合，而且它是 `from` 的唯一出处。** 文件只写投影名，读到哪一格由
+//   这里说了算 —— 于是**文件没法声称自己读的是别处**（那正是「声明和实现对不上」
+//   的形状，§8.16）。名字写错会被 `frameFromDoc` 当场抛出来，不会静默当成原样取。
+//
+// ★ 为什么需要这么多：`AgentCtx` 的格是可选的，而**每一栏缺省时发什么**是一个
+//   决定（空串？空表？省略这一栏？）。原来那些决定散在 `?? ''` 里。
+// ═══════════════════════════════════════════════════════════
+const FRAME_PROJECTIONS: Record<string, { from: keyof AgentCtx; fn: (ctx: AgentCtx) => unknown }> = {
+  // ── 空值兜底：缺省时发空串 / 空表（原来写作 `?? ''` / `?? []`）──
+  earlierMaybe: { from: 'earlier', fn: (ctx) => ctx.earlier ?? '' },
+  filesMaybe: { from: 'files', fn: (ctx) => ctx.files ?? [] },
+  readMaybe: { from: 'readFiles', fn: (ctx) => ctx.readFiles ?? [] },
+  resultMaybe: { from: 'lastResult', fn: (ctx) => ctx.lastResult ?? '' },
+  draftMaybe: { from: 'draft', fn: (ctx) => ctx.draft ?? '' },
+  toolOrEmpty: { from: 'lastTool', fn: (ctx) => ctx.lastTool ?? '' },
+  // ── 非空兜底（缺省时那句默认话本身就是判据的一部分）──
+  lastOrNone: {
+    from: 'lastResult',
+    fn: (ctx) => ctx.lastResult ?? '（还没有做过任何动作）',
+  },
+  toolOrUnknown: { from: 'lastTool', fn: (ctx) => ctx.lastTool ?? 'unknown' },
+  // ── 派生 ──
+  describeDone: { from: 'history', fn: (ctx) => describeDone(ctx) },
+  lastInput: { from: 'history', fn: (ctx) => lastInput(ctx) },
+  readCount: { from: 'readFiles', fn: (ctx) => (ctx.readFiles ?? []).length },
+  recentSteps: {
+    from: 'history',
+    fn: (ctx) =>
+      (ctx.history ?? []).slice(-5).map((h) => `${h.tool}(${clip(h.input, 60)}) → ${clip(h.result, 200)}`),
+  },
+  writeEvidence: {
+    from: 'history',
+    fn: (ctx) =>
+      (ctx.history ?? []).slice(-3).map((h, i, all) => {
+        const writes = h.tool === 'write_file'
+        const inputBudget = writes ? 600 : 60
+        const resultBudget = writes ? 60 : i === all.length - 1 ? 600 : 200
+        return `${h.tool}(${clip(h.input, inputBudget)}) → ${clip(h.result, resultBudget)}`
+      }),
+  },
+  /**
+   * 工具的静态风险基线。认不出的工具名**不放这一栏** ——
+   * 0 分的意思是「只读」，不能用它冒充「未知」（`absent` 与 `unfilled` 必须分开）。
+   */
+  localToolRisk: {
+    from: 'lastTool',
+    fn: (ctx) => {
+      const t = ctx.lastTool
+      return t && isToolName(LOCAL_TOOLS, t) ? LOCAL_TOOLS[t].baseRisk : undefined
+    },
+  },
+}
+
+/**
+ * 把 `DECISION.md` 里那个块的 `frame:` 编成 `FrameSpec`。没写就返回 `null`，
+ * 消费方回退到代码里那份 —— **迁移因此可以逐个节点做，不必一次全搬**。
+ */
+function frameFromDoc(blockId: string, node: string): FrameSpec | null {
+  const f = block(blockId).frame
+  if (!f) return null
+  return {
+    node,
+    fields: f.fields.map((x) => {
+      const p = x.project ? FRAME_PROJECTIONS[x.project] : undefined
+      if (x.project && !p) {
+        throw new Error(
+          `DECISION.md 的 '${blockId}' 里，frame 投影 '${x.project}' 不在注册表里 —— ` +
+            `可选：${Object.keys(FRAME_PROJECTIONS).join(' / ')}`,
+        )
+      }
+      // 不写投影 ⇒ 格名就是格（`task` 读 `task`）。写错要当场报，不能静默当成原样取
+      if (!p && !AGENT_CTX_KEYS.includes(x.key as keyof AgentCtx)) {
+        throw new Error(
+          `DECISION.md 的 '${blockId}' 里，frame 的 '${x.key}' 既不是 ctx 的格名，也没给投影 —— ` +
+            `ctx 只有 ${AGENT_CTX_KEYS.join(' / ')}`,
+        )
+      }
+      return {
+        key: x.key,
+        from: p ? p.from : (x.key as keyof AgentCtx),
+        // 界写一个数，按类型落到 chars（字符串）或 listMax（列表）——
+        // 对另一种是惰性的，所以一个数就够（见 `FrameField`）
+        chars: x.bound,
+        listMax: x.bound,
+        why: x.why,
+        ...(p ? { project: p.fn } : {}),
+      }
+    }),
+    excluded: f.excluded.map((e) => {
+      if (!AGENT_CTX_KEYS.includes(e.field as keyof AgentCtx)) {
+        throw new Error(
+          `DECISION.md 的 '${blockId}' 里，排除项 '${e.field}' 不是 ctx 的格名 —— ` +
+            `ctx 只有 ${AGENT_CTX_KEYS.join(' / ')}`,
+        )
+      }
+      return [e.field as keyof AgentCtx, e.why] as const
+    }),
+  }
+}
+
 /** 把声明编成 `state` —— 节点不再手拼 dict，帧的形状由声明决定 */
-function framed(spec: FrameSpec) {
-  const compile = (ctx: AgentCtx) => compileFrame(spec, ctx)
+function framed(spec: FrameSpec, blockId: string) {
+  // ★ **文件里写了 `frame:` 就以文件为准**，否则回退到代码里那份。
+  //   于是迁移是逐节点可做的，而且「文件赢了」这件事有单测钉住。
+  const use = frameFromDoc(blockId, spec.node) ?? spec
+  const compile = (ctx: AgentCtx) => compileFrame(use, ctx)
   return {
     state: (ctx: AgentCtx) => compile(ctx).state,
     // ★ 同一份编译结果交给 `decide.ts`，让它把指纹 / 截断 / 「故意不看什么」
@@ -748,7 +854,7 @@ export const needsTool = defineDecision({
   id: 'loop.needsTool',
   describe: '这一步需要调用工具，还是可以直接回答？',
 
-  ...framed(FRAME_NEEDS_TOOL),
+  ...framed(FRAME_NEEDS_TOOL, 'needs_tool'),
 
   // 问题与策略都来自 DECISION.md 的 needs_tool 块
   ...compiled<{ needs_tool: NoulQuestion }>('needs_tool', ['needs_tool']),
@@ -770,7 +876,7 @@ export const pickTool = defineDecision({
   id: 'loop.pickTool',
   describe: '下一步调用哪个工具（选项随已做的动作动态重建）',
 
-  ...framed(FRAME_PICK_TOOL),
+  ...framed(FRAME_PICK_TOOL, 'pick_tool'),
 
   // ★ 候选**每步重建**（`toolsFor`），而 markdown 表达不了函数 ——
   //   所以问题由代码算，`ask` 原文和策略仍来自文件。
@@ -805,7 +911,7 @@ export const pickInput = defineDecision({
   id: 'loop.pickInput',
   describe: '给已选定的工具挑一个输入（读/写哪个文件）',
 
-  ...framed(FRAME_PICK_INPUT),
+  ...framed(FRAME_PICK_INPUT, 'pick_input'),
 
   // 同 `pickTool`：候选由 `fileOptions` 每步重建，问题留代码，策略来自文件
   // `satisfies` 在这里而不是在 `choice(...)` 上：要断言的是**这个对象**
@@ -839,7 +945,7 @@ export const gradeRisk = defineDecision({
   id: 'loop.gradeRisk',
   describe: '给这次工具调用打风险分，驱动分级审批',
 
-  ...framed(FRAME_GRADE_RISK),
+  ...framed(FRAME_GRADE_RISK, 'grade_risk'),
 
   // 问题与策略都来自 DECISION.md 的 grade_risk 块。
   // 那条硬闸门（risk 够高就必须授权）现在写在文件里 —— 见那个块的 policy。
@@ -862,7 +968,7 @@ export const stepOk = defineDecision({
   id: 'loop.stepOk',
   describe: '刚才那次工具调用是否达到了预期效果',
 
-  ...framed(FRAME_STEP_OK),
+  ...framed(FRAME_STEP_OK, 'step_ok'),
 
   // 问题与策略都来自 DECISION.md 的 step_ok 块
   ...compiled<{ ok: NoulQuestion }>('step_ok', ['ok']),
@@ -884,7 +990,7 @@ export const isDone = defineDecision({
   id: 'loop.isDone',
   describe: '任务是否已经完成，可以开始生成回答了',
 
-  ...framed(FRAME_IS_DONE),
+  ...framed(FRAME_IS_DONE, 'is_done'),
 
   // 问题与策略都来自 DECISION.md 的 is_done 块
   ...compiled<{ done: NoulQuestion }>('is_done', ['done']),
@@ -908,7 +1014,7 @@ export const canDeliver = defineDecision({
   id: 'loop.canDeliver',
   describe: '生成的回答是否完整、准确、可以直接交付',
 
-  ...framed(FRAME_CAN_DELIVER),
+  ...framed(FRAME_CAN_DELIVER, 'can_deliver'),
 
   // 问题与策略都来自 DECISION.md 的 can_deliver 块
   ...compiled<{ deliverable: NoulQuestion; unsupported: NoulQuestion }>('can_deliver', ['deliverable', 'unsupported']),

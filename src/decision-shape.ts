@@ -50,6 +50,37 @@ export interface DocPolicyRule {
   action: string
 }
 
+/**
+ * `frame:` 里的一行 —— **这个判定看这一格**。
+ *
+ * ★ `project` 是一张**代码里注册的封闭表**里的名字（`frame-fields`）。文件里
+ *   写不出函数，所以派生值（把 `history` 压成一句话这种）只能点名。
+ *   好处是**它读哪一格由代码说了算** —— 文件没法声称自己读的是别处。
+ */
+export interface DocFrameField {
+  /** 帧里这一栏叫什么 */
+  key: string
+  /** 这一栏的界：字符串按字符、列表按项数。**必须写** */
+  bound: number
+  /** 派生投影的名字。不给就是 `ctx[from]` 原样 */
+  project?: string
+  /** 为什么这一栏在这个判定里。**必填** */
+  why: string
+  line: number
+}
+
+/** `frame:` 里的一行 —— **这个判定故意不看这一格**。理由必填 */
+export interface DocFrameExclusion {
+  field: string
+  why: string
+  line: number
+}
+
+export interface DocFrame {
+  fields: DocFrameField[]
+  excluded: DocFrameExclusion[]
+}
+
 export interface DocBlock {
   id: string
   kind: BlockKind
@@ -63,6 +94,16 @@ export interface DocBlock {
    * 校验也不再要求至少两个。
    */
   dynamic: string
+  /**
+   * **这个判定看什么、故意不看什么。**
+   *
+   * ★ 它以前只住在 `src/decisions.ts` 的 `FrameSpec` 里，于是「把判定声明在
+   *   文件里」这句话只对**问题**成立，对**帧**不成立 —— 而四次事故全在帧上。
+   *   搬进来之后，问什么和看什么住在同一处了。
+   *
+   * `null` = 这个块没写 `frame:`，消费方回退到代码里的那份（迁移可以逐个做）。
+   */
+  frame: DocFrame | null
   questions: DocQuestion[]
   policy: DocPolicyRule[]
   /** 为什么这么设计。最该写的一段，也是这个文件作为文档的价值所在 */

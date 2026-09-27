@@ -140,6 +140,18 @@ ask: This tool call itself completed and returned output this step can use. Judg
 - true — the tool ran and returned content — no error, no empty result, and the target it names is the one that was requested
 - false — the call did not work: an error, an empty result, a missing file, or output that clearly did not come from this tool
 
+frame:
+  + tool          40    toolOrUnknown  —— 判据里写着「the target it names is the one that was requested」，得知道是哪个工具
+  + input        200    lastInput      —— 判据包含「返回的目标就是请求的那个」—— 没有请求就没有可比的对象
+  + output       500    resultMaybe    —— 这一步的**唯一证据**
+  + already_read  12    readCount      —— 一个计数就够：这一步判的是单次成功与否，不需要读过的清单
+  - task                               —— ★★ 四次事故里最贵的一次。帧里带着 task、问题写着「for the task」、判据写着「what the task needed」，三处一起把**这一步**的判定拉到了**任务级**。实测任务「读一下 invoice.ts」第一步 list_dir 返回文件列表，它确实成功了，但没回答「这个文件定义了哪些函数」，于是 ok=0.470 判否 → stop → **整个循环结束**：任何需要多于一个工具的任务都跑不完。「任务完成了吗」是 is_done 的职责
+  - cwd                                —— 与「这一次调用本身成没成」无关
+  - files                              —— 同上：成功与否看的是这一次的输入与输出
+  - canWrite                           —— 与这一步的成败无关
+  - earlier                            —— ★ 上文会把判定拉向「整体进展如何」，而这一栏问的是刚刚那一次调用
+  - draft                              —— 草稿在这一步之后才有
+
 policy:
   - prob:ok >= 0.6 → continue
   - else → stop
