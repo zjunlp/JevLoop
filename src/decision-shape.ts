@@ -57,6 +57,47 @@ export interface DocPolicyRule {
  *   写不出函数，所以派生值（把 `history` 压成一句话这种）只能点名。
  *   好处是**它读哪一格由代码说了算** —— 文件没法声称自己读的是别处。
  */
+/**
+ * **判定住在循环的哪一步** —— 一个**封闭集合**，而 `when:` 现在必须点名其中一个。
+ *
+ * ★★ 它把「加一个判定只改文件」这句话的**边界**变成了可检查的东西。
+ *
+ * 循环在每个位置的分支是硬编码的（`need.action === 'answer'`、`risk.action === 'ask_human'`…）——
+ * 因为一个动作**在这个位置意味着什么，只有那个位置的代码知道**。所以：
+ *
+ *     **一个新判定，如果它产出的动作是那个位置已经在处理的，就只改文件；**
+ *     **否则你必须给那个位置加一个分支 —— 而解析器会在你写文件的时候就告诉你。**
+ *
+ * ⇒ 这句话从前是一个**承诺**，现在是一条**解析期检查**。没有它，加进去的判定会
+ *   被问到、会被记进轨迹、策略也会命中 —— 而**没有任何东西按它的动作做事**。
+ *   那正是 §8.16 记的「`auto_audit` 以前和 `auto` 完全一样，只多打一行 trace」。
+ *
+ * `escalate` 不列在里面：它在每个位置都合法（交回上层是通用的兜底出口）。
+ */
+export const POSITIONS: Record<string, { actions: string[]; about: string }> = {
+  'step-start': {
+    actions: ['use_tool', 'answer'],
+    about: '每个 step 的开头 —— 判「还要不要动手」，判否就直接跳到生成、省掉整个工具循环',
+  },
+  'tool-choice': { actions: ['call'], about: '决定动手之后 —— 判「调哪个工具」' },
+  'input-choice': { actions: ['use'], about: '选定的工具需要参数时 —— 判「调哪个文件」' },
+  'before-call': {
+    actions: ['auto', 'auto_audit', 'ask_human'],
+    about: '真正调用工具之前 —— 分级审批，**硬闸门在这一格**',
+  },
+  'after-tool': {
+    actions: ['continue', 'stop', 'finish', 'keep_going'],
+    about: '工具执行之后 —— 判「这一步成没成」与「整个任务完没完」',
+  },
+  'after-generate': {
+    actions: ['deliver', 'revise'],
+    about: '生成之后、交出去之前 —— 交付闸门，判的对象是刚生成的那份草稿',
+  },
+}
+
+/** `escalate` 在任何位置都合法：那是交回上层的通用出口 */
+export const ANY_POSITION_ACTIONS = ['escalate']
+
 export interface DocFrameField {
   /** 帧里这一栏叫什么 */
   key: string

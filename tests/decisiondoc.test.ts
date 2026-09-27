@@ -17,6 +17,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
+import { POSITIONS, ANY_POSITION_ACTIONS } from '../src/decision-shape.ts'
 import { parseDecisionDoc, summarize, headline, isGate, type DocBlock } from '../src/decisiondoc.ts'
 import { compileQuestions, compilePolicy, compilePredicate } from '../src/decision-compile.ts'
 import { ACTIONS, type DecisionSpec } from '../src/vocab-decision.ts'
@@ -295,7 +296,7 @@ test('kind 和选项写法对不上要报错', () => {
   // 声明 noul 却写成 choice 的有名选项
   const p = problemsOf('## foo\nkind: noul\nask: 问\n- a — 甲\n- b — 乙\n')
   assert.ok(
-    p.some((m) => /和选项写法对不上/.test(m)),
+    p.some((m: string) => /和选项写法对不上/.test(m)),
     `应当报出错配，实际：${JSON.stringify(p)}`,
   )
 })
@@ -303,30 +304,30 @@ test('kind 和选项写法对不上要报错', () => {
 test('同一块里选项写法混用要报错', () => {
   const p = problemsOf('## foo\nkind: mixed\n### a\nask: 问\n- x — 甲\n- 乙\n### b\nask: 问2\n- true — 是\n- false — 否\n')
   assert.ok(
-    p.some((m) => /写法不一致/.test(m)),
+    p.some((m: string) => /写法不一致/.test(m)),
     `应当报出混用，实际：${JSON.stringify(p)}`,
   )
 })
 
 test('noul 的选项必须叫 true / false', () => {
   const p = problemsOf('## foo\nkind: noul\nask: 问\n- yes — 是\n- no — 否\n')
-  assert.ok(p.some((m) => /true \/ false|true/.test(m)), JSON.stringify(p))
+  assert.ok(p.some((m: string) => /true \/ false|true/.test(m)), JSON.stringify(p))
 })
 
 test('kind: mixed 只给一个问题要报错', () => {
   const p = problemsOf('## foo\nkind: mixed\n### a\nask: 问\n- true — 是\n- false — 否\n')
-  assert.ok(p.some((m) => /mixed 至少要 2 个问题/.test(m)), JSON.stringify(p))
+  assert.ok(p.some((m: string) => /mixed 至少要 2 个问题/.test(m)), JSON.stringify(p))
 })
 
 test('单问题 kind 给了两个问题要报错', () => {
   const md = '## foo\nkind: noul\n### a\nask: 问\n- true — 是\n- false — 否\n### b\nask: 问2\n- true — 是\n- false — 否\n'
   const p = problemsOf(md)
-  assert.ok(p.some((m) => /要有且只有 1 个问题/.test(m)), JSON.stringify(p))
+  assert.ok(p.some((m: string) => /要有且只有 1 个问题/.test(m)), JSON.stringify(p))
 })
 
 test('choice 少于两个选项要报错，但写了 dynamic 就放行', () => {
   const bad = problemsOf('## foo\nkind: choice\nask: 问\n- x — 甲\n')
-  assert.ok(bad.some((m) => /至少要 2 个/.test(m)), JSON.stringify(bad))
+  assert.ok(bad.some((m: string) => /至少要 2 个/.test(m)), JSON.stringify(bad))
 
   const ok = parseDecisionDoc('## foo\nkind: choice\nask: 问\ndynamic: 运行时算\n- x — 甲\n')
   assert.deepEqual(ok.problems, [], '写了 dynamic 就不该再要求选项数量')
@@ -334,20 +335,20 @@ test('choice 少于两个选项要报错，但写了 dynamic 就放行', () => {
 
 test('kind: rule 不该有问题', () => {
   const p = problemsOf('## foo\nkind: rule\nask: 问\n- a — 甲\n- b — 乙\n')
-  assert.ok(p.some((m) => /rule 不该有问题/.test(m)), JSON.stringify(p))
+  assert.ok(p.some((m: string) => /rule 不该有问题/.test(m)), JSON.stringify(p))
 })
 
 test('策略缺箭头要报错', () => {
   const p = problemsOf('## foo\nkind: rule\npolicy:\n  - 这行没有箭头\n')
-  assert.ok(p.some((m) => /缺 '→ 动作'/.test(m)), JSON.stringify(p))
+  assert.ok(p.some((m: string) => /缺 '→ 动作'/.test(m)), JSON.stringify(p))
 })
 
 test('问题 id 和判定 id 重复都要报错', () => {
   const dupQ = problemsOf('## foo\nkind: mixed\n### a\nask: 问\n- true — 是\n- false — 否\n### a\nask: 问2\n- true — 是\n- false — 否\n')
-  assert.ok(dupQ.some((m) => /问题 id 'a' 重复/.test(m)), JSON.stringify(dupQ))
+  assert.ok(dupQ.some((m: string) => /问题 id 'a' 重复/.test(m)), JSON.stringify(dupQ))
 
   const dupB = problemsOf('## foo\nkind: rule\n## foo\nkind: rule\n')
-  assert.ok(dupB.some((m) => /判定 id 'foo' 重复/.test(m)), JSON.stringify(dupB))
+  assert.ok(dupB.some((m: string) => /判定 id 'foo' 重复/.test(m)), JSON.stringify(dupB))
 })
 
 test('报错带行号', () => {
@@ -590,4 +591,47 @@ test('★ 文件里的帧是**有界**的：每一栏都有正数界，每一条
       assert.ok(e.why.trim().length > 0, `${b.id} 的排除项 ${e.field} 没写为什么`)
     }
   }
+})
+
+
+// ═══════════════════════════════════════════════════════════
+// `when:` 是**封闭位置**，不是散文
+//
+// ★★ 这一节把「加一个判定只改文件」这句话的**边界**变成检查。
+//   循环在每个位置的分支是硬编码的：一个动作在那个位置意味着什么，只有那段
+//   代码知道。所以新判定**只有当它的动作是那个位置已在处理的**，才能只改文件。
+//
+//   没有这条检查会怎样：判定会被问到、会进轨迹、策略会命中 —— 而**没有任何东西
+//   按它的动作做事**。那正是 §8.16 记的「`auto_audit` 以前和 `auto` 完全一样」。
+// ═══════════════════════════════════════════════════════════
+
+test('★ 七个块都点名了一个真位置，而且动作都是那个位置处理的', () => {
+  for (const b of doc.blocks) {
+    const pos = b.when.trim().split(/[\s（(]/)[0]!
+    assert.ok(POSITIONS[pos], `${b.id} 的 when: '${pos}' 不是一个位置`)
+    for (const r of b.policy) {
+      assert.ok(
+        POSITIONS[pos]!.actions.includes(r.action) || ANY_POSITION_ACTIONS.includes(r.action),
+        `${b.id} 在 '${pos}' 上产出动作 '${r.action}'，而那个位置不处理它 —— 会被问、会被记，而没有东西照它做`,
+      )
+    }
+  }
+})
+
+test('★★ 越界的动作**真的会响**（不然这条检查只是个装饰）', () => {
+  const md = '## foo\nkind: noul\nwhen: after-tool\nask: 问\n- true — 是\n- false — 否\npolicy:\n  - else → deliver\n'
+  const msgs = problemsOf(md)
+  assert.ok(
+    msgs.some((m: string) => /不处理动作 'deliver'/.test(m)),
+    `after-tool 不处理 deliver，必须报出来。实际：${JSON.stringify(msgs)}`,
+  )
+})
+
+test('★ 位置是封闭的：写一个不存在的位置要报', () => {
+  const md = '## foo\nkind: noul\nwhen: 每次工具执行之后\nask: 问\n- true — 是\n- false — 否\npolicy:\n  - else → stop\n'
+  const msgs = problemsOf(md)
+  assert.ok(
+    msgs.some((m: string) => /不是一个位置/.test(m)),
+    `散文式的 when 必须被拒 —— 它不驱动任何东西。实际：${JSON.stringify(msgs)}`,
+  )
 })

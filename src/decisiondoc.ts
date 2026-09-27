@@ -98,6 +98,8 @@ const KNOWN_ACTIONS: ReadonlySet<string> = new Set(ACTIONS)
 // ★ re-export **不会**把名字带进本文件作用域 —— 自己还要用的名字必须单独 import。
 import {
   KINDS,
+  ANY_POSITION_ACTIONS,
+  POSITIONS,
   type BlockKind,
   type DocBlock,
   type DocFrame,
@@ -394,6 +396,31 @@ function interpretBlock(section: RawSection, problems: DocProblem[]): DocBlock {
       line: section.line,
       message: `'## ${section.heading}' 缺少 kind。每个 ## 段都必须声明 kind —— 这正是三分法要你表态的地方`,
     })
+  }
+
+  // ★★ `when:` 不再是散文 —— 它必须点名一个**封闭位置**，而且块里每条策略的
+  //   动作必须是那个位置**已经在处理的**。见 `POSITIONS` 的说明：这是
+  //   「加一个判定只改文件」那句话的边界，把它从承诺变成解析期检查。
+  const position = when.trim().split(/\s|（|\(/)[0] ?? ''
+  if (position) {
+    const pos = POSITIONS[position]
+    if (!pos) {
+      problems.push({
+        line: section.line,
+        message: `when: '${position}' 不是一个位置（可选：${Object.keys(POSITIONS).join(' / ')}）—— ` +
+          '位置决定这个判定的动作由谁处理；写不出位置，就没有东西会按它的动作做事',
+      })
+    } else {
+      for (const r of policy) {
+        if (pos.actions.includes(r.action) || ANY_POSITION_ACTIONS.includes(r.action)) continue
+        problems.push({
+          line: section.line,
+          message: `'${position}' 这个位置不处理动作 '${r.action}'（它处理：${pos.actions.join(' / ')}` +
+            `${ANY_POSITION_ACTIONS.length ? ' / ' + ANY_POSITION_ACTIONS.join(' / ') : ''}）—— ` +
+            '要加这个动作，得先给那个位置加一个分支；否则这个判定会被问、会被记，而没有东西照它做',
+        })
+      }
+    }
   }
 
   const resolved = interpretQuestions(questions, usedSubheading, problems)

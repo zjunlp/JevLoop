@@ -15,7 +15,7 @@
 ## needs_tool
 
 kind: noul
-when: 每个 step 的开头。判否就直接跳到生成，整个工具循环省掉
+when: step-start —— 每个 step 的开头。判否就直接跳到生成，整个工具循环省掉
 
 ask: The agent still has work to do before it can answer the task — an action the task requires that has not been taken yet
 
@@ -58,7 +58,7 @@ answering with information it does not have yet」，答案就是「不需要工
 ## pick_tool
 
 kind: choice
-when: 判定需要动手之后，每一步都问一次
+when: tool-choice —— 判定需要动手之后，每一步都问一次
 dynamic: toolsFor(ctx) —— 候选每步重建，下面列的是默认全集
 
 ### tool
@@ -97,7 +97,7 @@ policy:
 ## pick_input
 
 kind: choice
-when: 选定的工具需要参数时（`list_dir` 不需要，它没有可挑的东西）
+when: input-choice —— 选定的工具需要参数时（`list_dir` 不需要，它没有可挑的东西）
 dynamic: unreadFiles(ctx) —— 还没读过的文件，每步重建
 
 ### file
@@ -133,7 +133,7 @@ policy:
 ## grade_risk
 
 kind: mixed
-when: 每次真正调用工具之前
+when: before-call —— 每次真正调用工具之前
 
 ### risk
 
@@ -180,7 +180,7 @@ policy:
 ## step_ok
 
 kind: noul
-when: 每次工具执行之后
+when: after-tool —— 每次工具执行之后
 
 ### ok
 
@@ -226,7 +226,7 @@ policy:
 ## is_done
 
 kind: noul
-when: 每次工具成功之后
+when: after-tool —— 每次工具成功之后
 
 ### done
 
@@ -269,7 +269,7 @@ loop 又去读了**任务不需要的** `notes.md`，然后还不肯停。
 ## can_deliver
 
 kind: mixed
-when: 生成之后，回答发出去之前
+when: after-generate —— 生成之后，回答发出去之前
 
 ### deliverable
 
