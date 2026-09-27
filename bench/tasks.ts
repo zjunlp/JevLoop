@@ -207,4 +207,24 @@ export const TASKS: BenchTask[] = [
     artifacts: [{ path: 'summary.ts', must: /totalOf/ }],
     probes: 'gradeRisk 对写操作的分级（唯一能测到它的任务）',
   },
+  {
+    id: 'read-notes',
+    task: 'notes.md 这个文件里写了什么？',
+    files: FIXTURE,
+    allowedTools: ['list_dir'],
+    required: [{ tool: 'read_file', input: 'notes.md' }],
+    answerMust: [/夹具/],
+    /*
+      ★★ 这一条是**同一族里的第 8 个任务，而它比前 7 个晚出现** ——
+      也就是真实世界里的常态：workflow 是为你**当时知道**的那批情况写的。
+
+      它存在的唯一目的是量一件事：**workflow 不会「答错」没见过的情况，
+      它在没见过的情况上根本不存在。** 那条臂会在这里抛
+      （`bench/workflow.ts` 里没有 `read-notes` 的计划），而另外两条照跑。
+
+      所以「冻结夹具上的三方对比」和「同族新任务上的三方对比」是**两张表**，
+      而第二张才是这个比较要回答的问题。
+    */
+    probes: '★ 同族的新任务：workflow 臂跑不起来（没人替它写过），另两条能',
+  },
 ]

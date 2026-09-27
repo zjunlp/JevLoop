@@ -42,6 +42,7 @@ import { RuleJudge } from '../examples/rule-judge.ts'
 import { TASKS, type BenchTask } from './tasks.ts'
 import { answerOk, missing, checkArtifacts, matchesCall } from './oracle.ts'
 import { runReact, REACT_SYSTEM } from './react.ts'
+import { hasWorkflow, runWorkflow, workflowLines } from './workflow.ts'
 import { C, withRetry } from './util.ts'
 import { decisionEndpoint, generationEndpoint, measureFloor, type Floor } from './transport.ts'
 
@@ -51,9 +52,18 @@ const repeat = argv.includes('--repeat') ? Math.max(1, Number(argv[argv.indexOf(
 const useRule = argv.includes('--rule')
 const MAX_STEPS = 8
 
+/**
+ * 三条臂。**只有「分支由谁决定」不同**（§8.15 的先例）：
+ *
+ *     JevLoop   判定模型给 typed 答案，策略是纯代码
+ *     ReAct     生成模型每一步说一次
+ *     Workflow  **人写死的代码** —— 大厂至今在很多地方用的那一个
+ */
+type Shape = 'JevLoop' | 'ReAct' | 'Workflow'
+
 /** 一条路跑一条任务的结果 */
 interface Sample {
-  shape: 'JevLoop' | 'ReAct'
+  shape: Shape
   task: string
   modelCalls: number
   /**
@@ -184,7 +194,7 @@ async function runJev(task: BenchTask): Promise<Sample> {
  *   对比崩掉，前面已经跑出来的样本全部作废 —— 而那几分钟是真的花掉了。
  *   网络失败不是循环形状的差别，把它记成一条「跑不起来」比丢掉整场诚实得多。
  */
-function failedSample(shape: 'JevLoop' | 'ReAct', task: string, err: unknown): Sample {
+function failedSample(shape: Shape, task: string, err: unknown): Sample {
   return {
     shape,
     task,
@@ -284,6 +294,61 @@ async function runJevOnce(task: BenchTask): Promise<Sample> {
   })
 }
 
+/**
+ * 第三条臂：**手写 workflow**（人写死的代码，没有一次模型调用）。
+ *
+ * ★ 它在这批任务上会全对 —— **那不是结果，那是定义**（为它写过的任务当然做得到）。
+ *   报告里必须一起打的两个数才是重点：
+ *     · `modelCalls = 0`（它的强项：确定性、不要钱）
+ *     · **手写行数随任务数线性增长**（它的代价），以及没为它写过的任务
+ *       **根本跑不起来**（`runWorkflow` 会抛，这里是 `failedSample`）
+ */
+async function runWorkflowArm(task: BenchTask): Promise<Sample> {
+  const t0 = performance.now()
+  // ★ 「没为它写过」在**重试之前**就判掉：那不是可重试的失败，退避重试只会
+  //   浪费时间、并往计时表里塞一段不属于这条臂的墙钟
+  if (!hasWorkflow(task.id)) {
+    return failedSample(
+      'Workflow',
+      task.id,
+      new Error(`没有为 '${task.id}' 写过 workflow —— workflow 的覆盖面就是人替它写过的那些任务`),
+    )
+  }
+  try {
+    return await withRetry(`Workflow/${task.id}`, () =>
+      inFixture(task, async (cwd) => {
+        const t1 = performance.now()
+        const r = await runWorkflow(task, cwd)
+        const toolMs = performance.now() - t1
+        const why = [...callsOk(r.calls, task), ...missing(r.answer, task), ...(await checkArtifacts(task, cwd))]
+        return {
+          shape: 'Workflow' as const,
+          task: task.id,
+          // 一个模型都没调 —— 这是它最强的地方，也是它唯一强的地方
+          modelCalls: 0,
+          decisions: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          latencyMs: performance.now() - t0,
+          pureMs: toolMs,
+          toolMs,
+          // 没有模型调用 ⇒ 没有「纯计算」这一栏
+          computeMs: 0,
+          decisionMs: 0,
+          modelMs: 0,
+          modelWallMs: 0,
+          passed: why.length === 0,
+          why,
+        }
+      }),
+    )
+  } catch (err) {
+    // ★ 走到这里通常**不是环境问题**，而是「没为这条任务写过 workflow」——
+    //   那正是这一臂要量的性质，所以 `why` 里那句话要原样带出去
+    return failedSample('Workflow', task.id, err)
+  }
+}
+
 async function runReAct(task: BenchTask): Promise<Sample> {
   try {
     return await withRetry(`ReAct/${task.id}`, () => runReActOnce(task))
@@ -355,8 +420,14 @@ async function main(): Promise<void> {
   console.log(C.bold('\nJevLoop · 两种循环形状'))
   console.log(C.dim(`  判定后端 : ${provider.name}`))
   console.log(C.dim(`  生成后端 : ${generator.name}`))
-  console.log(C.dim(`  任务     : ${tasks.length} 条 × ${repeat} 遍 · maxSteps ${MAX_STEPS}（两条路相同）`))
-  console.log(C.dim('  验收     : 要求的工具调用 + 回答内容 + 产物在盘上（两边同一套判据）'))
+  console.log(C.dim(`  任务     : ${tasks.length} 条 × ${repeat} 遍 · maxSteps ${MAX_STEPS}（三条路相同）`))
+  console.log(C.dim('  验收     : 要求的工具调用 + 回答内容 + 产物在盘上（三条路同一套判据）'))
+  console.log(
+    C.dim(
+      `  Workflow : 手写 ${workflowLines()} 行（${tasks.length} 条任务）` +
+        ` —— **行数随任务数线性长，而没为它写过的任务根本跑不起来**`,
+    ),
+  )
 
   const all: Sample[] = []
   for (const task of tasks) {
@@ -365,6 +436,8 @@ async function main(): Promise<void> {
       all.push(await runJev(task))
       process.stdout.write(C.dim(`\r  跑 ${task.id} (${i + 1}/${repeat})…  ReAct`.padEnd(60)))
       all.push(await runReAct(task))
+      process.stdout.write(C.dim(`\r  跑 ${task.id} (${i + 1}/${repeat})…  Workflow`.padEnd(60)))
+      all.push(await runWorkflowArm(task))
     }
   }
   process.stdout.write('\r'.padEnd(62) + '\r')
@@ -389,7 +462,7 @@ async function main(): Promise<void> {
     ),
   )
   for (const task of tasks) {
-    for (const shape of ['JevLoop', 'ReAct'] as const) {
+    for (const shape of ['JevLoop', 'ReAct', 'Workflow'] as const) {
       const xs = all.filter((s) => s.task === task.id && s.shape === shape)
       if (!xs.length) continue
       console.log(
@@ -434,7 +507,7 @@ async function main(): Promise<void> {
       `  ${pad('形状', 10)}${pad('判定/任务', 10)}${pad('大模型调用/任务', 16)}${pad('纯调用/任务', 14)}${pad('纯计算/任务', 14)}${pad('墙钟/任务', 12)}${pad('输出token/任务', 16)}验收`,
     ),
   )
-  for (const shape of ['JevLoop', 'ReAct'] as const) {
+  for (const shape of ['JevLoop', 'ReAct', 'Workflow'] as const) {
     const xs = all.filter((s) => s.shape === shape)
     if (!xs.length) continue
     const okCount = xs.filter((s) => s.passed).length
