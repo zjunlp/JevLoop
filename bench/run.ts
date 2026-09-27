@@ -65,6 +65,8 @@ const argv = process.argv.slice(2)
 const only = argv.includes('--only') ? argv[argv.indexOf('--only') + 1] : undefined
 const repeat = argv.includes('--repeat') ? Math.max(1, Number(argv[argv.indexOf('--repeat') + 1]) || 1) : 1
 const useRule = argv.includes('--rule')
+/** 把每个判定的原始记录写成 JSON —— 表是给人看的，这个文件是给复算用的 */
+const jsonOut = argv.includes('--json') ? argv[argv.indexOf('--json') + 1] : undefined
 
 // ── 组装后端 ─────────────────────────────────────────────────
 //
@@ -236,10 +238,19 @@ interface NodeStat {
 /**
  * 「贴边」的界线。
  *
- * ★ 0.10 不是拍的：§8.17 实测**只加一个候选**就把同一个帧的选中概率从
- *   1.00 推到 0.71（差 0.29），并让 0.71 落在了 0.6 门限的 0.11 之内 ——
- *   那一次判定翻掉了。**扰动一个候选能移动的量级就是这么大**，所以 margin
- *   在这个量级以内的判定，是一枚还没落地的硬币。
+ * ★ 0.10 的来历：§8.17 实测**只加一个候选**就把同一个帧的选中概率从 1.00 推到
+ *   0.71（移动 0.29）—— 扰动一个候选能移动的量级就是这么大。
+ *
+ * ⚠️ **但它「是硬币」这个说法没有成立，别照字面读。** 2026-09-26 跑的
+ *   `bench/margin.ts` 检验（规则表 7 任务 × 3 遍，246 个已判）：margin < 0.25 的
+ *   **错判率 0%（n=57）**，margin ≥ 0.25 的 **21%（n=189）** —— 方向是**反的**。
+ *
+ *   机制不难理解：**margin 量的是「离某条支路边界多远」，不是「对不对」。**
+ *   一个判定可以**自信地错**（margin 高、答案错），而规则表恰恰就是这样 ——
+ *   它没有不确定性可表达。所以贴边 ≠ 会错，宽 margin ≠ 对。
+ *
+ *   ⇒ 这一栏的用途要说准：它是**控制流的稳定性读数**（这个分支被扰动会不会换边），
+ *     不是失败预测器。真正危险的是「自信地错」，而 margin 抓不到那个。
  */
 const THIN_MARGIN = 0.1
 
@@ -420,7 +431,48 @@ async function main(): Promise<void> {
           `${failed.length ? ` · 没跑起来 ${failed.length}` : ''}）`,
       ),
   )
-  console.log('')
+  // ── 原始记录落盘（`--json <path>`）──────────────────────────
+  //
+  // ★ 为什么要有它：上面那些表是**读过一遍就没了**的。而「margin 能不能预测
+  //   出错」这类问题要拿**每个判定**的 (margin, prob, verdict) 去分桶算 ——
+  //   只打印的产物没法复算，也就没法被别人复核。
+  //
+  // ★ 后端名字必须进文件。这份文件自己的注释说过：「一份不写后端名字的
+  //   命中率没有意义」—— 规则表、本地 Laya、托管 Jev 是三个不同的东西，
+  //   而 margin 的分布正是判定后端给的。
+  if (jsonOut) {
+    const dump = {
+      // 谁跑的：降级链 + 实际服务方（逐判定）+ 生成后端 + 样本量。
+      // 缺一个这个文件就不可比 —— 规则表、本地 Laya、托管 Jev 是三个不同的东西。
+      providerChain: provider.name,
+      generator: generator.name,
+      tasks: tasks.length,
+      repeat,
+      failedRuns: failed.length,
+      judgements: ok.flatMap((r) =>
+        r.judgements.map((j) => ({
+          task: r.task.id,
+          node: j.node,
+          verdict: j.verdict,
+          // ★ 实际是谁答的这一次 —— 「jev→laya→rule-judge」说不出这个
+          provider: j.provider ?? null,
+          model: j.model ?? null,
+          /** 模型给**正确答案**多少概率（要看金标） */
+          prob: j.prob,
+          /** 离门限多远（**不需要金标**）—— 缺席 = 没有可比的带门限规则 */
+          margin: j.margin?.margin ?? null,
+          marginOf: j.margin ? `${j.margin.kind}:${j.margin.id}` : null,
+          threshold: j.margin?.threshold ?? null,
+          value: j.margin?.value ?? null,
+          action: j.action,
+          why: j.why,
+        })),
+      ),
+    }
+    await writeFile(jsonOut, JSON.stringify(dump, null, 2) + '\n', 'utf8')
+    console.log(C.dim(`  原始记录 → ${jsonOut}（${dump.judgements.length} 个判定）`))
+    console.log('')
+  }
 }
 
 await main()

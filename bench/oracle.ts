@@ -99,6 +99,14 @@ export interface Judgement {
    *   所以 `unjudged` 的那些也有 margin —— 而那些恰恰最需要它。
    */
   margin?: MarginReport
+  /**
+   * 这次判定**实际是谁答的**。
+   *
+   * ★ 光有降级链的名字（`jev→laya→rule-judge`）说不出是谁真正服务了这一次 ——
+   *   而 margin 的分布是**判定后端**给的，所以记录必须落到每一次上。
+   */
+  provider?: string
+  model?: string
   /** 一句话说清判据 —— 判错时要能直接看出错在哪 */
   why: string
 }
@@ -176,7 +184,14 @@ export class Oracle {
     if (e.type !== 'decision') return null
     // 帧的账与门限边上的距离都从事件里拿 —— 判据机**不改内核一个字节**，
     // 只是把已经发出来的东西读一遍（模块头那句话），margin 也一样
-    const j: Judgement = { ...this.#judge(e), ...(e.margin ? { margin: e.margin } : {}) }
+    const j: Judgement = {
+      ...this.#judge(e),
+      ...(e.margin ? { margin: e.margin } : {}),
+      // ★ 实际服务方记到**每一次判定**上 —— 降级链的名字说不出是谁答的这一次，
+      //   而 margin 的分布正是判定后端给的
+      provider: e.provider,
+      ...(e.model ? { model: e.model } : {}),
+    }
     // 「判不了」的那几支把 want 设成了实际动作，会自己判成 right ——
     // 在这里翻回 unjudged，**不能让它冒充判对**（模块头第 1 条）
     if (j.why.includes('判不了') || j.why.includes('认不出来') || j.why.includes('没有需要挑输入') || j.why.includes('还没有')) {

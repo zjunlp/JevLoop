@@ -38,7 +38,19 @@ Every per-node number in `bench/` inherits this. **A judgement next to its thres
 
 **Where:** `src/policy.ts` (threshold metadata + `closestMargin`), `src/frame.ts`, `src/decisions.ts`, `bench/oracle.ts`, `bench/run.ts`. **Size:** medium.
 
-**First reading, offline rule judge:** `pickTool` came back 14/14 correct and **14/14 within `THIN_MARGIN`** — every single one of them sitting 0.10 from the line, while every other node sat at 0.20–0.45. That is §2's claim reproduced in the report itself: the accuracy column said "solid", the margin column said "one nudge from flipping". (The rule table returns fixed probabilities, so those 14 identical margins are a property of the fixture, not a distribution — what it demonstrates is that the column catches the node §2 was written about.)
+**First reading, offline rule judge:** `pickTool` came back 14/14 correct and **14/14 within `THIN_MARGIN`** — every single one of them sitting 0.10 from the line, while every other node sat at 0.20–0.45. (The rule table returns fixed probabilities, so those 14 identical margins are a property of the fixture, not a distribution — what it demonstrates is that the column catches the node §2 was written about.)
+
+**⚠️ Measured 2026-09-26 — the sentence above the checkboxes does not survive as written.** `bench/margin.ts` over a rule-judge run (7 tasks × 3 repeats, 246 judged decisions): margin < 0.25 → **0 % wrong (n=57)**; margin ≥ 0.25 → **21 % wrong (n=189)**. The direction is **reversed**.
+
+The mechanism is not mysterious: **margin measures distance from a branch boundary, not correctness.** A judgement can be *confidently wrong* — high margin, wrong answer — and a rule table is exactly that, having no uncertainty to express. So thin ≠ wrong, and wide ≠ right. "A judgement next to its threshold is a coin that has not landed yet" was a **plausible story we had not tested**, and the test says no.
+
+What margin *is*, then, and what may be claimed:
+
+- **a stability reading on the control flow** — "would this branch change if the input shifted?" A hand-written workflow cannot ask that question at all;
+- **a per-node backend discriminator** — same tasks, same thresholds: `pickTool` median margin **0.10** under the rule table versus **0.40** under Jev; `pickInput` **0.20** versus **0.50**;
+- **labelless** — it needs answers and policy, not ground truth, so it can run on live traffic.
+
+What it is **not**: a failure predictor. Establishing one would need a bench hard enough to produce errors in the *low* buckets; this fixture cannot (the Jev run scored 261/261). Anyone writing this up must not claim the predictor version — our own experiment says the opposite.
 
 ## 3 · Decision frames have no cache policy, so the cost argument is missing a leg
 

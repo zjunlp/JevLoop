@@ -88,6 +88,14 @@ export type AgentEvent =
       reason: string
       latencyMs: number
       provider: string
+      /**
+       * 实际服务的模型名。
+       *
+       * ★ `DecisionResult.model` 一直存在，而这个事件**没带上它** —— 于是轨迹上
+       *   看得见「谁答的」（provider）却看不见「哪个模型答的」，而换模型正是
+       *   最常做的一次改动。声明了却没有消费方，等于没声明（§8.16）。
+       */
+      model?: string
       degraded: boolean
       escalate: boolean
       /**
@@ -407,6 +415,7 @@ export function decisionEvent(d: DecisionResult<unknown>): AgentEvent {
     reason: d.reason,
     latencyMs: d.latencyMs,
     provider: d.provider,
+    ...(d.model ? { model: d.model } : {}),
     degraded: d.degraded,
     escalate: d.escalate,
     // `degraded` 和它的理由必须**一起**到 —— 分开送的话，读的人拿到一个
