@@ -18,16 +18,20 @@ npm install          # only for the TypeScript compiler; the tests and the demo 
 
 Nothing else: no API key and no model download. The test suite and the demo run entirely offline, which is also how CI runs them.
 
-## The four commands that have to pass
+## The six commands that have to pass
 
 CI runs these on every push and pull request, plus two more steps (below). Run them yourself first — a red CI on your first PR is a bad way to meet us.
 
 ```bash
-npm run check        # style, layering direction, file focus, CSS scope
+npm run check          # style, layering direction, file focus, CSS scope
 npm run typecheck
-npm test             # the whole suite, offline
-npm run demo         # the loop must run to completion, offline
+npm test               # the whole suite, offline — includes the adapter and report gates
+npm run conformance    # DECISION.md: four layers, 15 mutations, 4 negative controls
+npm run external-host  # a host that is not JevLoop must still consume the contract
+npm run demo           # the loop must run to completion, offline
 ```
+
+Two of those are worth a sentence, because they are the ones that check **declarations** rather than code. `npm run conformance` takes the real `DECISION.md` and proves that each way of silently breaking it is caught by some layer — a dropped exclusion, a gate predicate that no longer compiles, an action no position dispatches. `npm run external-host` runs a host that shares no state, no tools and no loop with this one, which is the only way the claim "the contract is portable" is tested rather than asserted.
 
 CI also checks the two things that are easy to get wrong and impossible to notice:
 
@@ -57,9 +61,9 @@ None of this is about skill level. A two-line fix with a failing test in front o
 
 ## Where the work actually is
 
-[`TODO.md`](TODO.md) is the list. It is ordered by what blocks the project's central claim rather than by difficulty, and every entry says why it matters and where to start — the tool surface, a cache policy for decision frames, and running long are the three that carry weight; the rest is hygiene.
+[`TODO.md`](TODO.md) is the list. It is ordered by what blocks the project's central claim rather than by difficulty, and every entry says why it matters and where to start — the tool surface, a cache policy for decision frames, running long, and the contract having no second implementer are the four that carry weight; the rest is hygiene.
 
-Whatever you take on needs the same three things: register a new `src/*.ts` in `scripts/check.ts`'s `LAYER` table in the same change, keep the module JSDoc honest about why the file cannot be split further, and run the four commands.
+Whatever you take on needs the same three things: register a new `src/*.ts` in `scripts/check.ts`'s `LAYER` table in the same change, keep the module JSDoc honest about why the file cannot be split further, and run the six commands.
 
 If you want to take one on, open an issue saying so and we will scope it with you before you write code. That is cheaper for both of us than a large PR that has to be reshaped.
 

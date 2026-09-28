@@ -27,6 +27,18 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+      # `npm test` 里已经有 `tests/conformance.test.ts`（它跑那 15 个突变、4 个阴性
+      # 对照，并断言锚点恰好命中一次），所以这一条**不是**唯一一道防线。
+      # 单独跑一次的另一个理由：给人看的那张表在 CI 日志里能直接读，
+      # 而测试失败信息里只有断言。
+      - run: npm run conformance
+
+      # ★ README 让人跑的第一条适配命令。加这一步之前，**没有任何东西跑过它**：
+      #   既不在 CI 里，也没有测试调它 —— 它坏掉不会有任何人知道，直到有人照着
+      #   README 敲下那一行。正是 §8.16 记的「声明了却没有消费方」。
+      #   现在它同时被 `tests/external-host.test.ts` 和这一步覆盖。
+      - run: npm run external-host
+
       # 为什么需要这一步：`package.json` 的 `exports` 指向 `dist/`，
       # 而上面每一步（check / typecheck / test，以及下面的 demo）走的都是 `src/`。
       # 也就是说 —— **使用者唯一会拿到的那一面，恰好是仓库里唯一没人验证的一面。**
@@ -35,7 +47,11 @@ jobs:
       # 而当时的 check / typecheck / test / demo **全部照常全绿**。
       #
       # 比的是**运行时导出面**而不是文件名，所以 `src/` 将来拆成目录也不会误报。
-      - name: dist/ 与 src/ 的导出面必须一致
+      #
+      # ★ **每一个入口都要比**。加 `jevloop/contract` 时如果只比包根，这个新入口
+      #   就会原样重演上面那段理由 —— 使用者会拿到的第二个面没人验证。
+      #   少列一个入口 = 少验证一个面，所以入口清单写在这里，加一个就要加一行。
+      - name: dist/ 与 src/ 的导出面必须一致（每个入口）
         run: |
           npm run build
           node --input-type=module -e '
@@ -43,17 +59,26 @@ jobs:
             try { return Object.keys(await import(p)).sort() }
             catch (e) { console.error(`  无法加载 ${p}：${e.message}`); process.exit(1) }
           }
-          const a = await load("./dist/index.js")
-          const b = await load("./src/index.ts")
-          const onlyA = a.filter((x) => !b.includes(x))
-          const onlyB = b.filter((x) => !a.includes(x))
-          if (onlyA.length || onlyB.length) {
-            console.error("dist 与 src 的导出面不一致 —— 构建产物已过期，或有模块没被编译进去")
-            if (onlyA.length) console.error("  仅 dist 有:", onlyA.join(", "))
-            if (onlyB.length) console.error("  仅 src  有:", onlyB.join(", "))
-            process.exit(1)
+          const ENTRIES = [
+            ["./dist/index.js", "./src/index.ts"],
+            ["./dist/contract.js", "./src/contract.ts"],
+          ]
+          let bad = false
+          for (const [d, s] of ENTRIES) {
+            const a = await load(d)
+            const b = await load(s)
+            const onlyA = a.filter((x) => !b.includes(x))
+            const onlyB = b.filter((x) => !a.includes(x))
+            if (onlyA.length || onlyB.length) {
+              console.error(`  ${d} 与 ${s} 的导出面不一致 —— 构建产物已过期，或有模块没被编译进去`)
+              if (onlyA.length) console.error("    仅 dist 有:", onlyA.join(", "))
+              if (onlyB.length) console.error("    仅 src  有:", onlyB.join(", "))
+              bad = true
+              continue
+            }
+            console.log(`  ${s} 与 ${d} 一致（${a.length} 个运行时导出）`)
           }
-          console.log(`  dist 与 src 导出面一致（${a.length} 个运行时导出）`)
+          if (bad) process.exit(1)
           '
 
       - name: 离线冒烟（loop 能跑完）

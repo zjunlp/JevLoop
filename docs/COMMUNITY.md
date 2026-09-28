@@ -25,7 +25,7 @@ The bar this list is trying to meet: someone who has never talked to us clones t
 
 Candidates, all of them things the repo has already decided it wants:
 
-- **`web/app.js` / `web/app.css`** — the front-end half of the 待拆 queue (§12). The most independent piece of work in the repo.
+- **`web/app.js` / `web/app.css`** — the front-end half of the 待拆 queue (TODO §13). The most independent piece of work in the repo.
 - **`--offline` for the demo** — see item 2.
 - **The remaining Chinese in failure paths** — see item 4. This is the ideal `good first issue`: mechanical, verifiable, and it requires no architectural decisions.
 

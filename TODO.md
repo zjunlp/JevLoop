@@ -152,7 +152,27 @@ No deployment shape. Sessions are local files, so two processes cannot share the
 
 ---
 
-## 12 · Internal hygiene
+## 12 · The contract is portable, and nobody else has run it
+
+**Why this blocks the claim.** `DECISION.md` now has the pieces a second runtime would need: a declared schema version, positions and dynamic providers split at parse time, frames with bounds and exclusions in the file, a `jevloop/contract` entry that does not load the reference runtime, and a capability check that refuses an adapter with a missing projection or an unhandled action. `examples/external-host.ts` is a host that is not JevLoop, with its own graph, its own state and its own projections.
+
+What is missing is the only thing that would turn that into more than a claim: **a second implementer.** Everything above is verified by *our* tests against *our* fixtures. Until someone adapts a runtime we did not write, "portable" means "we removed the parts that made it non-portable in our code" — which is a real result, but a smaller one.
+
+The pieces a second implementer would hit first, in the order we expect them to bite:
+
+- [ ] **Action semantics.** `call` / `finish` / `deliver` / `escalate` have no written definition of whether they terminate, retry or require evidence. Each host would infer it from our loop, which is exactly the thing it is not supposed to need.
+- [ ] **Projection capability declarations.** A host must register `earlierMaybe`, `toolOrEmpty` and thirteen more; the only description of what each one means is our implementation. Write down what each projection reads and returns, or let the file declare it.
+- [ ] **Dynamic provider inputs.** `dynamic: toolsFor(ctx) → candidates` says the provider reads the context; it does not say *which state cells* it reads, so a host cannot check the declaration against its own state.
+- [ ] **Evidence and replay schema.** `frameDigest` and `requestDigest` are recorded, but there is no portable format for replaying one decision inside another runtime.
+- [ ] **One real adopter.** An issue or a partial PR from a host we did not write — three nodes is enough — is worth more here than any further extension of the format.
+
+**Where:** `src/decision-syntax.ts`, `src/adapter.ts`, `src/contract.ts`, `docs/DECISION-CONTRACT.md`. **Size:** medium each; the last one is not ours to do.
+
+**⚠️ Do not extend the DSL to look more standard.** Every unchecked item above is a declaration a host cannot yet act on, so adding it adds a field and no capability. The order is: get an adopter, find out which of these they actually hit, publish that one. `docs/RESEARCH-AND-STANDARD-DIRECTION-2026-09.md` §6 says the same thing from the other direction.
+
+---
+
+## 13 · Internal hygiene
 
 None of this makes the project worse. All of it makes the next change slower.
 
@@ -166,6 +186,7 @@ None of this makes the project worse. All of it makes the next change slower.
 
 - **How a judgement leaves the generative model.** `DECISION.md` compiles to typed questions plus a policy; `FrameSpec` declares what each judgement sees.
 - **What each judgement is allowed to look at.** Declared per node as a `FrameSpec` in `src/decisions.ts`, compiled by `src/frame.ts`, and every field of `AgentCtx` must be either read by some field or listed in `excluded` **with a reason** — `frameSpecViolations()` fails the build otherwise. Frames carry a digest, and `truncated` / `unfilled` / `absent` are reported rather than silently dropped. *(Landed 2026-09-26. Before that this line was aspirational: there was no `FrameSpec` in `src/` at all — the declarations only existed in the frozen Python arm.)*
+- **Where a judgement is declared, and who may read it.** The position, the purpose, the schema version, the questions, the policy, the frame fields with bounds, the exclusions with reasons, and any dynamic provider with its output shape are all in `DECISION.md`, parsed and checked before the loop starts. Other runtimes consume it through `jevloop/contract`, which does not load this loop; JevLoop is the reference adapter, not the only intended consumer. *(Landed 2026-09-27/28. `npm run conformance` proves it in four layers — parse / policy / frame / schema — with 15 mutations and 4 negative controls, and `npm run adapter-report` re-derives one host's capabilities from its code instead of trusting its JSON.)*
 - **What each judgement and each generation cost.** Counted separately, per task. Very few harnesses publish this at all, and none we know of split it this way.
 - **How often each judgement is right.** `bench/` grades the seven nodes independently instead of reporting one accuracy number.
 
@@ -173,13 +194,15 @@ If you think one of these is wrong, that is a bug report and we want it — open
 
 ## Before you open a PR
 
-Four commands, all of them, on your machine:
+Six commands, all of them, on your machine — the same six CI runs:
 
 ```bash
-npm run check        # style, layering direction, file focus, CSS scope
+npm run check          # style, layering direction, file focus, CSS scope
 npm run typecheck
-npm test             # the whole suite, offline
-npm run demo         # the loop must run to completion, offline
+npm test               # the whole suite, offline — includes the adapter and report gates
+npm run conformance    # DECISION.md: four layers, 15 mutations, 4 negative controls
+npm run external-host  # a host that is not JevLoop must still consume the contract
+npm run demo           # the loop must run to completion, offline
 ```
 
 A two-line fix with a failing test in front of it is a better PR than a large feature without one. We cannot tell an AI-assisted change from any other and we do not care which it is — only whether it runs.
