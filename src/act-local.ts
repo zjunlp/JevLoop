@@ -49,6 +49,8 @@ export const LOCAL_TOOLS = {
     name: 'list_dir',
     description: '列出工作目录里的文件（不含子目录内容）',
     baseRisk: 0,
+    // 只读 ⇒ 迟到的结果丢掉就行，超时可以放心声明（见 Tool.timeoutMs）
+    timeoutMs: 5000,
     async run(_input: string, cwd: string): Promise<string> {
       const entries = await readdir(cwd, { withFileTypes: true })
       const out = entries
@@ -76,6 +78,8 @@ export const LOCAL_TOOLS = {
     name: 'read_file',
     description: '读取一个文件的内容。输入是相对工作目录的路径',
     baseRisk: 0,
+    // 只读 ⇒ 同上。而**不**声明 maxInputChars：它只收一个路径
+    timeoutMs: 5000,
     async run(input: string, cwd: string): Promise<string> {
       const path = safePath(cwd, input.trim())
       const info = await stat(path)
@@ -89,6 +93,18 @@ export const LOCAL_TOOLS = {
     name: 'write_file',
     description: '写入或覆盖一个文件。输入格式：`路径\n内容`（第一行是路径，其余是内容）',
     baseRisk: 1,
+    /*
+      「这个工具被允许写多少」的落点：输入就是 `路径\n内容`，所以给输入封顶
+      等于给能写下去的字节封顶，而且 `callTool` 在 `run()` **之前**就查 ——
+      超限时文件一个字节都不会被改。
+
+      64KB：远高于任何一次该写的内容（生成预算本身在 KB 级），
+      挡的是「生成跑飞了，一次写下去 50MB」。
+
+      ⚠️ 它**不**声明 timeoutMs，这是有意的：写操作取消不掉，报超时而其实
+         写成功了，会让 loop 基于一件没发生的事往下走（见 Tool.timeoutMs）。
+    */
+    maxInputChars: 64_000,
     async run(input: string, cwd: string): Promise<string> {
       const nl = input.indexOf('\n')
       if (nl < 0) throw new Error('write_file 需要两行输入：第一行路径，其余内容')
@@ -121,6 +137,9 @@ export const LOCAL_TOOLS = {
     // 3 = destructive：`DECISION.md` 风险阶梯的最高档，于是
     // `score:risk >= 2 → ask_human` 那道硬闸门第一次有真东西可指
     baseRisk: 3,
+    // 不声明 timeoutMs：删除更不可能被取消，报「超时失败」而文件其实删掉了
+    // 是最坏的一种谎（见 Tool.timeoutMs 的说明）
+    maxInputChars: 4096,
     async run(input: string, cwd: string): Promise<string> {
       const path = safePath(cwd, input.trim())
       const info = await stat(path)

@@ -32,6 +32,32 @@ export interface Tool {
   /** 静态风险基线 0..3。判定节点会参考它，但最终判定由模型做 */
   baseRisk: number
   run(input: string, cwd: string): Promise<string>
+  /**
+   * 这一调允许的最大**输入字符数**。超了 `callTool` **在执行之前**就拒绝。
+   *
+   * ★ 这才是「一个工具被允许写多少」的落点：`write_file` 的输入就是
+   *   `路径\n内容`，所以给输入封顶等于给它能写下去的字节封顶 —— 而且检查
+   *   发生在 `run()` 之前，也就是**在产生副作用之前**。等跑完再看结果就晚了：
+   *   那时文件已经写在盘上了。
+   *
+   * 不声明 = 这一调不设输入上限（输出仍然受 `callTool` 的 `maxOutputChars` 约束）。
+   */
+  maxInputChars?: number
+  /**
+   * 这一调的超时（毫秒）。**只给「结果来晚了也无害」的工具声明。**
+   *
+   * ★★ 为什么不是一个全局超时，而是一个要逐个表态的字段：
+   *   JS 里**取消不掉**一个已经在跑的 promise（`node:fs/promises` 没有
+   *   cancel）。所以超时的真实语义是「**我不再等了**」，不是「它没发生」。
+   *
+   *   对 `read_file` 两者没区别 —— 迟到的内容丢掉就行。
+   *   对 `write_file` / `delete_file` 差别是**致命的**：报「超时失败」而文件
+   *   其实写成功了，等于让 loop 基于一件没发生的事继续往下走。所以那类工具
+   *   **不声明**它，`callTool` 也就不会去 race 一个会留下副作用的调用。
+   *
+   * 一句话：超时是**观测**上的放弃，不是**执行**上的取消。
+   */
+  timeoutMs?: number
 }
 
 /**
@@ -75,21 +101,76 @@ export function toolNames<T extends ToolRegistry>(tools: T): ToolNameOf<T>[] {
 }
 
 /**
+ * 一次工具调用返回的**输出**上限（字符）。
+ *
+ * ★ 做成**默认就开**的契约级上限，而不是靠每个工具自觉：`read_file` 自己
+ *   截到 4000，但那是它的礼貌，不是保证 —— 换一个提供者（未来的 shell、
+ *   远程 FS）就没人保证了。上限住在这里，谁都绕不过去。
+ *
+ * 8000 是**宽于**任何现有工具的自限（`read_file` 约 4020），所以对今天的
+ * 行为是零改动；它挡的是以后接一个吐回 10MB 的提供者。
+ */
+export const DEFAULT_MAX_OUTPUT_CHARS = 8000
+
+/** 一次工具调用的可调上限 */
+export interface ToolLimits {
+  /** 输出超过它就**截断并标注**（不静默截）。默认 `DEFAULT_MAX_OUTPUT_CHARS` */
+  maxOutputChars?: number
+}
+
+/**
  * 执行一次工具调用。
  *
  * 判定节点已经决定「放行 / 需要授权」了，这里只负责执行 ——
  * 但**执行结果永远要回传**，因为判定「成功了吗」需要看到它。
+ *
+ * ★ 三道资源限制都在这里，因为它们属于**契约**而不是某个实现：换一个
+ *   工具后端（沙箱、远程 FS、测试桩）时，这三条必须还在（同 `isToolName`）。
+ *
+ *   ① **输入上限**（工具自己声明的 `maxInputChars`）—— 在 `run()` **之前**查，
+ *      所以超限不会产生任何副作用；
+ *   ② **超时**（工具自己声明的 `timeoutMs`）—— 只对声明了它的工具生效，
+ *      因为 JS 取消不掉已经在跑的调用，对会留下副作用的工具报超时是撒谎；
+ *   ③ **输出上限** —— 截断**并标注**被截了多少，不静默缩水。
  */
 export async function callTool<T extends ToolRegistry>(
   tools: T,
   name: ToolNameOf<T>,
   input: string,
   cwd: string,
+  limits: ToolLimits = {},
 ): Promise<string> {
   const tool = tools[name]
+
+  // ① 输入上限 —— **在产生副作用之前**
+  const maxIn = tool.maxInputChars
+  if (maxIn !== undefined && input.length > maxIn) {
+    return `错误：输入 ${input.length} 字符超过 ${tool.name} 的上限 ${maxIn} —— 这一调**没有执行**`
+  }
+
+  const maxOut = limits.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS
+  const finish = (text: string): string =>
+    text.length > maxOut
+      ? text.slice(0, maxOut) + `…[+${text.length - maxOut} chars 被工具层截断]`
+      : text
+
   try {
-    return await tool.run(input, cwd)
+    // ② 超时 —— 只对**声明了**的工具 race，见 `Tool.timeoutMs` 的说明
+    const raw =
+      tool.timeoutMs === undefined
+        ? await tool.run(input, cwd)
+        : await Promise.race([
+            tool.run(input, cwd),
+            new Promise<string>((resolve) =>
+              setTimeout(
+                () => resolve(`错误：${tool.name} 超过 ${tool.timeoutMs}ms 没有返回 —— 已放弃等待（它可能仍在后台进行）`),
+                tool.timeoutMs,
+              ),
+            ),
+          ])
+    // ③ 输出上限
+    return finish(raw)
   } catch (err) {
-    return `错误：${(err as Error).message}`
+    return finish(`错误：${(err as Error).message}`)
   }
 }

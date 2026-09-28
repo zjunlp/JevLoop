@@ -130,8 +130,10 @@ These are not about the loop. They are about handing this loop to someone who is
 There is no authentication — `src/server.ts` says so itself, in a warning it prints. Sandboxing covers path escape and nothing else. No ceiling on CPU, memory, disk or wall clock. One process, local files, one tenant.
 
 - [x] Authentication, or an explicit written statement that this is loopback-only and will stay that way. *(2026-09-28. [`SECURITY.md`](SECURITY.md) is that statement: loopback-only, no authentication, and it will stay that way — "put it behind something that authenticates" rather than adding a password prompt here. The same file lists, as a table, what is **not** provided, so a partial mitigation cannot be read as a guarantee.)*
-- [ ] Resource limits at the tool layer: time, output size, and what a tool is allowed to write.
+- [x] Resource limits at the tool layer: time, output size, and what a tool is allowed to write. *(2026-09-28. All three live in `src/act.ts`, so a different tool backend cannot drop them. **Input ceiling** declared per tool — `write_file` 64 KB, `delete_file` 4 KB — and checked **before** `run()`, so an oversized write leaves the file untouched; that is where "what a tool may write" is bounded. **Output ceiling** 8000 chars for every tool, truncated **and labelled** with how much was dropped, because each tool's own self-limit is a courtesy, not a guarantee. **Timeout** 5 s, declared only by the read-only tools.)*
+- [x] **And the honest half: a timeout is not a cancellation.** JavaScript cannot cancel a promise in flight, so the timeout means "I stopped waiting". That is harmless for `read_file` and *would be a lie* for `write_file` / `delete_file` — reporting a timeout for a write that actually succeeded would let the loop continue on the basis of something that did not happen. So those two deliberately do not declare one, and `tests/act-limits.test.ts` pins that as a forced choice rather than a comment.
 - [ ] A container or namespace — or a documented decision not to have one.
+- [ ] **Still open after these:** nothing bounds total disk written across a run, and nothing bounds CPU or memory. The per-call ceilings stop one runaway call; they do not stop a hundred legal ones.
 
 ## 9 · The cost boundary
 

@@ -35,6 +35,7 @@ a ceiling on CPU, memory or disk       no
 a ceiling on wall clock or spend       per run only, and opt-in: maxWallMs /
                                        maxModelCalls / maxTokens on runAgent,
                                        which halt the loop between steps
+per-call tool limits                   yes — enforced in the contract, see below
 a container, namespace or VM           no
 path-escape sandboxing                 yes — and that is all it is
 tool-output trust boundary             partial — string channels are marked
@@ -48,6 +49,27 @@ a threshold. String-valued channels carry an explicit marker now. That is a
 mitigation, not a proof, and the measurement that would say how much it helps has
 not been run.
 
+### Per-call tool limits
+
+Three limits live in `src/act.ts`, not in a provider — so a different tool backend
+cannot drop them:
+
+| Limit | Value | When it applies |
+|---|---|---|
+| Input ceiling | declared per tool (`write_file` 64 KB, `delete_file` 4 KB) | checked **before** `run()`, so an oversized call has no side effect at all |
+| Timeout | declared per tool, **read-only tools only** (5 s) | the call is abandoned, not cancelled |
+| Output ceiling | 8000 chars, every tool | truncated **and labelled** with how much was dropped |
+
+Two honest caveats:
+
+- **A timeout is giving up on observing, not on executing.** JavaScript cannot
+  cancel a promise already in flight, so a timed-out call may still be running.
+  That is why `write_file` and `delete_file` deliberately do **not** declare one:
+  reporting "timed out" for a write that actually succeeded would let the loop
+  continue on the basis of something that did not happen.
+- **The output ceiling bounds what comes back, not what a tool did.** It stops a
+  provider from flooding the context; it does not bound disk or memory.
+
 ## The tools
 
 The loop can only call tools in `src/act-local.ts`'s registry, and the name the
@@ -58,7 +80,7 @@ can touch is bounded by the working directory:
 |---|---:|---|
 | `list_dir` | 0 | lists the working directory |
 | `read_file` | 0 | reads a file |
-| `write_file` | 1 | writes or overwrites a file |
+| `write_file` | 1 | writes or overwrites a file, up to 64 KB of input |
 | `delete_file` | 3 | deletes a file or an **empty** directory; never recurses |
 | `done` | 0 | no-op |
 
