@@ -21,7 +21,8 @@
     "adapter-report": "node --experimental-strip-types scripts/adapter-report.ts",
     "bench": "node --experimental-strip-types bench/run.ts",
     "compare": "node --experimental-strip-types bench/compare.ts",
-    "latency": "node --experimental-strip-types bench/latency.ts"
+    "latency": "node --experimental-strip-types bench/latency.ts",
+    "replay": "node --experimental-strip-types scripts/replay.ts"
   },
   "keywords": [
     "agent",

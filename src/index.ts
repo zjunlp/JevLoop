@@ -67,6 +67,17 @@ export { decisionEvent, fanOut } from './events.ts'
 export type { AgentEvent, AgentObserver } from './events.ts'
 export { DEFAULT_MAX_OUTPUT_CHARS, callTool, toolNames, isToolName } from './act.ts'
 export type { ToolLimits } from './act.ts'
+/**
+ * 决策记录与重放：把一条落盘的判定记录拿走，在别处验证它自不自洽。
+ *
+ * ★ 它验证**记录完整性**与**请求同一性**，不验证「帧从原始 ctx 编得对不对」，
+ *   也不验证「判定对不对」—— 后者要外部 oracle。`REPLAY_NOTES` 逐条写明了。
+ */
+export { REPLAY_SCHEMA, REPLAY_NOTES, recordOf } from './replay-schema.ts'
+export type { ReplayRecord } from './replay-schema.ts'
+/** 一条记录能不能自洽：四项检查，四档结论（`verified` / `partial` / `unverifiable` / `mismatch`） */
+export { verifyRecord } from './replay-verify.ts'
+export type { ReplayCheck, ReplayStatus, ReplayVerdict } from './replay-verify.ts'
 export { PROJECTIONS, PROJECTION_NAMES, isProjectionName } from './frame-projections.ts'
 export type { ProjectionName, ProjectionReturns, ProjectionSpec } from './frame-projections.ts'
 export { ACTION_SEMANTICS } from './action-semantics.ts'

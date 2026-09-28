@@ -295,6 +295,10 @@ const LAYER: Record<string, number> = {
   // 而消费方跨两层 —— `frame.ts`(L3) 编完帧要算、`decide.ts`(L2) 发请求要算。
   // §11 不许 L2 import L3，所以共用的东西下沉（同 `http-error.ts` 的先例）。
   'frame-digest': 0,
+  // 决策记录与重放：只 import frame-digest（L0）的两种指纹，零 IO
+  'replay-schema': 0,
+  // 重放的检查：只 import frame-digest（L0）与 replay-schema（L0）
+  'replay-verify': 0,
   // `frame-merge` 同它：`mergeConflicts` 跨 L2/L3 共用（决定合并是否合法，
   // L2 的 `decide.ts` 必须查得了），而它对领域一无所知 ——
   // 只收「看了什么 / 故意不看什么」，出「能不能合」。零 import、纯函数。

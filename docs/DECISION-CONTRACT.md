@@ -233,7 +233,77 @@ a real state cell, that every declared `returns` matches what the implementation
 actually returns, that no projection is declared without being used, and that the
 external host fixture's capability list matches the declaration exactly.
 
-## 5. Adapter conformance checklist
+## 5. Decision records and replay
+
+Every decision a host makes should be recordable in a form that **still makes sense
+somewhere else**. JevLoop writes one `decision` event per node into the session log;
+the portable part of it is the record, format `decision-record/v1`:
+
+| field | why replay needs it |
+|---|---|
+| `schema` | an unrecognised version must be refused, not guessed at |
+| `node` | goes into the frame digest — the same body from two nodes is not the same frame |
+| `state` | the frame that was actually sent |
+| `sentFrameDigest` | the digest of **the frame that was sent** |
+| `batchIds` | which nodes shared the forward pass; length > 1 means merged |
+| `sentQuestions` | the question set that was sent — for a merged pass, the union |
+| `requestDigest` | `sentFrameDigest` + `sentQuestions` |
+| `questions` | what *this* node was asked (equals `sentQuestions` when solo) |
+| `answers`, `action`, `reason`, `provider`, `model` | not verified, but they are how you explain why two runs differed |
+
+### Two digests, two questions, and why the merged case needs its own fields
+
+`frameDigest` answers *what did it see*; `requestDigest` answers *what was it asked*.
+A `choice`'s candidates are part of the request but **not** of the frame, so a changed
+candidate set moves only the second — a distinction this project got wrong once
+(§8.17 in `TODO.md`).
+
+When two nodes share one forward pass (`needsTool + pickTool`, every step), the event
+carries something subtly different from either node's own view:
+
+```text
+state             the MERGED frame — identical in both nodes' events
+frame.digest      that node's OWN frame digest
+sentFrameDigest   the digest of the merged frame — equal to neither
+sentQuestions     the merged question set
+questions         that node's own questions
+```
+
+Recording the digest **inputs** — `sentFrameDigest` and `sentQuestions` — is what makes
+a merged decision replayable at all. A verifier given only `requestDigest` cannot
+recompute it, and one that assumes `frameDigest(node, state)` holds for merged records
+reports a false failure on every step.
+
+### What a verifier checks, and what it cannot
+
+`verifyRecord()` runs four checks and returns `verified`, `partial`, `unverifiable` or
+`mismatch` — four outcomes rather than two, because *"cannot check"* and *"checked and
+passed"* are different answers:
+
+```text
+frame-solo        solo only:  frameDigest(node, state) === frame.digest
+sent-frame        both:       the frame that was sent re-derives from the record
+questions-solo    solo only:  questions === sentQuestions
+request           both:       requestDigest(sentFrameDigest, sentQuestions) === requestDigest
+```
+
+What it does **not** do, and this is part of the format rather than a gap to be filled:
+
+- **It does not verify the frame was correctly derived from the original state.** The
+  raw context is deliberately not recorded — only the bounded frame is. Checking that
+  would need the original `AgentCtx` plus the contract version in force.
+- **It does not verify the judgement was right.** That needs an external oracle: test
+  output, file state, exit codes.
+- **It does not compare answers.** Re-asking the same recorded request can legitimately
+  yield a different answer, especially for decisions sitting on their threshold. That
+  is a model-reproducibility question, and a separate one.
+
+`npm run replay <session.jsonl>` applies this to a real session log, prints each
+verdict, and states those three limits as part of its output — reading "replayable" as
+"reproducible" or "verified correct" is the easiest mistake to make here, so the command
+says otherwise every time it runs.
+
+## 6. Adapter conformance checklist
 
 An adapter is conforming only if it can demonstrate all of the following:
 
@@ -257,7 +327,7 @@ The test does not need a language model. A deterministic mock decision provider
 is sufficient; the purpose is to prove that the host consumes the contract and
 executes its actions.
 
-## 6. Extending beyond the reference loop
+## 7. Extending beyond the reference loop
 
 The reference JevLoop loop currently has seven named decision blocks and six
 closed positions. That is a property of the reference host, not a limit that a
@@ -367,7 +437,7 @@ The adapter must either implement a namespaced extension or reject it with a
 source-located error. It must never reinterpret an unknown extension as a
 portable action.
 
-## 7. Compatibility boundary
+## 8. Compatibility boundary
 
 The current JevLoop document contains some reference-host details:
 
@@ -381,18 +451,18 @@ These are intentional adapter seams, not yet an industry-wide ABI. A future
 schema version should still publish:
 
 ```text
-evidence schema
-event and replay schema
+(nothing on the checklist — what remains is not a format feature)
 ```
 
-Three items have left this list. **Action semantics** (§3) are declared, exported
+Four items have left this list. **Action semantics** (§3) are declared, exported
 through `jevloop/contract`, and checked against the runtime, so a host no longer
 has to read JevLoop's loop to learn what `stop` or `deliver` does. **Projection
 declarations** (§4) now say what each of the fourteen names reads, returns, and
 promises on a missing value, with one source of truth for the names. **Dynamic
 provider inputs** are named cell by cell in the file and checked against the host's
 own declaration in both directions; the check is what corrected `unreadFiles` to
-`fileOptions`.
+`fileOptions`. **Decision records and replay** (§5) now have a versioned portable
+format and a verifier, including the two extra fields the merged case needs.
 
 `DECISION.md` now declares its schema version, and a missing or unrecognised one
 is refused — by `schemaProblems()`, surfaced as the `schema` layer of
@@ -402,10 +472,11 @@ things: `problems` says *this file is malformed*; the schema layer says *I canno
 read the semantics this file claims*. A file written for a future version is the
 second case, not the first.
 
-Positions, dynamic providers, actions and projections are all declared rather than
-re-parsed or inferred by each consumer. What remains is evidence and replay: the
-digests are recorded, but there is no portable format for replaying one decision
-inside another runtime.
+Positions, dynamic providers, actions, projections, evidence and replay are all
+declared rather than re-parsed or inferred by each consumer. What remains is not a
+format feature: **a second implementer**. Everything here is verified by our tests
+against our fixtures, and until someone adapts a runtime we did not write, "portable"
+means "we removed the parts that made it non-portable in our code".
 
 Until the remaining items land, the honest claim is:
 
@@ -415,7 +486,7 @@ Until the remaining items land, the honest claim is:
 It is not yet correct to claim that any Agent runtime can execute the file
 without an adapter.
 
-## 8. Consuming the contract without the runtime
+## 9. Consuming the contract without the runtime
 
 A host that wants only the checker must not have to install — or satisfy —
 JevLoop's own runtime. Two entry points:
@@ -439,7 +510,7 @@ jevloop            fails without it — the module-load assertion needs our cont
 
 That is the difference between "portable" and "install us first".
 
-## 9. Reference implementation
+## 10. Reference implementation
 
 The reference adapter currently consists of:
 

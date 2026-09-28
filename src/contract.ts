@@ -41,6 +41,12 @@ export { CURRENT_SCHEMA, SCHEMA_KEY, SUPPORTED_SCHEMAS, DYNAMIC_OUTPUTS, parseDy
 
 // ── 形状：消费方要能命名它拿到的每一个东西 ──────────────────
 export { ANY_POSITION_ACTIONS, KINDS, POSITIONS } from './decision-shape.ts'
+// 决策记录与重放：宿主可以把一条记录拿走、在别处验证它自不自洽
+export { REPLAY_SCHEMA, REPLAY_NOTES, recordOf } from './replay-schema.ts'
+export type { ReplayRecord } from './replay-schema.ts'
+export { verifyRecord } from './replay-verify.ts'
+export type { ReplayCheck, ReplayStatus, ReplayVerdict } from './replay-verify.ts'
+
 // 帧投影的能力声明：宿主必须实现这几个名字，这里说清各自读哪一格、返回什么
 export { PROJECTIONS, PROJECTION_NAMES, isProjectionName } from './frame-projections.ts'
 export type { ProjectionName, ProjectionReturns, ProjectionSpec } from './frame-projections.ts'

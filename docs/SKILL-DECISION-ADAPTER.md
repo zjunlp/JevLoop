@@ -149,6 +149,13 @@ latency and cost
 A host is not conforming until it can replay one recorded decision using the
 same contract version and report whether the frame and request digests match.
 
+The reference format is `decision-record/v1` (see §5 of
+[`DECISION-CONTRACT.md`](DECISION-CONTRACT.md)) and the reference verifier is
+`verifyRecord()`, exported from `jevloop/contract`. Two of its fields exist only
+because of the merged case — `sentFrameDigest` and `sentQuestions` — and a record
+that omits them is `unverifiable`, not `verified`. Note also what replay does not
+establish: it is not reproducibility and it is not correctness.
+
 ## Step 7: Write conformance tests
 
 Start with these fixtures:

@@ -134,6 +134,7 @@ It resolves its own backend: the hosted Jev API if `TYPESAFE_API_KEY` is set, ot
 npm run external-host     # a minimal external host: parse → decide → act, own state and graph
 npm run adapter-test      # the negative fixtures: unknown projection, unhandled action, …
 npm run adapter-report    # the capability report must match the host's code
+npm run replay -- <session> # a real session's decision records must still add up
 ```
 
 > **On the npm status.** `jevloop` is on npm, but the newest published version (`0.2.0`) declares `github.com/Xubqpanda/JevLoop` as its repository, while this tree is `zjunlp/JevLoop` and its `package.json` still reads `0.1.0`. So the published tarball is **not** this revision. To get this one, install from git — `npm install github:zjunlp/JevLoop` — or clone it. `npx jevloop …` is shorthand for the CLI commands above.

@@ -73,6 +73,22 @@ export type AgentEvent =
        */
       requestDigest?: string
       /**
+       * 这次前向**实际送出去**的那份帧的指纹（TODO §12：evidence / replay schema）。
+       *
+       * ★ 单节点时它等于 `frame.digest`；**合并时它不等于任何一个节点的** ——
+       *   而且**没法从这一条记录重算**（重算要「参与合并的节点名」+「合并后的
+       *   问题集」，两者都不在这条记录里）。不记它，重放器在每一步合并判定上
+       *   都会报假失败，而合并是常态。
+       */
+      sentFrameDigest?: string
+      /**
+       * 这次前向**实际发出去的**问题集。合并时它是合并后的那一份，而 `questions`
+       * 是每个节点自己那份 —— 请求指纹算的是前者，所以重放需要它。
+       */
+      sentQuestions?: QuestionSet
+      /** 参与这次前向的节点 id。长度 > 1 = 一次**合并**判定。让重放器说清哪项检查适用 */
+      batchIds?: string[]
+      /**
        * 这次判定**贴在哪条门限边上**（TODO §2）。
        *
        * ★ 不加它，「命中率」会被读高：**贴在门限边上的判定是一枚还没落地的
@@ -407,6 +423,14 @@ export function decisionEvent(d: DecisionResult<unknown>): AgentEvent {
     // 帧的账与请求的指纹：两者回答两个不同的问题，一起进事件（§8.14 / §8.17）
     ...(d.frame ? { frame: d.frame } : {}),
     ...(d.requestDigest ? { requestDigest: d.requestDigest } : {}),
+    // 重放要用的两个字段（TODO §12）：送出去的那份帧的指纹 + 参与合并的节点。
+    // 它们回答「两次跑的是不是同一个请求」，而 `frame.digest` 答不了合并那一档
+    // ★ 宽容：手搓的 / 旧版的 `DecisionResult` 可能没有这两个字段（公开函数，
+    //   不能假设调用方一定是最新构造的）。缺了就是「无法重放」，由重放器说清，
+    //   而不是在这里抛 —— 抛会把整条轨迹的读取一起带走。
+    ...(d.sentFrameDigest ? { sentFrameDigest: d.sentFrameDigest } : {}),
+    ...(d.sentQuestions ? { sentQuestions: d.sentQuestions } : {}),
+    ...(d.batchIds ? { batchIds: [...d.batchIds] } : {}),
     // 贴在哪条门限边上 —— 命中率不能单独读（TODO §2）
     ...(d.margin ? { margin: d.margin } : {}),
     questions: d.questions,

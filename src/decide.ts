@@ -246,16 +246,19 @@ export class Decider {
       只记帧指纹会漏掉「换掉候选集」那一类：`choice` 的选项不在帧里，
       换掉候选，帧指纹一动不动而答案会翻。单节点时帧指纹就是那个节点自己的；
       合并时发出去的是一份合成帧，所以按参与合并的节点名重算一个。
+
+      ★★ `sentFrameDigest` **单独记下来**（TODO §12 最后一条：evidence/replay）。
+        因为它是「实际送出去的那份帧」的指纹，而合并时它**既不等于**任何单个
+        节点的 `frame.digest`、也**没法从单条记录重算**（重算需要参与合并的
+        节点名列表 + 合并后的问题集，两者都不在一条记录里）。不记它，重放器
+        在每一步合并判定上都会报假失败 —— 而合并是常态，不是例外。
     */
-    const requestPrint = requestDigest(
+    const batchIds = projected.map((p) => p.spec.id)
+    const sentFrameDigest =
       projected.length === 1 && projected[0]!.artifact
         ? projected[0]!.artifact.digest
-        : frameDigest(
-            projected.map((p) => p.spec.id).join('+'),
-            state as Record<string, unknown>,
-          ),
-      questions,
-    )
+        : frameDigest(batchIds.join('+'), state as Record<string, unknown>)
+    const requestPrint = requestDigest(sentFrameDigest, questions)
 
     // ④ 发请求之前就检查预算
     for (const p of projected) {
@@ -310,6 +313,9 @@ export class Decider {
           // 挂掉也要带上帧的账：事后要能查「它当时看到的是什么」
           ...(p.artifact ? { frame: p.artifact } : {}),
           requestDigest: requestPrint,
+          sentFrameDigest,
+          sentQuestions: questions,
+          batchIds,
           questions: p.questions,
           answers: {},
           action: 'escalate',
@@ -361,6 +367,9 @@ export class Decider {
         //   合并时它与上面那份合成帧不同，这正是应该看得见的差别。
         ...(p.artifact ? { frame: p.artifact } : {}),
         requestDigest: requestPrint,
+        sentFrameDigest,
+        sentQuestions: questions,
+        batchIds,
         // 贴在哪条门限边上（缺席 = 这次没有可比的带门限规则，**不用 0 冒充**）
         ...(margin ? { margin } : {}),
         questions: p.questions,
