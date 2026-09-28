@@ -41,6 +41,11 @@ export { CURRENT_SCHEMA, SCHEMA_KEY, SUPPORTED_SCHEMAS, DYNAMIC_OUTPUTS, parseDy
 
 // ── 形状：消费方要能命名它拿到的每一个东西 ──────────────────
 export { ANY_POSITION_ACTIONS, KINDS, POSITIONS } from './decision-shape.ts'
+// 动作语义：外部实现者照 `next` 写 switch 就够了，不必读我们的循环
+export { ACTION_SEMANTICS } from './action-semantics.ts'
+export type { ActionSemantics } from './action-semantics.ts'
+export { ACTIONS } from './vocab-decision.ts'
+export type { Action } from './vocab-decision.ts'
 export type {
   BlockKind,
   DecisionDoc,

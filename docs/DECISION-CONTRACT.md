@@ -123,7 +123,56 @@ The reference implementation wraps untrusted *string* channels. List-valued
 channels are unlabelled and that is a known gap, recorded in `TODO.md` §7 with
 the reason: putting a label inside a value breaks consumers that read it as data.
 
-## 3. Adapter conformance checklist
+## 3. Action semantics
+
+`DECISION.md` declares **which actions a position may produce** (`POSITIONS`).
+That is only half of what a host needs: an action name says nothing about what
+happens *after* the decision. Those meanings used to live only in JevLoop's loop,
+which is precisely what a portable contract is supposed to remove — a second
+implementer would have to read our control flow and copy it.
+
+So each action declares its meaning. A host can write one `switch` over `next`
+and be done:
+
+| action | `next` | ends the loop | more model calls | needs evidence | retries |
+|---|---|---|---|---|---|
+| `use_tool` | `pick_tool` | no | yes | no | 0 |
+| `answer` | `generate` | **yes** | yes | no | 0 |
+| `call` | `run_tool` | no | yes | no | 0 |
+| `use` | `run_tool` | no | yes | no | 0 |
+| `auto` | `run_tool` | no | yes | no | 0 |
+| `auto_audit` | `run_tool` | no | yes | no | 0 |
+| `ask_human` | `human` | on refusal | yes | no | 0 |
+| `continue` | `next_step` | no | yes | no | 0 |
+| `stop` | `generate` | **yes** | yes | no | 0 |
+| `finish` | `generate` | **yes** | yes | no | 0 |
+| `keep_going` | `next_step` | no | yes | no | 0 |
+| `deliver` | `end` | yes | **no** | **yes** | 0 |
+| `revise` | `regenerate` | yes | yes | **yes** | **1** |
+| `escalate` | `end` | **yes** | yes | no | 0 |
+
+Three things this table exists to say out loud, because guessing them wrong is
+easy:
+
+- **"Ends the loop" is not "the run is over."** `answer`, `stop`, `finish` and
+  `escalate` all stop the *tool loop*, and the run then **generates a final answer
+  anyway** — including after `stop`, where that answer is an honest report of
+  failure. Only `deliver` ends the run. Collapsing these into one `terminal` flag
+  would produce a host that silently drops the last generation.
+- **Only the delivery gate needs evidence.** `deliver` and `revise` are the two
+  actions whose correctness depends on checking a draft against evidence; that is
+  why the gate exists.
+- **Only `revise` retries, and exactly once.** Retrying costs money, so it is
+  declared rather than implied.
+
+The table is a **description, not an executor**: JevLoop's loop still implements
+these semantics with branches, because what an action means *at a position* is
+known only to that position's code. So the table is checked **against the
+runtime** — `tests/action-semantics.test.ts` drives the loop once per action and
+asserts the observed behaviour matches. A semantics table nobody checks is just
+another declaration that can lie.
+
+## 4. Adapter conformance checklist
 
 An adapter is conforming only if it can demonstrate all of the following:
 
@@ -147,7 +196,7 @@ The test does not need a language model. A deterministic mock decision provider
 is sufficient; the purpose is to prove that the host consumes the contract and
 executes its actions.
 
-## 4. Extending beyond the reference loop
+## 5. Extending beyond the reference loop
 
 The reference JevLoop loop currently has seven named decision blocks and six
 closed positions. That is a property of the reference host, not a limit that a
@@ -257,7 +306,7 @@ The adapter must either implement a namespaced extension or reject it with a
 source-located error. It must never reinterpret an unknown extension as a
 portable action.
 
-## 5. Compatibility boundary
+## 6. Compatibility boundary
 
 The current JevLoop document contains some reference-host details:
 
@@ -273,10 +322,13 @@ schema version should still publish:
 ```text
 projection capability declarations
 dynamic provider input declarations (which state cells it reads)
-action semantics
 evidence schema
 event and replay schema
 ```
+
+Action semantics are **no longer on this list** — see §3. They are declared,
+exported through `jevloop/contract`, and checked against the runtime, so a host no
+longer has to read JevLoop's loop to learn what `stop` or `deliver` does.
 
 `DECISION.md` now declares its schema version, and a missing or unrecognised one
 is refused — by `schemaProblems()`, surfaced as the `schema` layer of
@@ -286,9 +338,10 @@ things: `problems` says *this file is malformed*; the schema layer says *I canno
 read the semantics this file claims*. A file written for a future version is the
 second case, not the first.
 
-Positions and dynamic providers are now structured rather than re-parsed by each
-consumer, but a `dynamic:` declaration still says only that the provider takes
-the context — not which state cells it reads.
+Positions, dynamic providers and actions are now structured rather than
+re-parsed or inferred by each consumer. What is still missing: a `dynamic:`
+declaration says only that the provider takes the context, not which state cells
+it reads.
 
 Until the remaining items land, the honest claim is:
 
@@ -298,7 +351,7 @@ Until the remaining items land, the honest claim is:
 It is not yet correct to claim that any Agent runtime can execute the file
 without an adapter.
 
-## 5. Consuming the contract without the runtime
+## 7. Consuming the contract without the runtime
 
 A host that wants only the checker must not have to install — or satisfy —
 JevLoop's own runtime. Two entry points:
@@ -322,7 +375,7 @@ jevloop            fails without it — the module-load assertion needs our cont
 
 That is the difference between "portable" and "install us first".
 
-## 6. Reference implementation
+## 8. Reference implementation
 
 The reference adapter currently consists of:
 
