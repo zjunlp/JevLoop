@@ -103,8 +103,13 @@ import {
   SCHEMA_KEY,
   CURRENT_SCHEMA,
   SUPPORTED_SCHEMAS,
+  DYNAMIC_OUTPUTS,
+  parseDynamic,
+  parseWhen,
+  whenProblems,
   type BlockKind,
   type DocBlock,
+  type DocDynamic,
   type DocFrame,
   type DecisionDoc,
   type DocOption,
@@ -116,8 +121,8 @@ import {
   type Primitive,
 } from './decision-shape.ts'
 
-export { isGate, CURRENT_SCHEMA, SUPPORTED_SCHEMAS, SCHEMA_KEY } from './decision-shape.ts'
-export type { BlockKind, DecisionDoc, DocBlock, DocFrame, DocFrameField, DocFrameExclusion, DocOption, DocPolicyRule, DocProblem, DocQuestion, DocSummary, Primitive } from './decision-shape.ts'
+export { isGate, CURRENT_SCHEMA, SUPPORTED_SCHEMAS, SCHEMA_KEY, DYNAMIC_OUTPUTS, parseDynamic, parseWhen, whenProblems } from './decision-shape.ts'
+export type { BlockKind, DecisionDoc, DocBlock, DocDynamic, DocFrame, DocFrameField, DocFrameExclusion, DocOption, DocPolicyRule, DocProblem, DocQuestion, DocSummary, ParsedDynamic, ParsedWhen, Primitive } from './decision-shape.ts'
 
 // ═══════════════════════════════════════════════════════════
 // 词法
@@ -291,8 +296,11 @@ function pushFrameLine(trimmed: string, line: number, frame: DocFrame, problems:
 function interpretBlock(section: RawSection, problems: DocProblem[]): DocBlock {
   let kind: BlockKind | null = null
   let sawKind = false
+  // 原文 + 它来自哪一行 —— 解析成结构之后，报错仍然要指回**那一行**
   let when = ''
-  let dynamic = ''
+  let whenLine = section.line
+  let dynamicRaw = ''
+  let dynamicLine = section.line
   let frame: DocFrame | null = null
   let inFrame = false
   const questions: DraftQuestion[] = []
@@ -397,9 +405,13 @@ function interpretBlock(section: RawSection, problems: DocProblem[]): DocBlock {
         sawKind = true
         if (isKind(value)) kind = value
         else problems.push({ line, message: `kind 只能是 ${KINDS.join(' / ')}，收到 '${value}'` })
-      } else if (key === 'when') when = value
-      else if (key === 'dynamic') dynamic = value
-      else if (key === 'frame') {
+      } else if (key === 'when') {
+        when = value
+        whenLine = line
+      } else if (key === 'dynamic') {
+        dynamicRaw = value
+        dynamicLine = line
+      } else if (key === 'frame') {
         if (value) problems.push({ line, message: '`frame:` 不带值 —— 它的内容写在下面几行（`+ 看什么` / `- 故意不看什么`）' })
         frame = { fields: [], excluded: [] }
         inFrame = true
@@ -424,26 +436,43 @@ function interpretBlock(section: RawSection, problems: DocProblem[]): DocBlock {
   // ★★ `when:` 不再是散文 —— 它必须点名一个**封闭位置**，而且块里每条策略的
   //   动作必须是那个位置**已经在处理的**。见 `POSITIONS` 的说明：这是
   //   「加一个判定只改文件」那句话的边界，把它从承诺变成解析期检查。
-  const position = when.trim().split(/\s|（|\(/)[0] ?? ''
-  if (position) {
-    const pos = POSITIONS[position]
-    if (!pos && !position.startsWith('host:')) {
+  //
+  // ★ 位置**必填**。这一段以前写成 `if (position) { … }` —— 于是没写 `when:`
+  //   的块整个跳过这一层：一个产出 `deliver` 的块，而没有任何位置说它会处理
+  //   `deliver`，`problems` 却是空的。实测（2026-09-28）：
+  //
+  //       '## foo\nkind: noul\n…\npolicy:\n  - else → deliver\n'  →  problems []
+  //
+  //   那正是这一层存在的理由（「会被问、会被记，而没有东西照它做」），
+  //   所以「没写」必须和「写错」一样出声。
+  const parsedWhen = parseWhen(when)
+  for (const message of whenProblems(parsedWhen)) problems.push({ line: whenLine, message })
+
+  const pos = POSITIONS[parsedWhen.position]
+  if (!pos && parsedWhen.position !== '' && !parsedWhen.position.startsWith('host:')) {
+    problems.push({
+      line: whenLine,
+      message: `when: '${parsedWhen.position}' 不是一个位置（可选：${Object.keys(POSITIONS).join(' / ')} 或 host:<name>）—— ` +
+        '位置决定这个判定的动作由谁处理；写不出位置，就没有东西会按它的动作做事',
+    })
+  } else if (pos) {
+    for (const r of policy) {
+      if (pos.actions.includes(r.action) || ANY_POSITION_ACTIONS.includes(r.action)) continue
       problems.push({
-        line: section.line,
-        message: `when: '${position}' 不是一个位置（可选：${Object.keys(POSITIONS).join(' / ')} 或 host:<name>）—— ` +
-          '位置决定这个判定的动作由谁处理；写不出位置，就没有东西会按它的动作做事',
+        line: whenLine,
+        message: `'${parsedWhen.position}' 这个位置不处理动作 '${r.action}'（它处理：${pos.actions.join(' / ')}` +
+          `${ANY_POSITION_ACTIONS.length ? ' / ' + ANY_POSITION_ACTIONS.join(' / ') : ''}）—— ` +
+          '要加这个动作，得先给那个位置加一个分支；否则这个判定会被问、会被记，而没有东西照它做',
       })
-    } else if (pos) {
-      for (const r of policy) {
-        if (pos.actions.includes(r.action) || ANY_POSITION_ACTIONS.includes(r.action)) continue
-        problems.push({
-          line: section.line,
-          message: `'${position}' 这个位置不处理动作 '${r.action}'（它处理：${pos.actions.join(' / ')}` +
-            `${ANY_POSITION_ACTIONS.length ? ' / ' + ANY_POSITION_ACTIONS.join(' / ') : ''}）—— ` +
-            '要加这个动作，得先给那个位置加一个分支；否则这个判定会被问、会被记，而没有东西照它做',
-        })
-      }
     }
+  }
+
+  // `dynamic:` 同样在解析期拆成字段 —— 消费方不再各自去拆这根字符串
+  let dynamic: DocDynamic | null = null
+  if (dynamicRaw.trim()) {
+    const parsed = parseDynamic(dynamicRaw)
+    for (const message of parsed.problems) problems.push({ line: dynamicLine, message })
+    dynamic = { provider: parsed.provider, output: parsed.output, why: parsed.why }
   }
 
   const resolved = interpretQuestions(questions, usedSubheading, problems)
@@ -452,7 +481,8 @@ function interpretBlock(section: RawSection, problems: DocProblem[]): DocBlock {
   return {
     id: section.heading,
     kind: kind ?? 'rule',
-    when,
+    position: parsedWhen.position,
+    purpose: parsedWhen.purpose,
     dynamic,
     frame,
     questions: resolved,
@@ -516,7 +546,7 @@ function validateBlock(
   section: RawSection,
   kind: BlockKind | null,
   questions: DocQuestion[],
-  dynamic: string,
+  dynamic: DocDynamic | null,
   problems: DocProblem[],
 ): void {
   const at = section.line
@@ -571,7 +601,7 @@ function validateBlock(
  * 但候选每步重建的判定（写了 `dynamic:`）在文件里可能只列一个占位，
  * 这时不要求数量：真正的候选由代码在运行时给（docs/CODE-STYLE.md §8.4）。
  */
-function minOptions(questions: DocQuestion[], dynamic: string, problems: DocProblem[]): void {
+function minOptions(questions: DocQuestion[], dynamic: DocDynamic | null, problems: DocProblem[]): void {
   if (dynamic) return
   for (const q of questions) {
     if (q.type === 'choice' && q.options.length < 2) {
@@ -579,7 +609,7 @@ function minOptions(questions: DocQuestion[], dynamic: string, problems: DocProb
         line: q.line,
         message:
           `问题 '${q.id}' 只有 ${q.options.length} 个选项，choice 至少要 2 个。` +
-          `如果候选是运行时算出来的，加一行 \`dynamic: <怎么算的>\``,
+          `如果候选是运行时算出来的，加一行 \`dynamic: <提供者>(ctx) → ${DYNAMIC_OUTPUTS.join(' / ')} —— <为什么每步重算>\``,
       })
     }
   }

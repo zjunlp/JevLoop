@@ -122,11 +122,35 @@ export interface DocFrame {
   excluded: DocFrameExclusion[]
 }
 
+/**
+ * 候选是每步算出来的，不是这份文件里列的。
+ *
+ * 选项必须每步重建（docs/CODE-STYLE.md §8.4）—— 固定的候选会让模型去选一个已经
+ * 不适用的动作。有这一项时，文件里列的选项只是**默认全集或示例**，
+ * 校验也不再要求至少两个。
+ *
+ * ★ 它和它的语法（`parseDynamic`）住在 `decision-syntax.ts`，这里只是转发 ——
+ *   形状和「那两行怎么写」是两件事，混在一起之后这个文件一夜涨到 374 行，
+ *   `npm run check` 的 file-focus 当场报了出来。
+ */
+export type { DocDynamic } from './decision-syntax.ts'
+export { DYNAMIC_OUTPUTS, parseDynamic, parseWhen, whenProblems } from './decision-syntax.ts'
+export type { ParsedDynamic, ParsedWhen } from './decision-syntax.ts'
+
+import type { DocDynamic } from './decision-syntax.ts'
+
 export interface DocBlock {
   id: string
   kind: BlockKind
-  /** 什么时候问。散文，只给人读 */
-  when: string
+  /**
+   * 判定住在循环的哪一步 —— `POSITIONS` 里的一个，或宿主的 `host:<name>`。
+   *
+   * ★ 这是机器认的那一半；人读的那一半在 `purpose`。以前两半挤在一个
+   *   `when: string` 里，于是每个消费方都得自己按「——」切一刀。
+   */
+  position: string
+  /** `——` 之后那句话。给人读、给审计看，不参与任何判断 */
+  purpose: string
   /**
    * 候选是每步算出来的，不是这份文件里列的。
    *
@@ -134,7 +158,7 @@ export interface DocBlock {
    * 不适用的动作。有这一项时，文件里列的选项只是**默认全集或示例**，
    * 校验也不再要求至少两个。
    */
-  dynamic: string
+  dynamic: DocDynamic | null
   /**
    * **这个判定看什么、故意不看什么。**
    *
@@ -210,7 +234,6 @@ export function isGate(block: DocBlock): boolean {
   return block.policy.some((r) => r.action === 'ask_human')
 }
 
-/** 头条数字：这个 agent 有几个判定点、几个问题，其中几个要模型 */
 export interface DocSummary {
   blocks: number
   byKind: Record<BlockKind, number>

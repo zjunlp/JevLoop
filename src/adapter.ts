@@ -8,7 +8,7 @@
  * @module JevLoop/adapter
  */
 
-import type { DecisionDoc, DocBlock } from './decisiondoc.ts'
+import type { DecisionDoc } from './decisiondoc.ts'
 
 /** Capabilities supplied by a host runtime. */
 export interface AdapterCapabilities {
@@ -31,17 +31,6 @@ export interface AdapterProblem {
   message: string
 }
 
-/** Extract the structured position token from the current `when:` spelling. */
-export function positionOf(block: DocBlock): string {
-  return block.when.trim().split(/\s|（|\(/)[0] ?? ''
-}
-
-/** Extract the provider name from `dynamic: provider(ctx) —— explanation`. */
-export function dynamicProviderOf(block: DocBlock): string | undefined {
-  const first = block.dynamic.trim().split(/\s|（|\(/)[0] ?? ''
-  return first || undefined
-}
-
 /**
  * Check whether a host can consume every declaration in a parsed document.
  *
@@ -49,6 +38,11 @@ export function dynamicProviderOf(block: DocBlock): string | undefined {
  * block ids, but it must explicitly register every field, provider, position,
  * and action that the document uses. An empty result means the adapter is ready
  * for local block execution; it does not claim that the host graph is correct.
+ *
+ * ★ `position` 和 `dynamic.provider` 是**解析期就拆好的字段**，这里不再拆字符串。
+ *   以前这里有两个拆字符串的帮手（`positionOf` / `dynamicProviderOf`），
+ *   而界面和测试各自又拆了一遍 —— 同一个格式几处拆法就会分叉，所以语法收回
+ *   `decision-shape.ts` 一次，这里只读字段。
  */
 export function adapterProblems(doc: DecisionDoc, caps: AdapterCapabilities): AdapterProblem[] {
   const stateCells = new Set(caps.stateCells)
@@ -58,7 +52,7 @@ export function adapterProblems(doc: DecisionDoc, caps: AdapterCapabilities): Ad
   const out: AdapterProblem[] = []
 
   for (const block of doc.blocks) {
-    const position = positionOf(block)
+    const position = block.position
     const positionActions = caps.positions[position]
     if (!positionActions) {
       out.push({ block: block.id, line: block.line, message: `host 没有注册位置 '${position}'` })
@@ -74,7 +68,7 @@ export function adapterProblems(doc: DecisionDoc, caps: AdapterCapabilities): Ad
       }
     }
 
-    const provider = dynamicProviderOf(block)
+    const provider = block.dynamic?.provider
     if (provider && !dynamicProviders.has(provider)) {
       out.push({ block: block.id, line: block.line, message: `host 没有注册 dynamic provider '${provider}'` })
     }

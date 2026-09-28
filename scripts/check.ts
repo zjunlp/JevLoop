@@ -347,6 +347,10 @@ const LAYER: Record<string, number> = {
   // 解析段只 import vocab.ts → L0；编译段依赖 policy.ts（L1）→ L2。
   // 形状（纯类型，零行为依赖）独立成 L0；解析段也 L0，同层互相指涉是允许的。
   'decision-shape': 0,
+  // `when:` / `dynamic:` 的语法。零 import、纯字符串 → 结构，所以和形状同层。
+  // 拆出来的理由见该文件头：形状和「那两行怎么写」是两件事，混在一起之后
+  // `decision-shape.ts` 涨到 374 行，file-focus 当场报了出来。
+  'decision-syntax': 0,
   decisiondoc: 0,
   'decision-compile': 2,
   // `write-content` 放 L3：它把 agent 的上下文**编译**成一个生成请求

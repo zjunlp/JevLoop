@@ -45,6 +45,7 @@ These concepts belong in the file format:
 id
 kind: choice | noul | score | mixed | rule
 when: <position> —— <human-readable purpose>
+dynamic: <provider>(ctx) → <output> —— <reason>     (optional)
 ask
 options
 policy
@@ -54,9 +55,27 @@ frame:
 generator
 ```
 
-`when:` has two parts: the first token is the position identifier; the text after
-`——` explains the purpose for humans and audit tools. A host should expose both
-parts structurally rather than making consumers reparse prose.
+`when:` has two parts, and the parser splits them rather than leaving consumers
+to reparse prose: the first token is the position identifier, and the text after
+`——` is the purpose for humans and audit tools. Both are on the parsed block as
+`position` and `purpose`. A position is **required** — a block without one is
+refused, because an action nothing dispatches is worse than a parse error.
+
+`dynamic:` also declares three things, not one:
+
+```text
+provider   the name the host must have registered
+output     what shape it returns — currently always `candidates`
+why        why the candidates must be rebuilt every step
+```
+
+The provider must be written `<name>(ctx)`: a dynamic provider exists to read the
+current state, so a declaration that omits the context is not something a host can
+implement correctly. `output` is a closed vocabulary with exactly one member —
+adding a second is a deliberate change that also needs a host handling branch.
+
+`when:`/`dynamic:` syntax lives in `src/decision-syntax.ts`; validation against
+`POSITIONS` and the policy lives in `src/decisiondoc.ts`.
 
 ### Host adapter
 
@@ -64,8 +83,9 @@ Each host must register:
 
 1. **State cells**: the names and types available to frame declarations;
 2. **Projection providers**: implementations for names such as `earlierMaybe`;
-3. **Dynamic candidate providers**: implementations for declarations such as
-   `toolsFor(ctx)` or `unreadFiles(ctx)`;
+3. **Dynamic candidate providers**: implementations for the providers named by
+   `dynamic:` declarations, keyed by provider name and matching the declared
+   output shape;
 4. **Position handlers**: the actions that each position can execute;
 5. **Action handlers**: the behavior of `use_tool`, `call`, `ask_human`,
    `finish`, `deliver`, and any host-specific actions;
@@ -225,9 +245,8 @@ These are intentional adapter seams, not yet an industry-wide ABI. A future
 schema version should still publish:
 
 ```text
-structured position and purpose
 projection capability declarations
-dynamic provider input/output shapes
+dynamic provider input declarations (which state cells it reads)
 action semantics
 evidence schema
 event and replay schema
@@ -240,6 +259,10 @@ separate layer rather than part of `problems`, because the two mean different
 things: `problems` says *this file is malformed*; the schema layer says *I cannot
 read the semantics this file claims*. A file written for a future version is the
 second case, not the first.
+
+Positions and dynamic providers are now structured rather than re-parsed by each
+consumer, but a `dynamic:` declaration still says only that the provider takes
+the context — not which state cells it reads.
 
 Until the remaining items land, the honest claim is:
 
@@ -279,6 +302,7 @@ The reference adapter currently consists of:
 
 ```text
 src/decisiondoc.ts         parse the document and check its schema
+src/decision-syntax.ts     the `when:` / `dynamic:` grammar, in one place
 src/decision-compile.ts    compile questions and policies
 src/adapter.ts             check a host's declared capabilities
 src/contract.ts            the portable entry point (jevloop/contract)

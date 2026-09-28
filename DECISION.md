@@ -61,7 +61,7 @@ answering with information it does not have yet」，答案就是「不需要工
 
 kind: choice
 when: tool-choice —— 判定需要动手之后，每一步都问一次
-dynamic: toolsFor(ctx) —— 候选每步重建，下面列的是默认全集
+dynamic: toolsFor(ctx) → candidates —— 候选每步重建，下面列的是默认全集
 
 ### tool
 
@@ -100,7 +100,7 @@ policy:
 
 kind: choice
 when: input-choice —— 选定的工具需要参数时（`list_dir` 不需要，它没有可挑的东西）
-dynamic: unreadFiles(ctx) —— 还没读过的文件，每步重建
+dynamic: unreadFiles(ctx) → candidates —— 还没读过的文件，每步重建
 
 ### file
 

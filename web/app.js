@@ -1589,7 +1589,11 @@ async function loadSpec() {
             b.gate ? h('span', { class: 'spec-gate' }, '闸门') : null,
             bad ? h('span', { class: 'spec-broken' }, `${b.uncompiled.length} 条未编译`) : null,
           ),
-          b.when ? h('div', { class: 'spec-when' }, b.when) : null,
+          // 两半是**分开**传过来的（位置 / 说明），这里只负责拼给人看。
+          // 界面不自己按「——」拆字符串 —— 那个语法有它自己的定义处。
+          b.position
+            ? h('div', { class: 'spec-when' }, b.purpose ? `${b.position} —— ${b.purpose}` : b.position)
+            : null,
         ),
       )
     }

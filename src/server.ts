@@ -813,7 +813,12 @@ async function handleSpec(res: ServerResponse): Promise<void> {
         return {
           id: b.id,
           kind: b.kind,
-          when: b.when,
+          // 解析期就拆好的两半：位置是机器认的，purpose 是给人读的。
+          // 界面把两半合起来显示，但**传的是两个字段** —— 界面不必自己再按
+          // 「——」拆一次字符串（同一个格式几处拆法就会分叉）。
+          position: b.position,
+          purpose: b.purpose,
+          dynamic: b.dynamic,
           gate: isGate(b),
           questions: b.questions.map((q) => q.id),
           /** 没编译出来的谓词原文。空数组 = 这个块的策略全部可编译 */

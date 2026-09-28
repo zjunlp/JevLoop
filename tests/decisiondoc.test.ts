@@ -268,26 +268,26 @@ function problemsOf(md: string): string[] {
 }
 
 test('缺 kind 的块要报错，不能当成默认值悄悄放过', () => {
-  const p = problemsOf('## foo\nask: 问点什么\n- a — 甲\n- b — 乙\n')
+  const p = problemsOf('## foo\nwhen: after-tool\nask: 问点什么\n- a — 甲\n- b — 乙\n')
   assert.equal(p.length, 1)
   assert.match(p[0]!, /缺少 kind/)
 })
 
 test('选项缺分隔符要报错，并说清正确写法', () => {
   // 声明 choice 却写成无名档位 —— 最可能的原因就是漏了分隔符，报错要点出来
-  const p = problemsOf('## foo\nkind: choice\nask: 问\n- 甲\n- 乙\n')
+  const p = problemsOf('## foo\nkind: choice\nwhen: after-tool\nask: 问\n- 甲\n- 乙\n')
   assert.equal(p.length, 1)
   assert.match(p[0]!, /分隔符/)
 })
 
 test('不认识的键要报错，不静默忽略', () => {
-  const p = problemsOf('## foo\nkind: rule\ntypo_key: 1\n')
+  const p = problemsOf('## foo\nkind: rule\nwhen: after-tool\ntypo_key: 1\n')
   assert.equal(p.length, 1)
   assert.match(p[0]!, /不认识的键 'typo_key'/)
 })
 
 test('kind 拼错要报错，并列出合法值', () => {
-  const p = problemsOf('## foo\nkind: choise\nask: 问\n- a — 甲\n- b — 乙\n')
+  const p = problemsOf('## foo\nkind: choise\nwhen: after-tool\nask: 问\n- a — 甲\n- b — 乙\n')
   assert.equal(p.length, 1)
   assert.match(p[0]!, /choice \/ noul \/ score \/ mixed \/ rule/)
 })
@@ -329,7 +329,7 @@ test('choice 少于两个选项要报错，但写了 dynamic 就放行', () => {
   const bad = problemsOf('## foo\nkind: choice\nask: 问\n- x — 甲\n')
   assert.ok(bad.some((m: string) => /至少要 2 个/.test(m)), JSON.stringify(bad))
 
-  const ok = parseDecisionDoc('## foo\nkind: choice\nask: 问\ndynamic: 运行时算\n- x — 甲\n')
+  const ok = parseDecisionDoc('## foo\nkind: choice\nwhen: tool-choice\nask: 问\ndynamic: toolsFor(ctx) → candidates —— 运行时算\n- x — 甲\n')
   assert.deepEqual(ok.problems, [], '写了 dynamic 就不该再要求选项数量')
 })
 
@@ -352,9 +352,10 @@ test('问题 id 和判定 id 重复都要报错', () => {
 })
 
 test('报错带行号', () => {
-  const doc2 = parseDecisionDoc('# t\n\n## foo\nkind: choice\nask: 问\n- 甲\n- 乙\n')
+  const doc2 = parseDecisionDoc('# t\n\n## foo\nkind: choice\nwhen: after-tool\nask: 问\n- 甲\n- 乙\n')
   assert.equal(doc2.problems.length, 1)
-  assert.equal(doc2.problems[0]!.line, 6, '报的应当是第 6 行那个选项')
+  // 第 7 行是 `- 甲`（1 标题 / 2 空行 / 3 `## foo` / 4 kind / 5 when / 6 ask / 7 选项）
+  assert.equal(doc2.problems[0]!.line, 7, '报的应当是第 7 行那个选项')
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -416,8 +417,9 @@ test('没有策略时 compilePolicy 返回 undefined，而不是空数组', () =
 const singleQ = (type: 'noul' | 'choice' | 'score', id: string): DocBlock => ({
   id: 'g',
   kind: type,
-  when: '',
-  dynamic: '',
+  position: '',
+  purpose: '',
+  dynamic: null,
   frame: null,
   rationale: '',
   line: 1,
@@ -607,7 +609,8 @@ test('★ 文件里的帧是**有界**的：每一栏都有正数界，每一条
 
 test('★ 七个块都点名了一个真位置，而且动作都是那个位置处理的', () => {
   for (const b of doc.blocks) {
-    const pos = b.when.trim().split(/[\s（(]/)[0]!
+    // `position` 是解析期就拆好的字段 —— 测试不再自己拆一遍字符串
+    const pos = b.position
     assert.ok(POSITIONS[pos], `${b.id} 的 when: '${pos}' 不是一个位置`)
     for (const r of b.policy) {
       assert.ok(
@@ -616,6 +619,33 @@ test('★ 七个块都点名了一个真位置，而且动作都是那个位置�
       )
     }
   }
+})
+
+test('★ when: 拆成两个字段 —— 位置是机器认的，purpose 是人读的', () => {
+  for (const b of doc.blocks) {
+    assert.ok(b.position, `${b.id} 应当有一个位置`)
+    assert.notEqual(b.purpose, '', `${b.id} 的 when: 应当带一句说明（——）`)
+    assert.ok(!b.position.includes('——'), `${b.id} 的位置里不该残留分隔符`)
+    assert.ok(!b.purpose.includes('——'), `${b.id} 的 purpose 里不该残留分隔符`)
+  }
+})
+
+test('★ 没写 when: 的块也要报 —— 以前它整个跳过位置层', () => {
+  const md = '## foo\nkind: noul\nask: 问\n- true — 是\n- false — 否\npolicy:\n  - else → deliver\n'
+  const msgs = problemsOf(md)
+  assert.ok(
+    msgs.some((m) => /没有点名一个位置/.test(m)),
+    `没写 when: 必须报出来 —— 否则一个产出 deliver 的块谁也不处理它，而 problems 是空的。实际：${JSON.stringify(msgs)}`,
+  )
+})
+
+test('★ when: 的说明必须用 —— 接，不然那句话没人读得到', () => {
+  const md = '## foo\nkind: noul\nwhen: after-tool 每次工具执行之后\nask: 问\n- true — 是\n- false — 否\npolicy:\n  - else → stop\n'
+  const msgs = problemsOf(md)
+  assert.ok(
+    msgs.some((m) => /要用 `——` 接/.test(m)),
+    `位置后面接散文（没写 ——）要报出来，否则它既不进 purpose 也没人读。实际：${JSON.stringify(msgs)}`,
+  )
 })
 
 test('★★ 越界的动作**真的会响**（不然这条检查只是个装饰）', () => {

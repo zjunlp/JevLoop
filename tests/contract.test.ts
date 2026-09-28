@@ -50,7 +50,7 @@ test('契约入口能独立读一份文件，并认得它的版本', () => {
 })
 
 test('★ 没写 schema 的文件会被这一层挡下 —— 其余三层一条都不响', () => {
-  const bare = parseDecisionDoc('## foo\nkind: rule\n')
+  const bare = parseDecisionDoc('## foo\nkind: rule\nwhen: after-tool\n')
   assert.deepEqual(bare.problems, [], '其余解析层不该因此报错（这正是版本要单独一层的原因）')
   assert.ok(
     schemaProblems(bare).some((m) => m.includes('schema')),

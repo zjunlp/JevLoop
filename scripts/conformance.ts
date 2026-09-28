@@ -189,6 +189,10 @@ const NEEDS_TOOL_TASK =
   '  + task          400                   —— 整个判定的主体：问的是「这个任务还有没有没做的动作」'
 /** 版本声明那一行的原文。删掉它 / 只改空格，是两个相反的演示 */
 const SCHEMA_LINE = 'schema: decision-contract/v1\n'
+/** `needs_tool` 的 `when:` 整行 —— 删掉它、或把 `——` 换成空格，是两个演示 */
+const NEEDS_TOOL_WHEN = 'when: step-start —— 每个 step 的开头。判否就直接跳到生成，整个工具循环省掉\n'
+/** `pick_tool` 的 `dynamic:` 整行 —— 输出写成别的、或丢掉理由，是两个演示 */
+const PICK_TOOL_DYNAMIC = 'dynamic: toolsFor(ctx) → candidates —— 候选每步重建，下面列的是默认全集\n'
 
 export const CASES: readonly Mutation[] = [
   {
@@ -327,6 +331,55 @@ export const CASES: readonly Mutation[] = [
     layer: 'schema',
     expect: /没有声明 `schema:`/,
   },
+  {
+    id: 'when-dropped',
+    family: 'action',
+    edit: '删掉 needs_tool 的 `when:` 整行',
+    silent:
+      '★★ 位置层**整段跳过** —— 这一段以前写成 `if (position) { … }`，于是没写 `when:` 的块' +
+      '根本不进这一层。一个产出 `use_tool` 的块，而没有任何位置说它处理 `use_tool`，' +
+      '`problems` 却是空的。实测（2026-09-28）：这种文件三层全绿。',
+    find: NEEDS_TOOL_WHEN,
+    to: '',
+    layer: 'parse',
+    expect: /没有点名一个位置/,
+  },
+  {
+    id: 'when-purpose-unread',
+    family: 'declaration',
+    edit: 'needs_tool 的 `when:` 里 `——` 换成空格（位置后面直接接散文）',
+    silent:
+      '位置照样解析得出来，所以**没有任何一层会响** —— 而「—— 每个 step 的开头…」那句话' +
+      '从此既不进 `purpose`，也没有别的地方读它：写给人看，而没有人看得到。',
+    find: NEEDS_TOOL_WHEN,
+    to: 'when: step-start 每个 step 的开头。判否就直接跳到生成，整个工具循环省掉\n',
+    layer: 'parse',
+    expect: /要用 `——` 接/,
+  },
+  {
+    id: 'dynamic-output-unknown',
+    family: 'declaration',
+    edit: 'pick_tool 的 `dynamic:` 输出从 `candidates` 改成 `everything`',
+    silent:
+      '宿主认的输出形状是**封闭表**。写成别的而没人报的话，宿主拿到一个不知道该怎么调的' +
+      '提供者 —— 候选根本不会重建，而问题照样发出去，用的还是文件里那个占位选项。',
+    find: PICK_TOOL_DYNAMIC,
+    to: 'dynamic: toolsFor(ctx) → everything —— 候选每步重建，下面列的是默认全集\n',
+    layer: 'parse',
+    expect: /不认识的 dynamic 输出 'everything'/,
+  },
+  {
+    id: 'dynamic-why-dropped',
+    family: 'declaration',
+    edit: 'pick_tool 的 `dynamic:` 删掉 `—— 为什么` 那半句',
+    silent:
+      '`——` 之后那半句是这一行**唯一承载的信息**：候选为什么必须每步重算。' +
+      '删掉之后它长得和一条写全的完全一样，而下一个改这里的人只能靠猜。',
+    find: PICK_TOOL_DYNAMIC,
+    to: 'dynamic: toolsFor(ctx) → candidates\n',
+    layer: 'parse',
+    expect: /没有写为什么/,
+  },
 ]
 
 /**
@@ -363,6 +416,16 @@ export const SHAM: readonly Sham[] = [
     find: SCHEMA_LINE,
     to: SCHEMA_LINE.replace(': ', ':'),
     layer: 'schema',
+    mustPass: true,
+  },
+  {
+    id: 'sham-dynamic-spacing',
+    family: 'declaration',
+    edit: '`toolsFor(ctx) → candidates` 箭头两侧的空格压掉',
+    silent: '（对照：箭头两侧的空格是分隔符 —— 它拆出来的两个 token 没变）',
+    find: PICK_TOOL_DYNAMIC,
+    to: 'dynamic: toolsFor(ctx)→candidates —— 候选每步重建，下面列的是默认全集\n',
+    layer: 'parse',
     mustPass: true,
   },
 ]

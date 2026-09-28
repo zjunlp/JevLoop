@@ -37,7 +37,7 @@
 
 // ── 读文件 ──────────────────────────────────────────────────
 export { parseDecisionDoc, schemaProblems, summarize, headline, isGate } from './decisiondoc.ts'
-export { CURRENT_SCHEMA, SCHEMA_KEY, SUPPORTED_SCHEMAS } from './decision-shape.ts'
+export { CURRENT_SCHEMA, SCHEMA_KEY, SUPPORTED_SCHEMAS, DYNAMIC_OUTPUTS, parseDynamic, parseWhen, whenProblems } from './decision-shape.ts'
 
 // ── 形状：消费方要能命名它拿到的每一个东西 ──────────────────
 export { ANY_POSITION_ACTIONS, KINDS, POSITIONS } from './decision-shape.ts'
@@ -45,6 +45,7 @@ export type {
   BlockKind,
   DecisionDoc,
   DocBlock,
+  DocDynamic,
   DocFrame,
   DocFrameExclusion,
   DocFrameField,
@@ -53,6 +54,8 @@ export type {
   DocProblem,
   DocQuestion,
   DocSummary,
+  ParsedDynamic,
+  ParsedWhen,
   Primitive,
 } from './decision-shape.ts'
 
@@ -77,7 +80,7 @@ export {
 export type { PolicyOutcome, PolicyWarning, ThresholdSpec } from './policy.ts'
 
 // ── 宿主能力核对 ────────────────────────────────────────────
-export { adapterProblems, dynamicProviderOf, positionOf } from './adapter.ts'
+export { adapterProblems } from './adapter.ts'
 export type { AdapterCapabilities, AdapterProblem } from './adapter.ts'
 
 // ── 原语：问题长什么样、答案回来是什么形状 ──────────────────

@@ -88,6 +88,18 @@ For every `dynamic:` declaration, define a host provider with an explicit
 input/output shape. The provider must return the actual candidate set used by
 the decision request, not only a description of the candidate set.
 
+The declaration is already parsed — read the fields, do not re-split the line:
+
+```text
+block.dynamic.provider   the name to look up in your registry
+block.dynamic.output     the shape it must return (`candidates` today)
+block.dynamic.why        why it must be rebuilt every step
+```
+
+Provider names come from the host's own closed table. A name the host has not
+registered is an adapter failure, not a reason to fall back to the defaults
+listed in the file.
+
 At minimum record:
 
 ```text
