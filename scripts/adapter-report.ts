@@ -56,6 +56,8 @@ export interface CapabilityReport {
   graphFeatures: string[]
   projections: string[]
   dynamicProviders: string[]
+  /** 每个提供者读契约层的哪几格（TODO §12 第三条） */
+  dynamicProviderReads: Record<string, string[]>
   conformance: { command: string; negativeFixtures: string; dispatchAfterCapabilityCheck: boolean }
   knownLimitations: string[]
 }
@@ -124,6 +126,22 @@ export function reportDrift(report: CapabilityReport): string[] {
   }
   if (!sameSet(report.dynamicProviders, CAPABILITIES.dynamicProviders)) {
     out.push(`动态候选提供者对不上：报告 [${report.dynamicProviders.join(', ')}] · 代码 [${CAPABILITIES.dynamicProviders.join(', ')}]`)
+  }
+
+  // 每个提供者读哪几格也要对账 —— 报告说它读了没读的格，等于在描述另一个实现
+  const declaredReads = report.dynamicProviderReads ?? {}
+  for (const [name, reads] of Object.entries(CAPABILITIES.dynamicProviderReads ?? {})) {
+    const reported = declaredReads[name]
+    if (!reported) {
+      out.push(`报告没写 provider '${name}' 读哪几格（代码里是 ${reads.join(', ')}）`)
+      continue
+    }
+    if (!sameSet(reported, reads)) {
+      out.push(`provider '${name}' 的输入格对不上：报告 [${[...reported].sort().join(', ')}] · 代码 [${[...reads].sort().join(', ')}]`)
+    }
+  }
+  for (const name of Object.keys(declaredReads)) {
+    if (!(name in (CAPABILITIES.dynamicProviderReads ?? {}))) out.push(`报告写了 provider '${name}' 的输入格，而代码里没有这个提供者`)
   }
 
   const nodes = Object.keys(GRAPH)
@@ -206,6 +224,7 @@ export function contractProblems(report: CapabilityReport): string[] {
     stateCells: CAPABILITIES.stateCells,
     projections: report.projections,
     dynamicProviders: report.dynamicProviders,
+    dynamicProviderReads: report.dynamicProviderReads,
     positions: report.positions,
     actions: CAPABILITIES.actions,
   }
@@ -229,7 +248,9 @@ export function contractProblems(report: CapabilityReport): string[] {
 /** 读并粗略校验那份 JSON 的形状（手写文件，所以边界上要放宽也要查） */
 export function loadReport(file = REPORT): CapabilityReport {
   const raw = JSON.parse(readFileSync(file, 'utf8')) as Partial<CapabilityReport>
-  const missing = (['positions', 'projections', 'dynamicProviders', 'customGraphNodes', 'level'] as const).filter(
+  const missing = (
+    ['positions', 'projections', 'dynamicProviders', 'dynamicProviderReads', 'customGraphNodes', 'level'] as const
+  ).filter(
     (k) => raw[k] === undefined,
   )
   if (missing.length > 0) throw new Error(`${file} 缺少字段：${missing.join(' / ')}`)

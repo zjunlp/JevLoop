@@ -134,7 +134,16 @@ function mockAnswers(questions: QuestionSet, blockId: string): AnswerSet {
 export const CAPABILITIES: AdapterCapabilities = {
   stateCells: ['task', 'earlier', 'already_done', 'files_known', 'already_read', 'last', 'tool', 'input', 'output', 'target', 'evidence', 'answer'],
   projections: Object.keys(PROJECTIONS),
-  dynamicProviders: ['toolsFor', 'unreadFiles'],
+  dynamicProviders: ['toolsFor', 'fileOptions'],
+  /*
+    ★ 每一格都要写出来，而且要**和 `DECISION.md` 里那份一模一样**（TODO §12 第三条）：
+    文件说的是「这个提供者从状态算候选」，宿主这份是「我的实现真的读了这些」。
+    两边对不上会被 `adapterProblems` 报出来 —— 少一格 ⇒ 候选静默地少一类。
+  */
+  dynamicProviderReads: {
+    toolsFor: ['history', 'files', 'readFiles', 'canWrite', 'canDelete'],
+    fileOptions: ['files', 'readFiles'],
+  },
   positions: {
     'step-start': ['use_tool', 'answer'],
     'tool-choice': ['call'],

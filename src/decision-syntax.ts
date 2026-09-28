@@ -105,6 +105,14 @@ export interface DocDynamic {
    * 认不出就是宿主没实现它 —— 由 `adapterProblems()` 报出来。
    */
   provider: string
+  /**
+   * 它读 `AgentCtx` 的哪几格（TODO §12 第三条）。
+   *
+   * ★ 以前这里只有一个 `(ctx)`，等于说「它读上下文」—— 而候选是**算出来的**，
+   *   「算它的时候看了什么」才是宿主需要知道的东西：少喂一格，候选会**静默地**
+   *   少一类。现在必须逐格写出来：`toolsFor(ctx: history, files, …)`。
+   */
+  reads: readonly string[]
   /** 它产出什么形状。见 `DYNAMIC_OUTPUTS`：目前只有一种 */
   output: string
   /** 为什么候选必须每步重算（`——` 之后那句）。**必填** */
@@ -115,6 +123,8 @@ export interface DocDynamic {
 export interface ParsedDynamic {
   /** 宿主要注册的提供者名。解析不出来时是空串 */
   provider: string
+  /** 它声明读哪几格 */
+  reads: readonly string[]
   /** 产出形状。解析不出来时是空串 */
   output: string
   /** `——` 之后那句为什么 */
@@ -123,16 +133,26 @@ export interface ParsedDynamic {
   problems: string[]
 }
 
-const RE_DYNAMIC_CALL = /^([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*ctx\s*\)$/
+/**
+ * 提供者调用：`<名字>(ctx)` 或 `<名字>(ctx: <格名>, <格名>, …)`。
+ *
+ * 冒号后面允许为空（由下面单独报「一格都没写」），这样 `(ctx)` 这种旧写法
+ * 得到的是一条**说清怎么改**的错误，而不是一条「格式不对」。
+ */
+const RE_DYNAMIC_CALL = /^([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*ctx\s*(?::\s*(.*?))?\s*\)$/
+
+/** 一格名字长什么样 */
+const RE_CELL = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /**
- * `dynamic: <提供者>(ctx) → <输出> —— <为什么>` → 三个字段。
+ * `dynamic: <提供者>(ctx: <格名>, …) → <输出> —— <为什么>` → 四个字段。
  *
- * ★ 为什么要 `(ctx)`：动态提供者的全部意义就是「它读得到当前状态」。
- *   写成 `toolsFor` 的话，宿主没法知道该不该把 state 递给它。
+ * ★ 为什么要 `(ctx: …)` 而不是光一个名字：动态提供者的全部意义就是「它从当前
+ *   状态算」，而**读了哪几格**决定了宿主必须备好什么。只给一个名字，宿主接不上
+ *   的时候只能靠猜 —— 而猜错的表现是候选静默地少一类。
  *
  * ★ 为什么要 `→ <输出>`：宿主得知道这个提供者返回什么形状才能接上
- *   （候选集？问题集？）。只给一个名字，接不上的时候只能靠猜。
+ *   （候选集？问题集？）。
  */
 export function parseDynamic(raw: string): ParsedDynamic {
   const src = raw.trim()
@@ -160,12 +180,29 @@ export function parseDynamic(raw: string): ParsedDynamic {
   }
 
   const m = RE_DYNAMIC_CALL.exec(call)
+  let reads: string[] = []
   if (!m) {
     problems.push(
-      `\`dynamic:\` 的提供者要写成 \`<名字>(ctx)\`（收到 '${call}'）—— ` +
-        '宿主按这个名字去注册实现，写不成标识符就找不到它',
+      `\`dynamic:\` 的提供者要写成 \`<名字>(ctx: <格名>, …)\`（收到 '${call}'）—— ` +
+        '宿主按名字注册实现、按格名核对状态，两样都写不出来就没法接',
     )
+  } else {
+    reads = (m[2] ?? '')
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    if (reads.length === 0) {
+      problems.push(
+        '`dynamic:` 没有写它读哪几格（写成 `<名字>(ctx: <格名>, …)`）—— ' +
+          '候选是从状态算出来的，少喂一格它会**静默地**少一类，所以哪几格必须写出来',
+      )
+    }
+    for (const cell of reads) {
+      if (!RE_CELL.test(cell)) problems.push(`\`dynamic:\` 里的格名 '${cell}' 不是一个标识符`)
+    }
+    const dup = reads.filter((c, i) => reads.indexOf(c) !== i)
+    if (dup.length) problems.push(`\`dynamic:\` 里重复写了格名：${[...new Set(dup)].join(', ')}`)
   }
 
-  return { provider: m ? m[1]! : '', output, why, problems }
+  return { provider: m ? m[1]! : '', reads, output, why, problems }
 }

@@ -18,6 +18,19 @@ export interface AdapterCapabilities {
   projections: readonly string[]
   /** Dynamic candidate provider names understood by the host. */
   dynamicProviders: readonly string[]
+  /**
+   * 每个动态提供者**读契约层的哪几格** —— TODO §12 第三条。
+   *
+   * ★ 文件里现在写着 `toolsFor(ctx: history, files, …)`。那句话是**对实现的声明**，
+   *   所以宿主必须给出自己那份，**两边要一模一样**：
+   *
+   *     少了 → 宿主没实现它声称会读的输入（候选会静默地少一类）
+   *     多了 → 实现偷偷读了没声明的格（候选说不清来路）
+   *
+   *   可选字段，是因为**没写 `dynamic:` 的宿主不需要它**；一旦文件里出现了
+   *   `dynamic:`，缺这一项就会被报出来（不是静默放行）。
+   */
+  dynamicProviderReads?: Readonly<Record<string, readonly string[]>>
   /** Position name → actions the host dispatches at that position. */
   positions: Readonly<Record<string, readonly string[]>>
   /** Actions for which the host has a handler. */
@@ -71,6 +84,42 @@ export function adapterProblems(doc: DecisionDoc, caps: AdapterCapabilities): Ad
     const provider = block.dynamic?.provider
     if (provider && !dynamicProviders.has(provider)) {
       out.push({ block: block.id, line: block.line, message: `host 没有注册 dynamic provider '${provider}'` })
+    }
+    /*
+      `dynamic:` 声明的**输入格**要和宿主那份一模一样（TODO §12 第三条）。
+
+      ★ 两个方向都要报，因为两边的病不一样：
+          文件多写了 → 宿主没实现它声称会读的输入 ⇒ 候选静默地少一类
+          宿主多读了 → 实现读了没声明的格 ⇒ 候选说不清来路
+        只查一个方向会把另一半留成盲区。
+    */
+    if (provider && block.dynamic) {
+      const declared = block.dynamic.reads
+      const hostReads = caps.dynamicProviderReads?.[provider]
+      if (!hostReads) {
+        out.push({
+          block: block.id,
+          line: block.line,
+          message: `host 没有声明 provider '${provider}' 读哪几格（文件里写的是 ${declared.join(', ')}）`,
+        })
+      } else {
+        const missing = declared.filter((c) => !hostReads.includes(c))
+        const extra = hostReads.filter((c) => !declared.includes(c))
+        if (missing.length) {
+          out.push({
+            block: block.id,
+            line: block.line,
+            message: `provider '${provider}' 声明读 [${missing.join(', ')}]，而宿主那份没有 —— 少了它候选会静默地少一类`,
+          })
+        }
+        if (extra.length) {
+          out.push({
+            block: block.id,
+            line: block.line,
+            message: `宿主那份说 provider '${provider}' 还读 [${extra.join(', ')}]，而文件里没声明 —— 候选会因为没写出来的格而变`,
+          })
+        }
+      }
     }
 
     for (const field of block.frame?.fields ?? []) {

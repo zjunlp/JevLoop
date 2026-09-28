@@ -45,7 +45,7 @@ These concepts belong in the file format:
 id
 kind: choice | noul | score | mixed | rule
 when: <position> —— <human-readable purpose>
-dynamic: <provider>(ctx) → <output> —— <reason>     (optional)
+dynamic: <provider>(ctx: <cell>, …) → <output> —— <reason>   (optional)
 ask
 options
 policy
@@ -61,18 +61,32 @@ to reparse prose: the first token is the position identifier, and the text after
 `position` and `purpose`. A position is **required** — a block without one is
 refused, because an action nothing dispatches is worse than a parse error.
 
-`dynamic:` also declares three things, not one:
+`dynamic:` also declares four things, not one:
 
 ```text
-provider   the name the host must have registered
+provider   the name of a builder the host must have registered
+reads      which contract-level state cells it reads, named one by one
 output     what shape it returns — currently always `candidates`
 why        why the candidates must be rebuilt every step
 ```
 
-The provider must be written `<name>(ctx)`: a dynamic provider exists to read the
-current state, so a declaration that omits the context is not something a host can
-implement correctly. `output` is a closed vocabulary with exactly one member —
-adding a second is a deliberate change that also needs a host handling branch.
+The provider must be written `<name>(ctx: <cell>, …)`. Naming the context alone is
+not enough: candidates are **computed from state**, so *which* cells were read is
+what a host needs to know — miss one and the candidate set silently loses a whole
+class, with nothing to report it. `output` is a closed vocabulary with exactly one
+member; adding a second is a deliberate change that also needs a host handling
+branch.
+
+The host must declare the same cells for the same provider, and the two must match
+**exactly**. Both directions are reported, because the two failures differ: the
+file naming a cell the host does not implement means the candidates are built
+without an input they claim to use; the host reading a cell the file does not name
+means the candidates move for a reason nobody wrote down.
+
+Naming matters here. `pick_input`'s candidates are built by `fileOptions`, which
+returns a criteria map — not by `unreadFiles`, the helper it calls internally that
+returns a bare array of names. The declaration names the builder, because
+`→ candidates` has to mean one thing.
 
 `when:`/`dynamic:` syntax lives in `src/decision-syntax.ts`; validation against
 `POSITIONS` and the policy lives in `src/decisiondoc.ts`.
@@ -84,8 +98,8 @@ Each host must register:
 1. **State cells**: the names and types available to frame declarations;
 2. **Projection providers**: implementations for names such as `earlierMaybe`;
 3. **Dynamic candidate providers**: implementations for the providers named by
-   `dynamic:` declarations, keyed by provider name and matching the declared
-   output shape;
+   `dynamic:` declarations, keyed by provider name, matching the declared output
+   shape, and declaring the same input cells the file names;
 4. **Position handlers**: the actions that each position can execute;
 5. **Action handlers**: the behavior of `use_tool`, `call`, `ask_human`,
    `finish`, `deliver`, and any host-specific actions;
@@ -367,16 +381,18 @@ These are intentional adapter seams, not yet an industry-wide ABI. A future
 schema version should still publish:
 
 ```text
-dynamic provider input declarations (which state cells it reads)
 evidence schema
 event and replay schema
 ```
 
-Two items have left this list. **Action semantics** (§3) are declared, exported
+Three items have left this list. **Action semantics** (§3) are declared, exported
 through `jevloop/contract`, and checked against the runtime, so a host no longer
 has to read JevLoop's loop to learn what `stop` or `deliver` does. **Projection
 declarations** (§4) now say what each of the fourteen names reads, returns, and
-promises on a missing value, with one source of truth for the names.
+promises on a missing value, with one source of truth for the names. **Dynamic
+provider inputs** are named cell by cell in the file and checked against the host's
+own declaration in both directions; the check is what corrected `unreadFiles` to
+`fileOptions`.
 
 `DECISION.md` now declares its schema version, and a missing or unrecognised one
 is refused — by `schemaProblems()`, surfaced as the `schema` layer of
@@ -386,10 +402,10 @@ things: `problems` says *this file is malformed*; the schema layer says *I canno
 read the semantics this file claims*. A file written for a future version is the
 second case, not the first.
 
-Positions, dynamic providers, actions and projections are now structured rather
-than re-parsed or inferred by each consumer. What is still missing: a `dynamic:`
-declaration says only that the provider takes the context, not which state cells
-it reads.
+Positions, dynamic providers, actions and projections are all declared rather than
+re-parsed or inferred by each consumer. What remains is evidence and replay: the
+digests are recorded, but there is no portable format for replaying one decision
+inside another runtime.
 
 Until the remaining items land, the honest claim is:
 

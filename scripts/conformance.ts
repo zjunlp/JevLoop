@@ -192,7 +192,9 @@ const SCHEMA_LINE = 'schema: decision-contract/v1\n'
 /** `needs_tool` 的 `when:` 整行 —— 删掉它、或把 `——` 换成空格，是两个演示 */
 const NEEDS_TOOL_WHEN = 'when: step-start —— 每个 step 的开头。判否就直接跳到生成，整个工具循环省掉\n'
 /** `pick_tool` 的 `dynamic:` 整行 —— 输出写成别的、或丢掉理由，是两个演示 */
-const PICK_TOOL_DYNAMIC = 'dynamic: toolsFor(ctx) → candidates —— 候选每步重建，下面列的是默认全集\n'
+const PICK_TOOL_DYNAMIC =
+  'dynamic: toolsFor(ctx: history, files, readFiles, canWrite, canDelete) → candidates —— ' +
+  '候选每步重建，下面列的是默认全集。★ 读哪几格要写出来：宿主得知道算候选时看了什么，少喂一格候选会**静默地**少一类\n'
 
 export const CASES: readonly Mutation[] = [
   {
@@ -364,7 +366,9 @@ export const CASES: readonly Mutation[] = [
       '宿主认的输出形状是**封闭表**。写成别的而没人报的话，宿主拿到一个不知道该怎么调的' +
       '提供者 —— 候选根本不会重建，而问题照样发出去，用的还是文件里那个占位选项。',
     find: PICK_TOOL_DYNAMIC,
-    to: 'dynamic: toolsFor(ctx) → everything —— 候选每步重建，下面列的是默认全集\n',
+    to:
+      'dynamic: toolsFor(ctx: history, files, readFiles, canWrite, canDelete) → everything —— ' +
+      '候选每步重建，下面列的是默认全集。★ 读哪几格要写出来：宿主得知道算候选时看了什么，少喂一格候选会**静默地**少一类\n',
     layer: 'parse',
     expect: /不认识的 dynamic 输出 'everything'/,
   },
@@ -376,7 +380,7 @@ export const CASES: readonly Mutation[] = [
       '`——` 之后那半句是这一行**唯一承载的信息**：候选为什么必须每步重算。' +
       '删掉之后它长得和一条写全的完全一样，而下一个改这里的人只能靠猜。',
     find: PICK_TOOL_DYNAMIC,
-    to: 'dynamic: toolsFor(ctx) → candidates\n',
+    to: 'dynamic: toolsFor(ctx: history, files, readFiles, canWrite, canDelete) → candidates\n',
     layer: 'parse',
     expect: /没有写为什么/,
   },
@@ -424,7 +428,9 @@ export const SHAM: readonly Sham[] = [
     edit: '`toolsFor(ctx) → candidates` 箭头两侧的空格压掉',
     silent: '（对照：箭头两侧的空格是分隔符 —— 它拆出来的两个 token 没变）',
     find: PICK_TOOL_DYNAMIC,
-    to: 'dynamic: toolsFor(ctx)→candidates —— 候选每步重建，下面列的是默认全集\n',
+    to:
+      'dynamic: toolsFor(ctx: history, files, readFiles, canWrite, canDelete)→candidates —— ' +
+      '候选每步重建，下面列的是默认全集。★ 读哪几格要写出来：宿主得知道算候选时看了什么，少喂一格候选会**静默地**少一类\n',
     layer: 'parse',
     mustPass: true,
   },

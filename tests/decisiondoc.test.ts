@@ -329,7 +329,7 @@ test('choice 少于两个选项要报错，但写了 dynamic 就放行', () => {
   const bad = problemsOf('## foo\nkind: choice\nask: 问\n- x — 甲\n')
   assert.ok(bad.some((m: string) => /至少要 2 个/.test(m)), JSON.stringify(bad))
 
-  const ok = parseDecisionDoc('## foo\nkind: choice\nwhen: tool-choice\nask: 问\ndynamic: toolsFor(ctx) → candidates —— 运行时算\n- x — 甲\n')
+  const ok = parseDecisionDoc('## foo\nkind: choice\nwhen: tool-choice\nask: 问\ndynamic: toolsFor(ctx: files, readFiles) → candidates —— 运行时算\n- x — 甲\n')
   assert.deepEqual(ok.problems, [], '写了 dynamic 就不该再要求选项数量')
 })
 

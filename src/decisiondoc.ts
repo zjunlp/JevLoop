@@ -472,7 +472,7 @@ function interpretBlock(section: RawSection, problems: DocProblem[]): DocBlock {
   if (dynamicRaw.trim()) {
     const parsed = parseDynamic(dynamicRaw)
     for (const message of parsed.problems) problems.push({ line: dynamicLine, message })
-    dynamic = { provider: parsed.provider, output: parsed.output, why: parsed.why }
+    dynamic = { provider: parsed.provider, reads: parsed.reads, output: parsed.output, why: parsed.why }
   }
 
   const resolved = interpretQuestions(questions, usedSubheading, problems)

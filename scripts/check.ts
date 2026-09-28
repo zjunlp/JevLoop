@@ -264,6 +264,8 @@ const LAYER: Record<string, number> = {
   'action-semantics': 0,
   // 帧投影的能力声明：零 import 的纯数据，可移植入口要 import 它
   'frame-projections': 0,
+  // 动态候选提供者的能力声明：零 import 的纯数据
+  'dynamic-providers': 0,
   // Adapter capability checks only consume the parsed contract shape; they do not
   // know JevLoop's state, tools, or loop, so they stay at the portable bottom.
   adapter: 0,

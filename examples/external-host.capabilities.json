@@ -43,7 +43,11 @@
     "draftMaybe",
     "writeEvidence"
   ],
-  "dynamicProviders": ["toolsFor", "unreadFiles"],
+  "dynamicProviders": ["toolsFor", "fileOptions"],
+  "dynamicProviderReads": {
+    "toolsFor": ["history", "files", "readFiles", "canWrite", "canDelete"],
+    "fileOptions": ["files", "readFiles"]
+  },
   "conformance": {
     "command": "npm run external-host",
     "negativeFixtures": "tests/adapter.test.ts",
