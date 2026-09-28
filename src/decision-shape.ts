@@ -158,16 +158,52 @@ export interface DocProblem {
   message: string
 }
 
+// ═══════════════════════════════════════════════════════════
+// 规范版本
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 文件头声明「按哪一版语义读这份文件」的那个键。
+ *
+ * ★ 没有它，一份 `DECISION.md` 只能靠**猜**自己是哪一版：解析器换了语义之后，
+ *   旧文件会被按新语义读，而且**一个错都不报** —— 这正是这个仓库反复在修的
+ *   那类失败（§8.14：删掉一个字段之后没有任何东西记得它曾经在过）。
+ *   有了版本，消费方至少能**拒绝**一份它读不懂的文件，而不是读歪。
+ */
+export const SCHEMA_KEY = 'schema'
+
+/** 当前实现的版本。改语义就要改它，否则文件说了也不算 */
+export const CURRENT_SCHEMA = 'decision-contract/v1'
+
+/**
+ * 本实现认得的版本。
+ *
+ * ★ 只有一个元素是**诚实的**：语义还没冻结，所以没有 v0 可以兼容。
+ *   等真的改了不兼容的语义，这里是「加一个」而不是「改一个」——
+ *   老文件仍然读得懂，那才是版本号存在的意义。
+ */
+export const SUPPORTED_SCHEMAS: readonly string[] = [CURRENT_SCHEMA]
+
 export interface DecisionDoc {
   title: string
   /** 第一个 `##` 之前的散文 */
   intro: string
+  /**
+   * 文件头 `schema:` 声明的版本原文；没写是 `null`。
+   *
+   * 解析器**只**把它读出来，判它合不合格是 `schemaProblems()` 的事 ——
+   * 语法和「这份文件声称自己是什么」是两件事。
+   */
+  schema: string | null
+  /** `schema:` 那一行的行号（1-based）。没写是 `null` */
+  schemaLine: number | null
   blocks: DocBlock[]
   /** `## generator` 那一段，原样进 system prompt */
   generatorSection: string
   problems: DocProblem[]
   source: string
 }
+
 
 /** 它是不是一道授权闸门 —— 从策略里推，不要人声明 */
 export function isGate(block: DocBlock): boolean {

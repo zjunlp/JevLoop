@@ -71,6 +71,10 @@ export type { Tool, ToolRegistry, ToolNameOf } from './act.ts'
 export type { ToolName } from './act-local.ts'
 export { adapterProblems, dynamicProviderOf, positionOf } from './adapter.ts'
 export type { AdapterCapabilities, AdapterProblem } from './adapter.ts'
+// ★ 只把**判版本**这一件事放到包根：它是「我读不读得懂这份文件」的问题，
+//   任何消费方都要问，包括已经用了参考运行时的那些。完整的可移植入口
+//   （parse / compile / policy / adapter）在 `jevloop/contract`，见 `contract.ts`。
+export { CURRENT_SCHEMA, SUPPORTED_SCHEMAS, schemaProblems } from './decisiondoc.ts'
 export type { DecisionDoc, DocBlock } from './decisiondoc.ts'
 export type { ContextReport, RequestEstimate, EvidencePolicy } from './context.ts'
 export { foldConversation, CONVERSATION_POLICY } from './conversation.ts'

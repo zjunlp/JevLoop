@@ -1,5 +1,7 @@
 # DECISION.md
 
+schema: decision-contract/v1
+
 这个 agent 在 loop 里要问哪些问题、每个问题归谁答。
 
 `docs/CODE-STYLE.md` 讲的是代码怎么写，这份文件讲的是**判断怎么下**。

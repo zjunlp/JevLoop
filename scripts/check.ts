@@ -354,6 +354,12 @@ const LAYER: Record<string, number> = {
   // 补的是一个实测出来的窟窿：此前没有任何调用方提供 `write_file` 的内容来源，
   // 于是它在候选里永远不出现 —— 见该文件头。
   'write-content': 3,
+  // L3 —— 可移植入口（`jevloop/contract`）。
+  // ★ 层号就是这条保证本身：它要能 import 到 `decision-compile`(L2) / `policy`(L1)，
+  //   所以必须 ≥ L3；而登记在 L3 之后，`frame.ts`(L3) / `decisions.ts`(L4) /
+  //   `agent.ts`(L5) **都 import 不进来了** —— 「外部宿主不必加载参考运行时」
+  //   从此是机器检查的，不是注释里的承诺。
+  contract: 3,
   // L4 —— 判定节点
   decisions: 4,
   // L5 —— 循环

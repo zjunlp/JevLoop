@@ -221,11 +221,10 @@ The current JevLoop document contains some reference-host details:
 - action names are checked against JevLoop's action set;
 - positions are checked against JevLoop's loop positions.
 
-These are intentional adapter seams, not yet an industry-wide ABI. Before
-claiming broad interoperability, a future schema version should publish:
+These are intentional adapter seams, not yet an industry-wide ABI. A future
+schema version should still publish:
 
 ```text
-schemaVersion
 structured position and purpose
 projection capability declarations
 dynamic provider input/output shapes
@@ -234,25 +233,68 @@ evidence schema
 event and replay schema
 ```
 
-Until then, the honest claim is:
+`DECISION.md` now declares its schema version, and a missing or unrecognised one
+is refused — by `schemaProblems()`, surfaced as the `schema` layer of
+`npm run conformance` and of `jevloop spec`. The version is deliberately a
+separate layer rather than part of `problems`, because the two mean different
+things: `problems` says *this file is malformed*; the schema layer says *I cannot
+read the semantics this file claims*. A file written for a future version is the
+second case, not the first.
 
-> `DECISION.md` has a portable declarative core and a JevLoop reference adapter.
+Until the remaining items land, the honest claim is:
+
+> `DECISION.md` has a portable declarative core, a declared schema version, and a
+> JevLoop reference adapter.
 
 It is not yet correct to claim that any Agent runtime can execute the file
 without an adapter.
 
-## 5. Reference implementation
+## 5. Consuming the contract without the runtime
+
+A host that wants only the checker must not have to install — or satisfy —
+JevLoop's own runtime. Two entry points:
+
+```ts
+import { … } from 'jevloop'           // the package root: the whole reference runtime
+import { … } from 'jevloop/contract'  // parse, compile, policy, adapter checks only
+```
+
+`jevloop/contract` deliberately excludes `decisions.ts`, `agent.ts` and
+`frame.ts`. That exclusion is enforced, not documented: `contract.ts` is
+registered at layer L3 in `scripts/check.ts`, and a dependency may only point at
+a lower-numbered layer, so importing the runtime from it fails `npm run check`.
+
+Verified end-to-end from a packed tarball installed into an empty project:
+
+```text
+jevloop/contract   works with DECISION.md removed from the package
+jevloop            fails without it — the module-load assertion needs our contract
+```
+
+That is the difference between "portable" and "install us first".
+
+## 6. Reference implementation
 
 The reference adapter currently consists of:
 
 ```text
-src/decisiondoc.ts       parse the document
-src/decision-compile.ts  compile questions and policies
-src/decisions.ts         map frames and JevLoop nodes
-scripts/conformance.ts   validate the reference contract
-examples/external-host.ts  minimal non-loop host
+src/decisiondoc.ts         parse the document and check its schema
+src/decision-compile.ts    compile questions and policies
+src/adapter.ts             check a host's declared capabilities
+src/contract.ts            the portable entry point (jevloop/contract)
+src/decisions.ts           map frames and JevLoop nodes
+scripts/conformance.ts     validate the reference contract
+scripts/adapter-report.ts  check the published capability report against the code
+examples/external-host.ts  minimal non-loop host with its own graph
 ```
 
-The external host example deliberately does not import `agent.ts`, `decisions.ts`,
-or `AgentCtx`. It proves the structural boundary, while the adapter checklist
-records the work still required for full execution interoperability.
+The external host example consumes `src/contract.ts` and nothing else. It proves
+the structural boundary, while the adapter checklist records the work still
+required for full execution interoperability.
+
+Its published capability report (`examples/external-host.capabilities.json`) is
+checked against the code by `npm run adapter-report`, and
+`tests/adapter-report.test.ts` runs the same check inside `npm test` — so an
+incomplete or stale report fails the suite rather than being discovered later.
+State-cell names are deliberately not listed in the report, because they are
+internal to the host.

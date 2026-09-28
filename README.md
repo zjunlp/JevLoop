@@ -133,6 +133,7 @@ It resolves its own backend: the hosted Jev API if `TYPESAFE_API_KEY` is set, ot
 ```bash
 npm run external-host     # a minimal external host: parse → decide → act, own state and graph
 npm run adapter-test      # the negative fixtures: unknown projection, unhandled action, …
+npm run adapter-report    # the capability report must match the host's code
 ```
 
 > **On the npm status.** `jevloop` is on npm, but the newest published version (`0.2.0`) declares `github.com/Xubqpanda/JevLoop` as its repository, while this tree is `zjunlp/JevLoop` and its `package.json` still reads `0.1.0`. So the published tarball is **not** this revision. To get this one, install from git — `npm install github:zjunlp/JevLoop` — or clone it. `npx jevloop …` is shorthand for the CLI commands above.
@@ -450,9 +451,27 @@ Its graph is triage → inspect → plan → test → interpret → prepare → 
 
 **Unknown declarations are rejected before an action runs, not logged.** [`src/adapter.ts`](src/adapter.ts) checks a host's declared capabilities against the file and returns source-located problems for an unregistered projection, a missing state cell, an unhandled action, a position that does not handle the action, or a missing dynamic provider. [`tests/adapter.test.ts`](tests/adapter.test.ts) pins each of those as a negative fixture, so an incomplete adapter fails loudly instead of silently skipping a judgement.
 
-`npm run adapter-test` runs them. The capability report the fixture publishes is [`examples/external-host.capabilities.json`](examples/external-host.capabilities.json).
+`npm run adapter-test` runs them. The capability report the fixture publishes is [`examples/external-host.capabilities.json`](examples/external-host.capabilities.json) — and it is **checked against the code**, not taken on trust: `npm run adapter-report` re-derives the positions, actions, projections, dynamic providers and graph nodes from the host and fails on any drift, and `npm test` runs the same check.
 
-**What we are not claiming.** `DECISION.md` has a portable declarative core and a JevLoop reference adapter. It is *not* yet true that any runtime can execute the file unchanged, that the projections or predicate semantics are frozen, or that replay is portable — those are open items in [`docs/DECISION-CONTRACT.md`](docs/DECISION-CONTRACT.md), which also holds the conformance checklist. [`docs/SKILL-DECISION-ADAPTER.md`](docs/SKILL-DECISION-ADAPTER.md) is a step-by-step guide for adapting an existing runtime, including how to inventory a host graph that is not shaped like ours.
+**The checker does not drag the runtime along.** A host that wants only the contract uses the second entry point:
+
+```ts
+import { adapterProblems, parseDecisionDoc, compilePolicy, resolvePolicy } from 'jevloop/contract'
+```
+
+`jevloop/contract` excludes `decisions.ts`, `agent.ts` and `frame.ts`, and the exclusion is enforced by the layering rule in `scripts/check.ts` rather than promised in a comment. From a packed tarball installed into an empty project: `jevloop/contract` works with our `DECISION.md` deleted from the package, while `jevloop` cannot load without it. That is the difference between *portable* and *install us first*.
+
+**The file says which schema it follows.** Its first lines are:
+
+```markdown
+# DECISION.md
+
+schema: decision-contract/v1
+```
+
+A missing or unrecognised version is refused — as its own layer, because *this file is malformed* and *I cannot read the semantics this file claims* are different verdicts. `npm run conformance` now reports four layers: `parse · policy · frame · schema`.
+
+**What we are not claiming.** `DECISION.md` has a portable declarative core, a declared schema version, and a JevLoop reference adapter. It is *not* yet true that any runtime can execute the file unchanged, that the projections or predicate semantics are frozen, or that replay is portable — those are open items in [`docs/DECISION-CONTRACT.md`](docs/DECISION-CONTRACT.md), which also holds the conformance checklist. [`docs/SKILL-DECISION-ADAPTER.md`](docs/SKILL-DECISION-ADAPTER.md) is a step-by-step guide for adapting an existing runtime, including how to inventory a host graph that is not shaped like ours.
 
 ## The UI
 
@@ -496,6 +515,7 @@ The files that carry the idea, in reading order:
 | [`src/policy.ts`](src/policy.ts) | answers → action, pure code |
 | [`src/meter.ts`](src/meter.ts) | ★ decisions against model calls |
 | [`src/adapter.ts`](src/adapter.ts) | the host-capability seam: state cells, projections, providers, actions |
+| [`src/contract.ts`](src/contract.ts) | the portable entry point (`jevloop/contract`) — everything above, without the runtime |
 | [`examples/external-host.ts`](examples/external-host.ts) | a host that is not JevLoop, with its own graph |
 | [`docs/DECISION-CONTRACT.md`](docs/DECISION-CONTRACT.md) | the portable-core / host-adapter boundary and conformance checklist |
 | [`docs/SKILL-DECISION-ADAPTER.md`](docs/SKILL-DECISION-ADAPTER.md) | how to adapt an existing runtime, step by step |

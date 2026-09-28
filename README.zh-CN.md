@@ -134,6 +134,7 @@ node --experimental-strip-types src/cli.ts run "列出目录里的文件并说�
 ```bash
 npm run external-host     # 最小外部宿主：解析 → 判定 → 执行，自带 state 和图
 npm run adapter-test      # 反向夹具：未知投影、未处理的 action……
+npm run adapter-report    # 能力报告必须和宿主的代码对得上
 ```
 
 > **关于 npm 状态。** `jevloop` 已经在 npm 上，但最新已发布版本（`0.2.0`）声明的仓库是 `github.com/Xubqpanda/JevLoop`，而本仓库是 `zjunlp/JevLoop`，`package.json` 还停在 `0.1.0`。所以那个已发布的 tarball **不是**这个 revision。要拿这一份，从 git 装 —— `npm install github:zjunlp/JevLoop` —— 或者直接 clone。`npx jevloop …` 只是上面那些 CLI 命令的简写。
@@ -373,9 +374,27 @@ npm run external-host
 
 **认不出的声明会在动作执行之前被拒绝，而不是记一条日志。** [`src/adapter.ts`](src/adapter.ts) 拿宿主声明出来的能力去核对文件，对未注册的投影、缺失的 state 格、未处理的 action、位置处理不了该 action、缺失的动态候选提供者，逐条给出带源位置的报错。[`tests/adapter.test.ts`](tests/adapter.test.ts) 把每一条都钉成反向夹具 —— 所以一个不完整的适配器会大声失败，而不是静默跳过某个判定。
 
-`npm run adapter-test` 跑它们。夹具发布出来的能力报告在 [`examples/external-host.capabilities.json`](examples/external-host.capabilities.json)。
+`npm run adapter-test` 跑它们。夹具发布出来的能力报告在 [`examples/external-host.capabilities.json`](examples/external-host.capabilities.json) —— 而且它是**被拿去和代码对账的**，不是凭信：`npm run adapter-report` 从宿主里重新推出位置、动作、投影、动态提供者和图节点，任何一处漂移都会失败，`npm test` 跑同一条检查。
 
-**我们不主张什么。** `DECISION.md` 有一个可移植的声明式内核，以及一个 JevLoop 参考适配器。但「任何 runtime 都能不加改动地执行这份文件」「投影与谓词语义已经冻结」「replay 已经可移植」这些**都还不成立** —— 它们是 [`docs/DECISION-CONTRACT.md`](docs/DECISION-CONTRACT.md) 里列着的开放项，那份文档同时放着合规检查表。[`docs/SKILL-DECISION-ADAPTER.md`](docs/SKILL-DECISION-ADAPTER.md) 是一份逐步指南，教你改造一个已有的运行时，包括怎么盘点一个形状和我们的不一样的宿主图。
+**检查器不会把运行时一起拖进来。** 只想要契约的宿主用第二个入口：
+
+```ts
+import { adapterProblems, parseDecisionDoc, compilePolicy, resolvePolicy } from 'jevloop/contract'
+```
+
+`jevloop/contract` 不含 `decisions.ts` / `agent.ts` / `frame.ts`，而且这个排除是 `scripts/check.ts` 的层号规则**机器保证**的，不是注释里的承诺。用打好的 tarball 装进一个空项目实测：把包里的 `DECISION.md` 删掉，`jevloop/contract` 照常工作，而 `jevloop` 加载不起来。这就是「可移植」和「先安装我们」的区别。
+
+**文件会说自己按哪一版语义读。** 开头两行是：
+
+```markdown
+# DECISION.md
+
+schema: decision-contract/v1
+```
+
+没写或认不出的版本会被拒绝 —— 而且是**单独一层**，因为「这个文件写错了」和「这个文件声称的语义我读不懂」是两个不同的结论。`npm run conformance` 现在报四层：`parse · policy · frame · schema`。
+
+**我们不主张什么。** `DECISION.md` 有一个可移植的声明式内核、一个声明出来的规范版本，以及一个 JevLoop 参考适配器。但「任何 runtime 都能不加改动地执行这份文件」「投影与谓词语义已经冻结」「replay 已经可移植」这些**都还不成立** —— 它们是 [`docs/DECISION-CONTRACT.md`](docs/DECISION-CONTRACT.md) 里列着的开放项，那份文档同时放着合规检查表。[`docs/SKILL-DECISION-ADAPTER.md`](docs/SKILL-DECISION-ADAPTER.md) 是一份逐步指南，教你改造一个已有的运行时，包括怎么盘点一个形状和我们的不一样的宿主图。
 
 ## 界面
 
@@ -419,6 +438,7 @@ CWD_ROOT=./你的项目 PORT=7800 npm run serve
 | [`src/policy.ts`](src/policy.ts) | 答案 → 动作，纯代码 |
 | [`src/meter.ts`](src/meter.ts) | ★ 判定与模型调用的对账 |
 | [`src/adapter.ts`](src/adapter.ts) | 宿主能力的接缝：state 格、投影、提供者、动作 |
+| [`src/contract.ts`](src/contract.ts) | 可移植入口（`jevloop/contract`）—— 上面那些，但不含运行时 |
 | [`examples/external-host.ts`](examples/external-host.ts) | 一个不是 JevLoop 的宿主，自带一张图 |
 | [`docs/DECISION-CONTRACT.md`](docs/DECISION-CONTRACT.md) | 可移植内核 / 宿主适配器的分界与合规检查表 |
 | [`docs/SKILL-DECISION-ADAPTER.md`](docs/SKILL-DECISION-ADAPTER.md) | 逐步改造一个已有运行时 |

@@ -1,20 +1,46 @@
 /**
- * Minimal external host for the portable `DECISION.md` contract.
+ * A minimal external host for the portable `DECISION.md` contract.
  *
  * This host deliberately does not import `agent.ts`, `decisions.ts`, `AgentCtx`,
  * or JevLoop's local tools. It supplies its own state-cell and projection
  * registry, asks a deterministic mock provider, evaluates the compiled policy,
  * and dispatches the returned actions through host-owned handlers.
  *
+ * ── Why the pieces below are exported ─────────────────────────
+ *
+ * `CAPABILITIES` and `GRAPH` are **exported facts**, not prose about this file.
+ * `scripts/adapter-report.ts` imports them and checks
+ * `examples/external-host.capabilities.json` against them, so the published
+ * capability report cannot drift from the code it describes. Before that, the
+ * report was a hand-written JSON file that **nothing read** — a declaration with
+ * no consumer, which is the failure mode this repository keeps recording.
+ *
  * @module JevLoop/external-host
  */
 
 import { readFileSync } from 'node:fs'
-import { parseDecisionDoc, type DocBlock, type DocFrameField } from '../src/decisiondoc.ts'
-import { compileQuestions, compilePolicy } from '../src/decision-compile.ts'
-import { resolvePolicy } from '../src/policy.ts'
-import { adapterProblems, type AdapterCapabilities } from '../src/adapter.ts'
-import type { Answer, AnswerSet, Question, QuestionSet } from '../src/vocab.ts'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+/*
+  ★ 全部从**可移植入口**拿 —— 这是外部宿主该用的那一个。
+    它不含参考运行时，所以这个文件里 `AgentCtx`、`decisions.ts`、`agent.ts`
+    一次都不出现，而这不是靠自律：`src/contract.ts` 登记在 L3，
+    `decisions.ts`(L4) / `agent.ts`(L5) / `frame.ts`(L3) 都 import 不进来。
+*/
+import {
+  adapterProblems,
+  compilePolicy,
+  compileQuestions,
+  parseDecisionDoc,
+  resolvePolicy,
+  type AdapterCapabilities,
+  type Answer,
+  type AnswerSet,
+  type DocBlock,
+  type DocFrameField,
+  type Question,
+  type QuestionSet,
+} from '../src/contract.ts'
 
 interface HostState {
   task: string
@@ -106,7 +132,7 @@ function mockAnswers(questions: QuestionSet, blockId: string): AnswerSet {
   return Object.fromEntries(Object.entries(questions).map(([id, question]) => [id, mockAnswer(question, blockId)]))
 }
 
-const CAPABILITIES: AdapterCapabilities = {
+export const CAPABILITIES: AdapterCapabilities = {
   stateCells: ['task', 'earlier', 'already_done', 'files_known', 'already_read', 'last', 'tool', 'input', 'output', 'target', 'evidence', 'answer'],
   projections: Object.keys(PROJECTIONS),
   dynamicProviders: ['toolsFor', 'unreadFiles'],
@@ -121,13 +147,25 @@ const CAPABILITIES: AdapterCapabilities = {
   actions: ['answer', 'ask_human', 'auto', 'auto_audit', 'call', 'continue', 'deliver', 'escalate', 'finish', 'keep_going', 'revise', 'stop', 'use', 'use_tool'],
 }
 
+/**
+ * 这份 fixture 认得的自定义位置与它们的动作 —— 报告要和它对账。
+ *
+ * `examples/custom-graph.DECISION.md` 用的是 `host:` 命名空间，所以这些名字
+ * 不在 `POSITIONS` 里：只有声明了它们的宿主才认得。
+ */
+export const HOST_POSITIONS: Readonly<Record<string, readonly string[]>> = {
+  'host:issue-triage': ['call'],
+  'host:test-failure': ['call'],
+  'host:review': ['ask_human', 'finish'],
+}
+
 interface GraphState {
   node: string
   retries: number
   trace: string[]
 }
 
-const GRAPH: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+export const GRAPH: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   classify_issue: { inspect: 'inspect_repository', escalate: 'request_review' },
   inspect_repository: { found: 'plan_patch', missing: 'request_review', retry: 'inspect_repository' },
   plan_patch: { ready: 'run_tests', revise: 'plan_patch' },
@@ -155,31 +193,45 @@ function runBlock(block: DocBlock, state: HostState): string {
   return `  ${block.id}: fields=${Object.keys(frame).length}, action=${outcome.action}, rule=${outcome.ruleIndex}`
 }
 
-const path = process.argv[2] ?? new URL('../DECISION.md', import.meta.url).pathname
-const doc = parseDecisionDoc(readFileSync(path, 'utf8'))
-if (doc.problems.length > 0) throw new Error(doc.problems.map((problem) => `${problem.line}: ${problem.message}`).join('\n'))
+/**
+ * 跑一遍 fixture，**返回**每一行而不是自己打印。
+ *
+ * 返回而不是打印，是为了让 `scripts/adapter-report.ts` 能在不产生输出的情况下
+ * 复用同一条路径 —— 报告要核对的是**同一份**能力，不是另抄一遍。
+ */
+export function runDemo(path = new URL('../DECISION.md', import.meta.url).pathname): string[] {
+  const out: string[] = []
+  const doc = parseDecisionDoc(readFileSync(path, 'utf8'))
+  if (doc.problems.length > 0) throw new Error(doc.problems.map((problem) => `${problem.line}: ${problem.message}`).join('\n'))
 
-const capabilities = adapterProblems(doc, CAPABILITIES)
-if (capabilities.length > 0) throw new Error(capabilities.map((problem) => `${problem.block}:${problem.line} ${problem.message}`).join('\n'))
+  const capabilities = adapterProblems(doc, CAPABILITIES)
+  if (capabilities.length > 0) throw new Error(capabilities.map((problem) => `${problem.block}:${problem.line} ${problem.message}`).join('\n'))
 
-const state = { ...BASE_STATE }
-const selected = ['needs_tool', 'pick_tool', 'step_ok', 'is_done']
-console.log('external host: parsed DECISION.md without JevLoop agent loop')
-for (const id of selected) {
-  const block = doc.blocks.find((candidate) => candidate.id === id)
-  if (!block) throw new Error(`missing block '${id}'`)
-  console.log(runBlock(block, state))
+  const state = { ...BASE_STATE }
+  out.push('external host: parsed DECISION.md without JevLoop agent loop')
+  for (const id of ['needs_tool', 'pick_tool', 'step_ok', 'is_done']) {
+    const block = doc.blocks.find((candidate) => candidate.id === id)
+    if (!block) throw new Error(`missing block '${id}'`)
+    out.push(runBlock(block, state))
+  }
+
+  const graph = { node: 'classify_issue', retries: 0, trace: [] } satisfies GraphState
+  for (const action of ['inspect', 'retry', 'found', 'ready', 'fail', 'fixable', 'ready', 'pass', 'deliver']) {
+    if (action === 'retry') graph.retries += 1
+    nextNode(graph, action)
+  }
+  out.push(`external host: custom graph reached ${graph.node} after ${graph.retries} retry`)
+  out.push(`external host: graph trace ${graph.trace.join(' | ')}`)
+
+  const escalation = { node: 'classify_issue', retries: 0, trace: [] } satisfies GraphState
+  for (const action of ['escalate', 'approved']) nextNode(escalation, action)
+  out.push(`external host: escalation graph reached ${escalation.node}`)
+  out.push('external host: adapter conformance probe passed')
+  return out
 }
 
-const graph = { node: 'classify_issue', retries: 0, trace: [] } satisfies GraphState
-for (const action of ['inspect', 'retry', 'found', 'ready', 'fail', 'fixable', 'ready', 'pass', 'deliver']) {
-  if (action === 'retry') graph.retries += 1
-  nextNode(graph, action)
+// 直接跑时进 runDemo；被 import（报告脚本、单测）时不跑 —— 否则核对能力这件事
+// 会顺带把整张演示表打出来。
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  for (const line of runDemo(process.argv[2])) console.log(line)
 }
-console.log(`external host: custom graph reached ${graph.node} after ${graph.retries} retry`)
-console.log(`external host: graph trace ${graph.trace.join(' | ')}`)
-
-const escalation = { node: 'classify_issue', retries: 0, trace: [] } satisfies GraphState
-for (const action of ['escalate', 'approved']) nextNode(escalation, action)
-console.log(`external host: escalation graph reached ${escalation.node}`)
-console.log('external host: adapter conformance probe passed')

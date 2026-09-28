@@ -1,6 +1,6 @@
 {
   "adapter": "examples/external-host.ts",
-  "contractSchema": "draft-portable-core",
+  "contractSchema": "decision-contract/v1",
   "level": 2,
   "description": "Reference fixture: local decision execution plus a host-owned multi-node graph.",
   "positions": {
@@ -11,6 +11,11 @@
     "after-tool": ["continue", "stop", "finish", "keep_going"],
     "after-generate": ["deliver", "revise"]
   },
+  "hostPositions": {
+    "host:issue-triage": ["call"],
+    "host:test-failure": ["call"],
+    "host:review": ["ask_human", "finish"]
+  },
   "customGraphNodes": [
     "classify_issue",
     "inspect_repository",
@@ -18,9 +23,9 @@
     "run_tests",
     "interpret_failure",
     "prepare_candidate",
-    "request_review",
-    "done"
+    "request_review"
   ],
+  "terminalStates": ["done"],
   "graphFeatures": ["branch", "retry", "escalation", "terminal-state"],
   "projections": [
     "earlierMaybe",
@@ -41,14 +46,16 @@
   ],
   "dynamicProviders": ["toolsFor", "unreadFiles"],
   "conformance": {
-    "command": "node --experimental-strip-types examples/external-host.ts",
+    "command": "npm run external-host",
     "negativeFixtures": "tests/adapter.test.ts",
+    "reportCheck": "npm run adapter-report",
     "dispatchAfterCapabilityCheck": true
   },
   "knownLimitations": [
     "The fixture uses a deterministic mock provider.",
     "Projection and dynamic-provider names are host-owned capabilities.",
     "The graph is a demonstration, not a universal graph runtime.",
-    "Replay and event export are not yet implemented by this fixture."
+    "Replay and event export are not yet implemented by this fixture.",
+    "State-cell names are not listed here; the report is checked against the code with npm run adapter-report."
   ]
 }

@@ -18,6 +18,7 @@
     "conformance": "node --experimental-strip-types scripts/conformance.ts",
     "external-host": "node --experimental-strip-types examples/external-host.ts",
     "adapter-test": "node --experimental-strip-types --test tests/adapter.test.ts",
+    "adapter-report": "node --experimental-strip-types scripts/adapter-report.ts",
     "bench": "node --experimental-strip-types bench/run.ts",
     "compare": "node --experimental-strip-types bench/compare.ts",
     "latency": "node --experimental-strip-types bench/latency.ts"
@@ -41,6 +42,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./contract": {
+      "types": "./dist/contract.d.ts",
+      "default": "./dist/contract.js"
     }
   },
   "files": [

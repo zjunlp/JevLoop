@@ -42,7 +42,7 @@ import { fileURLToPath } from 'node:url'
 
 import { USAGE, parseArgv } from './cli-args.ts'
 import { compilePolicy, compileQuestions } from './decision-compile.ts'
-import { headline, parseDecisionDoc, isGate, summarize } from './decisiondoc.ts'
+import { headline, parseDecisionDoc, schemaProblems, isGate, summarize } from './decisiondoc.ts'
 import { describeGates, type GateOverrides } from './gates.ts'
 // ⚠ `./decisions.ts` **不在这里静态 import**：它在**模块加载时**就把磁盘上那份
 //   DECISION.md 读进来、解析、并按块校验帧声明，不合格当场抛。静态 import 会让
@@ -343,10 +343,28 @@ async function spec(fileArg: string | undefined): Promise<number> {
     for (const m of frameBad) console.log(yellow(`    ✗ ${m}`))
   }
 
-  const problems = doc.problems.length + broken + frameBad.length
+  /*
+    ── 第四层：版本声明 ────────────────────────────────────────
+
+    ★ 它和上面三层分开，是因为**补救动作不同**：`problems` 说「文件写错了」，
+      这一层说「文件声称的语义我读不懂」。后者在一份旧文件上**是正常的** ——
+      文件没错，是消费者该说不。混在一起，这两种结论就再也分不开。
+
+    ★ 版本单独放一层还有一个更硬的理由：一份**没写版本**的文件，其余三层
+      一条都不响，而它从此不再说自己按哪一版读。等语义真改了，它会被按新
+      语义读、一个错都不报 —— 那正是 §8.14 那类失败。
+  */
+  const schemaBad = schemaProblems(doc)
+  if (schemaBad.length > 0) {
+    console.log('')
+    console.log(yellow(`  ${schemaBad.length} schema problem(s):`))
+    for (const m of schemaBad) console.log(yellow(`    ${m}`))
+  }
+
+  const problems = doc.problems.length + broken + frameBad.length + schemaBad.length
   console.log('')
   if (problems === 0) {
-    console.log(green('  ✓ parses clean, every predicate compiles, and every judgement declares what it sees'))
+    console.log(green(`  ✓ parses clean, every predicate compiles, every judgement declares what it sees, and it says which schema it follows (${doc.schema})`))
   }
   console.log('')
 

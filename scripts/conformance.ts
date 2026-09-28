@@ -44,7 +44,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { compilePolicy } from '../src/decision-compile.ts'
-import { parseDecisionDoc, summarize, type DecisionDoc } from '../src/decisiondoc.ts'
+import { parseDecisionDoc, schemaProblems, summarize, type DecisionDoc } from '../src/decisiondoc.ts'
 import { frameSpecsOf } from '../src/decisions.ts'
 import { frameSpecViolations } from '../src/frame.ts'
 
@@ -52,16 +52,17 @@ import { frameSpecViolations } from '../src/frame.ts'
 // 三层检查
 // ═══════════════════════════════════════════════════════════
 
-/** `DECISION.md` 的三层，从外到里。层号用在输出里 */
-export type Layer = 'parse' | 'policy' | 'frame'
+/** `DECISION.md` 的四层，从外到里。层号用在输出里 */
+export type Layer = 'parse' | 'policy' | 'frame' | 'schema'
 
-export const LAYERS: readonly Layer[] = ['parse', 'policy', 'frame']
+export const LAYERS: readonly Layer[] = ['parse', 'policy', 'frame', 'schema']
 
-/** 三层各自的问题。全空 = 这份文件合格 */
+/** 四层各自的问题。全空 = 这份文件合格 */
 export interface Problems {
   parse: string[]
   policy: string[]
   frame: string[]
+  schema: string[]
 }
 
 function parseLayer(doc: DecisionDoc): string[] {
@@ -93,20 +94,28 @@ function frameLayer(doc: DecisionDoc): string[] {
   }
 }
 
-/** 对**任意**一份 `DECISION.md` 文本跑三层检查 */
+/** 对**任意**一份 `DECISION.md` 文本跑四层检查 */
 export function inspect(md: string): Problems {
   const doc = parseDecisionDoc(md)
-  return { parse: parseLayer(doc), policy: policyLayer(doc), frame: frameLayer(doc) }
+  return {
+    parse: parseLayer(doc),
+    policy: policyLayer(doc),
+    frame: frameLayer(doc),
+    // ★ 版本单独一层，而**不是**并进 parse：`problems` 说「文件写错了」，
+    //   这一层说「文件声称的语义我读不懂」。后者在一份旧文件上**是正常的** ——
+    //   文件没错，是消费者该说不。混在一起，这两种结论就再也分不开。
+    schema: schemaProblems(doc),
+  }
 }
 
-/** `inspect` 的汇总：三层各几条 */
+/** `inspect` 的汇总：四层各几条 */
 export function counts(p: Problems): Record<Layer, number> {
-  return { parse: p.parse.length, policy: p.policy.length, frame: p.frame.length }
+  return { parse: p.parse.length, policy: p.policy.length, frame: p.frame.length, schema: p.schema.length }
 }
 
-/** 三层加起来几条 */
+/** 四层加起来几条 */
 export function total(p: Problems): number {
-  return p.parse.length + p.policy.length + p.frame.length
+  return p.parse.length + p.policy.length + p.frame.length + p.schema.length
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -161,11 +170,12 @@ export interface Sham extends Demo {
 
 export type Case = Mutation | Sham
 
-/** 三类静默失败。分组的理由是**补救动作不同**，不是严重程度 */
+/** 四类静默失败。分组的理由是**补救动作不同**，不是严重程度 */
 export const FAMILIES = {
   gate: '闸门静默失效 —— 该拦住的那一步直接放行（fail open）',
   declaration: '声明静默缩水 —— 判定少看一栏，而没有人记得它曾经在过',
   action: '判定静默走空 —— 问了、记了，而没有东西照它做',
+  version: '版本静默消失 —— 文件不再说自己按哪一版语义读',
 } as const
 
 export type Family = keyof typeof FAMILIES
@@ -177,6 +187,8 @@ const NEEDS_TOOL_CANWRITE =
   '  - canWrite                            —— 「能不能写」是**代码**按精确规则判的（§8.1 第三行），不该让判定模型再判一遍\n'
 const NEEDS_TOOL_TASK =
   '  + task          400                   —— 整个判定的主体：问的是「这个任务还有没有没做的动作」'
+/** 版本声明那一行的原文。删掉它 / 只改空格，是两个相反的演示 */
+const SCHEMA_LINE = 'schema: decision-contract/v1\n'
 
 export const CASES: readonly Mutation[] = [
   {
@@ -302,6 +314,19 @@ export const CASES: readonly Mutation[] = [
     layer: 'parse',
     expect: /判定 id 'is_done' 重复/,
   },
+  {
+    id: 'schema-dropped',
+    family: 'version',
+    edit: '删掉文件头的 `schema: decision-contract/v1` 整行',
+    silent:
+      '★ 这一行删掉之后**其余三层一条都不响**：块、问题、策略、帧全都还是合法的，' +
+      '`jevloop spec` 也照样打印 ✓ —— 而这份文件从此**不再说自己按哪一版语义读**。' +
+      '等语义真的改了，它会被按新语义读，而且没有任何东西能发现。',
+    find: SCHEMA_LINE,
+    to: '',
+    layer: 'schema',
+    expect: /没有声明 `schema:`/,
+  },
 ]
 
 /**
@@ -328,6 +353,16 @@ export const SHAM: readonly Sham[] = [
     find: 'policy:\n  - prob:needs_tool >= 0.5 → use_tool\n',
     to: '**这一行是后来补的说明，只给人读。**\n\npolicy:\n  - prob:needs_tool >= 0.5 → use_tool\n',
     layer: 'parse',
+    mustPass: true,
+  },
+  {
+    id: 'sham-schema-spacing',
+    family: 'version',
+    edit: '`schema: decision-contract/v1` 的冒号后空格去掉',
+    silent: '（对照：冒号两侧的空格是分隔符，不是版本的一部分）',
+    find: SCHEMA_LINE,
+    to: SCHEMA_LINE.replace(': ', ':'),
+    layer: 'schema',
     mustPass: true,
   },
 ]
@@ -435,10 +470,11 @@ export function main(argv: readonly string[]): number {
         `${s.modelDecisions} to the decision model, ${s.codeDecisions} by code`,
     ),
   )
+  console.log(D(`  schema    : ${parseDecisionDoc(md).schema ?? '（没声明 —— 这是不合格的）'}`))
 
   const ok0 = total(base) === 0
   console.log(
-    `  baseline  : parse ${base.parse.length} · policy ${base.policy.length} · frame ${base.frame.length}   ` +
+    `  baseline  : parse ${base.parse.length} · policy ${base.policy.length} · frame ${base.frame.length} · schema ${base.schema.length}   ` +
       (ok0 ? G('✓ clean') : R('✗ 真文件本身就不合格')),
   )
   for (const l of LAYERS) for (const m of base[l]) console.log(R(`      [${l}] ${m}`))

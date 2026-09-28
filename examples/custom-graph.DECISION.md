@@ -1,5 +1,7 @@
 # Custom graph fixture
 
+schema: decision-contract/v1
+
 This fixture shows that a host may declare decision nodes that are not JevLoop's
 seven reference nodes. The host-owned graph in `external-host.ts` supplies the
 transitions.

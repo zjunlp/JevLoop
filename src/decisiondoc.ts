@@ -100,6 +100,9 @@ import {
   KINDS,
   ANY_POSITION_ACTIONS,
   POSITIONS,
+  SCHEMA_KEY,
+  CURRENT_SCHEMA,
+  SUPPORTED_SCHEMAS,
   type BlockKind,
   type DocBlock,
   type DocFrame,
@@ -113,7 +116,7 @@ import {
   type Primitive,
 } from './decision-shape.ts'
 
-export { isGate } from './decision-shape.ts'
+export { isGate, CURRENT_SCHEMA, SUPPORTED_SCHEMAS, SCHEMA_KEY } from './decision-shape.ts'
 export type { BlockKind, DecisionDoc, DocBlock, DocFrame, DocFrameField, DocFrameExclusion, DocOption, DocPolicyRule, DocProblem, DocQuestion, DocSummary, Primitive } from './decision-shape.ts'
 
 // ═══════════════════════════════════════════════════════════
@@ -165,8 +168,16 @@ interface RawSection {
   lines: RawLine[]
 }
 
-function splitSections(lines: string[]): { title: string; intro: string; sections: RawSection[] } {
+function splitSections(lines: string[]): {
+  title: string
+  intro: string
+  schema: string | null
+  schemaLine: number | null
+  sections: RawSection[]
+} {
   let title = ''
+  let schema: string | null = null
+  let schemaLine: number | null = null
   const intro: string[] = []
   const sections: RawSection[] = []
   let current: RawSection | null = null
@@ -185,13 +196,25 @@ function splitSections(lines: string[]): { title: string; intro: string; section
         title = t[1]!
         return
       }
+      /*
+        ★ 版本声明**在第一个 `##` 之前**，而且**不进 `intro`**。
+          留在 intro 里的话它只是又一行散文 —— 谁都能写、没人会读，
+          而「声明了却没有消费方」正是这个仓库记过好几次的那件事（§8.16）。
+          写进 `##` 之后则按「不认识的键」报出来：位置错了本身就该出声。
+      */
+      const key = RE_KEY.exec(text.trim())
+      if (key && key[1] === SCHEMA_KEY) {
+        schema = key[2]!.trim()
+        schemaLine = line
+        return
+      }
       intro.push(text)
       return
     }
     current.lines.push({ text, line })
   })
 
-  return { title, intro: intro.join('\n').trim(), sections }
+  return { title, intro: intro.join('\n').trim(), schema, schemaLine, sections }
 }
 
 /** 解析过程中的一个问题：选项还没定型，因为类型要靠写法判断 */
@@ -564,7 +587,7 @@ function minOptions(questions: DocQuestion[], dynamic: string, problems: DocProb
 
 export function parseDecisionDoc(md: string): DecisionDoc {
   const problems: DocProblem[] = []
-  const { title, intro, sections } = splitSections(md.split('\n'))
+  const { title, intro, schema, schemaLine, sections } = splitSections(md.split('\n'))
 
   const blocks: DocBlock[] = []
   const generator: string[] = []
@@ -586,11 +609,40 @@ export function parseDecisionDoc(md: string): DecisionDoc {
   return {
     title,
     intro,
+    schema,
+    schemaLine,
     blocks,
     generatorSection: generator.join('\n').trim(),
     problems,
     source: md,
   }
+}
+
+/**
+ * 版本声明合不合格。
+ *
+ * ★ 单独一个函数、单独一层（`conformance` 的 `schema` 层），不混进 `problems`，
+ *   理由是**这两件事的补救动作不同**：`problems` 说「这个文件写错了」，
+ *   这里说「这个文件声称的语义我读不懂」。后者在旧文件上**是正常的** ——
+ *   一份按 v1 写的文件遇到只认 v2 的消费者，文件没错，是消费者该说不。
+ *   混在一起会让「语法对不对」和「我读不读得懂」再也分不开。
+ *
+ * 没写也是不合格：不声明版本的文件，消费方只能猜。
+ */
+export function schemaProblems(doc: DecisionDoc): string[] {
+  if (doc.schema === null) {
+    return [
+      `文件头没有声明 \`${SCHEMA_KEY}:\` —— 消费方无法判断该按哪一版语义读它。` +
+        `当前版本是 \`${CURRENT_SCHEMA}\`，写在第一个 ## 之前`,
+    ]
+  }
+  if (!SUPPORTED_SCHEMAS.includes(doc.schema)) {
+    return [
+      `L${doc.schemaLine} 不认识的 ${SCHEMA_KEY} '${doc.schema}' —— ` +
+        `本实现支持 ${SUPPORTED_SCHEMAS.join(' / ')}`,
+    ]
+  }
+  return []
 }
 
 // ═══════════════════════════════════════════════════════════

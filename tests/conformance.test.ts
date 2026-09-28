@@ -52,9 +52,9 @@ const byId = (id: string): Mutation => {
 // 基线
 // ═══════════════════════════════════════════════════════════
 
-test('真文件三层全干净 —— 基线红了，下面的突变结论都没有意义', () => {
+test('真文件四层全干净 —— 基线红了，下面的突变结论都没有意义', () => {
   const p = inspect(MD)
-  assert.deepEqual(p, { parse: [], policy: [], frame: [] })
+  assert.deepEqual(p, { parse: [], policy: [], frame: [], schema: [] })
   assert.equal(total(p), 0)
 })
 
