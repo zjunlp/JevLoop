@@ -537,7 +537,7 @@ Everything else is plumbing. The parts you are most likely to want to replace:
 
 Read [`CONTRIBUTING.md`](CONTRIBUTING.md) first — it says what we merge and what we close without discussion.
 
-[`TODO.md`](TODO.md) is what is left to build, ordered by what blocks the claim rather than by difficulty: the tool surface is four tools wide, decision frames have no cache policy, the loop does not run long, and the contract has no second implementer. Each entry says why it matters and where to start.
+[`TODO.md`](TODO.md) is what is left to build, ordered by what blocks the claim rather than by difficulty: the tool surface is five tools wide, decision frames have no cache policy, the loop does not run long, and the contract has no second implementer. Each entry says why it matters and where to start.
 
 ## License
 

@@ -12,17 +12,19 @@ If you want to take one of these on, **open an issue saying so first**. We will 
 
 # Part 1 · The harness itself
 
-## 1 · The tool surface is four tools wide, so the decision space is too
+## 1 · The tool surface is five tools wide, so the decision space is too
 
-**Why this blocks the claim.** Every judgement in this loop is shaped around four tools — `list_dir`, `read_file`, `write_file`, `done` — and the most dangerous action available is writing a file.
+**Why this blocks the claim.** Every judgement in this loop is shaped around five tools — `list_dir`, `read_file`, `write_file`, `delete_file`, `done` — and until 2026-09-28 the most dangerous action available was writing a file.
 
-That leaves `grade_risk` close to untestable. **A risk ladder only means something if there is something genuinely risky to climb it.** The breadth of the decision space also decides how far "judgements can leave the model" can be verified at all: four tools only ever demonstrate file operations, and that is a narrow claim to build a paper on.
+That leaves `grade_risk` close to untestable. **A risk ladder only means something if there is something genuinely risky to climb it.** The breadth of the decision space also decides how far "judgements can leave the model" can be verified at all: five tools only ever demonstrate file operations, and that is a narrow claim to build a paper on.
 
 - [x] Split the tool seam — interface from implementation (`act.ts` + `act-local.ts`). The intended shape is in `docs/CODE-STYLE.md` §10. *(2026-09-26. The registry could not stay in `tools.ts` — see §10 for why the landed shape differs from the plan.)*
-- [ ] Add tools with real consequences: shell execution, git operations.
-- [ ] Give every level of the risk ladder something real to point at.
+- [x] **Give the top of the risk ladder something real to point at.** *(2026-09-28. `delete_file` — `baseRisk: 3`, destructive, `safePath`-sandboxed, refuses non-empty directories, and it only enters the candidate set when the caller passes `allowDelete`. So `grade_risk`'s `score:risk >= 2 → ask_human` hard gate now has a real call to stop: `tests/act-local.test.ts` drives the loop with a decision backend that *wants* to delete and no `onAskHuman`, and asserts the file is still on disk.)*
+- [ ] **The ladder is still missing its second rung.** `irreversible` (2) has no tool pointing at it. The natural candidate is `move_file`, and it is not a copy of `delete_file`: its input is two lines (source + destination), the destination is in no closed set, so it needs a generation path of its own — a separate cut. `tests/act-local.test.ts` pins the empty rung, so adding one forces the decision.
+- [ ] **Make the tool table injectable** — the second cut. `agent.ts` / `decisions.ts` still import `LOCAL_TOOLS` directly, so pointing the kernel at another provider (a sandbox, a remote FS, a stub) still means editing it. That half of the seam is *not* done, and `tests/act.test.ts` says so out loud rather than implying otherwise.
+- [ ] Add tools with real consequences beyond the file system: shell execution, git operations. **Deliberately not yet.** §8 is open — no authentication, no ceiling on CPU, memory, disk or wall clock, and sandboxing covers path escape only — so a tool that starts a process widens a boundary that is known not to be hardened. Do §8 first, or state explicitly that this loop is loopback-only and will stay that way, and then add them.
 
-**Where:** `src/act.ts` (the contract) + `src/act-local.ts` (the local file-system provider and the registry); `tools.ts` is gone. **Still module-level**, so the kernel cannot yet be pointed at another provider without editing it — making the table injectable is the second cut, and it belongs with the shell/git tools. **Size:** medium.
+**Where:** `src/act.ts` (the contract) + `src/act-local.ts` (the local file-system provider and the registry); `tools.ts` is gone. The registry is **still module-level**, so the kernel cannot yet be pointed at another provider without editing it — making the table injectable is the second cut, and it belongs with the shell/git tools. **Size:** medium.
 
 ## 2 · Judgements sit on their thresholds, because the frames are thin
 

@@ -4,10 +4,10 @@
  * 缝的另一角（定义在 `act.ts`）：
  *
  *     定义     `Tool` 接口 + 注册表契约   （act.ts）
- *     提供者   四个工具的真实副作用        ← 这里
+ *     提供者   五个工具的真实副作用        ← 这里
  *     消费     gradeRisk / pickTool       （decisions.ts / agent.ts）
  *
- * 这里住着全仓库**唯一**产生真实副作用的地方：四个工具的实现、以及那道
+ * 这里住着全仓库**唯一**产生真实副作用的地方：五个工具的实现、以及那道
  * 「路径锁死在工作目录内」的检查。**换后端就是换这个文件** —— 指向沙箱、
  * 远程 FS 或一个测试桩，内核（`agent.ts` / `decisions.ts`）一行都不用动。
  *
@@ -21,7 +21,7 @@
  * @module JevLoop/act-local
  */
 
-import { readFile, writeFile, readdir, mkdir, stat } from 'node:fs/promises'
+import { readFile, writeFile, readdir, mkdir, stat, unlink, rmdir } from 'node:fs/promises'
 import { resolve, relative, dirname, sep } from 'node:path'
 
 import type { ToolRegistry } from './act.ts'
@@ -97,6 +97,41 @@ export const LOCAL_TOOLS = {
       await mkdir(dirname(path), { recursive: true })
       await writeFile(path, content, 'utf8')
       return `已写入 ${relative(cwd, path)}（${content.length} 字符）`
+    },
+  },
+
+  /*
+    ── 为什么加一个**破坏性**工具（TODO §1）──────────────────────
+
+    §1 写的是「风险阶梯要有真东西可爬」。四个工具里最危险的只是写文件，
+    于是 `grade_risk` 的第 3、4 档（irreversible / destructive）**从来没有
+    被真的走到过** —— 一条没人爬过的梯子，说它拦得住什么都是空的。
+
+    ★ 为什么不是 shell / git：§8 的安全边界还开着（没有鉴权、没有 CPU/内存/
+      磁盘/墙钟上限、沙箱只覆盖路径逃逸）。在这种情况下开一个能起进程的口子，
+      是在**放宽**一个已知未加固的边界，而不是补上它。这个工具留在现有沙箱内：
+      路径照走 `safePath`，只动工作目录里的东西，不起进程。
+
+    ★ 它只删**空目录**：删非空目录要递归，而递归删是不可逆的失控面。真需要的话，
+      让人先手动清空 —— 这条限制是刻意的，不是没做完。
+  */
+  delete_file: {
+    name: 'delete_file',
+    description: '删除一个文件或一个空目录。输入是相对工作目录的路径。不可撤销',
+    // 3 = destructive：`DECISION.md` 风险阶梯的最高档，于是
+    // `score:risk >= 2 → ask_human` 那道硬闸门第一次有真东西可指
+    baseRisk: 3,
+    async run(input: string, cwd: string): Promise<string> {
+      const path = safePath(cwd, input.trim())
+      const info = await stat(path)
+      const shown = relative(cwd, path)
+      if (info.isDirectory()) {
+        await rmdir(path)
+        return `已删除空目录 ${shown}`
+      }
+      const size = info.size
+      await unlink(path)
+      return `已删除 ${shown}（${size} 字节）`
     },
   },
 

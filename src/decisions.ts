@@ -285,6 +285,7 @@ const FRAME_NEEDS_TOOL: FrameSpec = {
   excluded: [
     ['cwd', '路径不进判定：目标由 `target` 那一栏（gradeRisk）或候选（pickInput）表达，工作目录本身没有信息'],
     ['canWrite', '「能不能写」是**代码**按精确规则判的（§8.1 第三行），不该让判定模型再判一遍'],
+    ['canDelete', '「能不能删」是**代码**的规则，和 canWrite 同一道门 —— 它决定 `delete_file` 进不进候选，不进帧'],
     ['lastTool', '工具名单独列出来会诱导它去评判「上一个工具选得对不对」——那是 `stepOk` 的职责'],
     ['draft', '草稿是生成之后才有的东西；这一步根本还没到生成'],
   ],
@@ -336,6 +337,7 @@ const FRAME_PICK_TOOL: FrameSpec = {
   excluded: [
     ['cwd', '同 needsTool：工作目录本身没有信息，目标由候选表达'],
     ['canWrite', '「能不能写」是代码的规则，不是判定 —— 它决定 `write_file` 进不进候选，不进帧'],
+    ['canDelete', '同 canWrite：它决定 `delete_file` 进不进候选；进了候选就说明调用方已经开了这道门'],
     ['lastTool', '★ 候选本身**已经按做过的动作重建过**（§8.4）；再把「上一个是什么」放进来，会让「还有哪些工具」和「已经做过什么」互相打架'],
     ['draft', '还没到生成那一步'],
   ],
@@ -377,6 +379,7 @@ const FRAME_PICK_INPUT: FrameSpec = {
       '★ 候选（`fileOptions`）本身已经是「还没读过的那些」这个闭集的投影；再给一遍历史会让「还剩哪些」和「做过什么」两个信号互相打架（§8.4 的同一个坑）',
     ],
     ['canWrite', '写路径的候选不由这里产生 —— `write_content` 生成路径，判定不参与'],
+    ['canDelete', '删哪一个不由这一栏产生 —— 目标路径来自调用方的输入来源（同 `write_file`）'],
     ['earlier', '这一步是在一个已经选定的工具内部挑参数，指代关系由 task + 候选表达就够了'],
     ['lastResult', '结果的**内容**与「挑哪个文件」无关；它是 `stepOk` 与 `canDeliver` 的依据'],
     ['draft', '还没到生成那一步'],
@@ -421,6 +424,7 @@ const FRAME_GRADE_RISK: FrameSpec = {
     ['files', '目录里有哪些文件与「这一次调用多危险」无关'],
     ['readFiles', '读过什么与风险无关'],
     ['canWrite', '能不能写是另一道门；这里问的是**已经决定要做的这一调**有多危险'],
+    ['canDelete', '能不能删是另一道门（同 canWrite）；这里问的是**已经决定要做的这一调**有多危险，而 base_risk 已经把 destructive 标出来了'],
     ['earlier', '多轮的上文不改变这一次调用的风险'],
     [
       'lastResult',
@@ -468,6 +472,7 @@ const FRAME_STEP_OK: FrameSpec = {
     ['cwd', '与「这一次调用本身成没成」无关'],
     ['files', '同上：成功与否看的是这一次的输入与输出'],
     ['canWrite', '与这一步的成败无关'],
+    ['canDelete', '与这一步的成败无关'],
     ['earlier', '★ 上文会把判定拉向「整体进展如何」，而这一栏问的是刚刚那一次调用'],
     ['draft', '草稿在这一步之后才有'],
   ],
@@ -505,6 +510,7 @@ const FRAME_IS_DONE: FrameSpec = {
     ['cwd', '与「任务做完没有」无关'],
     ['files', '「目录里有什么」不等于「任务要求的做完了没」—— 正是 needsTool 记的那个陷阱的另一面'],
     ['canWrite', '与完成度无关'],
+    ['canDelete', '与完成度无关'],
     ['earlier', '多轮的上文属于「之前问过什么」；完成度由 task + 覆盖 + 步骤本身决定'],
     ['lastTool', '单列上一个工具会把判定拉向「刚才那步怎么样」—— 那是 stepOk 的层级'],
     ['lastResult', '最近一条结果已经**逐字**在 `steps` 里了，单列出来是重复的语气加强'],
@@ -571,6 +577,7 @@ const FRAME_CAN_DELIVER: FrameSpec = {
     ['files', '目录清单不是证据；证据是**做过什么、看到了什么**'],
     ['readFiles', '读过哪些文件同样不是证据本身'],
     ['canWrite', '与交付判据无关'],
+    ['canDelete', '与交付判据无关'],
     ['earlier', '★ 多轮的上文会把「这份草稿说的是不是这一轮做过的事」冲淡；交付核对的是**这一轮**的证据'],
     ['lastTool', '单列上一个工具会把判定拉向「刚才那步」，而它要核对的是整份草稿'],
     [

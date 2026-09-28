@@ -93,6 +93,18 @@ export interface AgentOptions {
    */
   provideWriteInput?: null | ((ctx: AgentCtx) => string | undefined | Promise<string | undefined>)
   /**
+   * 是否允许 `delete_file` 进候选。**默认 false。**
+   *
+   * ★ 刻意**不**复用 `provideWriteInput`/`canWrite`：写入和删除不是同一个
+   *   信任级别，复用等于替已经开了写入的调用方凭空放宽边界。
+   *
+   * 打开之后，`delete_file` 的目标路径仍然由 `provideWriteInput` 给
+   * （「删哪一个」不是从候选里挑的 —— 见 `resolveInput`），而且它必须过
+   * `grade_risk` 的 `score:risk >= 2 → ask_human` 硬闸门：没有 `onAskHuman`
+   *   时**默认拒绝**，于是 loop 停在授权那一步，而不是把文件删掉。
+   */
+  allowDelete?: boolean
+  /**
    * 之前的轮次。**多轮会话的入口** —— 没有它，每一句都是孤立的任务，
    * 「再读一遍那个文件」里的"那个"无处可指。
    *
@@ -315,6 +327,9 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     history: [],
     // `null` = 调用方明确不要写入 → 门关上，`write_file` 不进候选（见 `frame.ts`）
     canWrite: typeof writeInput === 'function',
+    // 删除**不跟着写入走**：默认 false，所以 `delete_file` 对现有调用方不存在。
+    // 要看它进候选，调用方必须显式传 `allowDelete`（见 `AgentOptions`）
+    canDelete: opts.allowDelete === true,
   }
   let step = 0
   let halt = 'max_steps'
@@ -910,6 +925,21 @@ async function resolveInput(
     case 'write_file':
       // 路径和内容一起生成。拿不到就**停机**，绝不退化成占位符 ——
       // 那个占位符会被真的写到盘上（见 `AgentOptions.provideWriteInput`）
+      return writeInput?.(ctx)
+    case 'delete_file':
+      /*
+        ★ 「删哪一个」也走**调用方给的输入来源**，不走 `pickInput` 的候选 ——
+          理由和 `write_file` 一样，而且更硬：
+
+          `fileOptions` 曾经有一个 `write_file` 分支（候选＝已存在的文件，
+          criteria＝「任务要求改它」），它的坟头就在那个函数的注释里：
+          每个选项都在声称同一件事，没有区分度，实测模型给选中项 1.00 的把握
+          然后选错。给 `delete_file` 造一份「任务要求删它」的候选是**同一个错误**，
+          而且后果更重（删错了捞不回来）。
+
+        ⇒ 目标由调用方决定，判定只负责**授权**（`grade_risk` 那道
+          `score:risk >= 2 → ask_human`）。拿不到就停机。
+      */
       return writeInput?.(ctx)
     default:
       return assertNever(tool)

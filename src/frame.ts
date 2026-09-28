@@ -73,6 +73,19 @@ export interface AgentCtx {
    */
   canWrite?: boolean
   /**
+   * 调用方有没有**明确允许删除**。
+   *
+   * ★ 为什么不让它跟着 `canWrite` 走：写入和删除不是同一个信任级别。
+   *   覆盖一个文件通常能从 git 里捞回来；删掉一个未跟踪的文件不能。
+   *   如果 `delete_file` 跟着 `canWrite` 进候选，**每一个已经传了
+   *   `provideWriteInput` 的调用方**都会凭空多出一个破坏性工具 ——
+   *   那是替别人放宽边界，而不是给他一个选择。
+   *
+   * 默认 false。开了之后 `delete_file` 才进候选，而它仍然要过
+   * `DECISION.md` 里 `score:risk >= 2 → ask_human` 那道硬闸门。
+   */
+  canDelete?: boolean
+  /**
    * 之前几轮**问过什么**，压成一句话。
    *
    * 判定帧是**有界**的（§8.2），把整段对话塞进去会把真正要看的东西挤掉。
@@ -123,6 +136,7 @@ const CTX_KEYS: Record<keyof AgentCtx, true> = {
   readFiles: true,
   history: true,
   canWrite: true,
+  canDelete: true,
   earlier: true,
   lastTool: true,
   lastResult: true,
@@ -499,6 +513,24 @@ export function toolsFor(ctx: AgentCtx): Record<string, string> {
     if (ctx.canWrite && !done.has('write_file'))
       out.write_file = 'A file must be created or its content changed.'
   }
+
+  /*
+    `delete_file` —— 唯一一个**破坏性**候选（TODO §1：让风险阶梯有真东西可爬）。
+
+    ★ 它有两道门，而且第一道**比 write_file 严**：
+
+      1. `ctx.canDelete`，**不是** `canWrite` —— 删除和写入不是同一个信任级别
+         （覆盖能从 git 捞回来，删除未跟踪的文件不能）。默认 false，
+         所以这个工具对**所有现有调用方**来说根本不存在，不会凭空冒出来。
+      2. 删过就不再是候选（同 write_file）：没有「还没删过」这种可判定的目标。
+
+    ★ criteria 写成**条件句**，而且刻意写成谨慎的那一边：删一个文件不是「
+      还能做点什么」，而是「留着它是错的」。判据里明说「只有在任务要求移除它，
+      或它确实是这一步的障碍时才选」—— 候选本身不该暗示「该删点什么」。
+  */
+  if (ctx.canDelete && !done.has('delete_file'))
+    out.delete_file =
+      'The task requires removing this file (or it blocks progress), and leaving it in place would be wrong. Requires explicit authorisation.'
 
   out.done =
     'Everything the task asks for has already been done; calling any other tool would not add information.'

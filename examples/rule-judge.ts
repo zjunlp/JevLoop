@@ -25,6 +25,10 @@ const RISK: Record<string, number> = {
   list_dir: 0,
   read_file: 0,
   write_file: 1,
+  // 3 = destructive，和 `src/act-local.ts` 的 `baseRisk` 一致。两处不一致的话，
+  // 离线规则判定器给出的风险分就和真实基线对不上 —— 而它是 demo 和一批测试的
+  // 判定后端，阶梯会在没人注意的地方错一格。
+  delete_file: 3,
   done: 0,
 }
 
