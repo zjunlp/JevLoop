@@ -289,6 +289,61 @@ test('端口保真：空 ctx 也逐字相同（原来那些 `?? []` / `?? \'\'` 
 })
 
 // ═══════════════════════════════════════════════════════════
+// ④a 两份声明必须一致 —— 文件赢，但回退那份不能是另一套
+//
+// ★ 这一条是被一次**真实事故**逼出来的（2026-09-28）：`can_deliver` 的
+//   `evidence` 在 `DECISION.md` 里点了 `writeEvidence`，而那个投影在代码里
+//   返回的是**数组**；我改了代码回退那一份（改成字符串），于是
+//   「测过了」（测试用 `FRAME_SPECS`）和「真的改了」（运行时用文件那份）
+//   **是两件事** —— 交付闸门的证据既没有生效的预算、也没有信任边界，
+//   而两条测试都是绿的。
+//
+//   所以：只要一个节点在**两处**都声明了 frame，两处就必须编出**同一个帧**。
+//   回退那份的存在是为了逐节点迁移，不是为了让两份声明各自演化。
+// ═══════════════════════════════════════════════════════════
+
+/** 节点 id → `DECISION.md` 里的块 id。两边对不上时，这里会报出来 */
+const BLOCK_OF: Record<string, string> = {
+  'loop.needsTool': 'needs_tool',
+  'loop.pickTool': 'pick_tool',
+  'loop.pickInput': 'pick_input',
+  'loop.gradeRisk': 'grade_risk',
+  'loop.stepOk': 'step_ok',
+  'loop.isDone': 'is_done',
+  'loop.canDeliver': 'can_deliver',
+}
+
+test('★★ 文件声明的帧与代码回退必须**逐字段一致** —— 否则回退那份是第二套语义', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { parseDecisionDoc } = await import('../src/decisiondoc.ts')
+  const { frameSpecFromBlock } = await import('../src/decisions.ts')
+
+  const doc = parseDecisionDoc(readFileSync(new URL('../DECISION.md', import.meta.url), 'utf8'))
+  const ctx = fullCtx()
+  let compared = 0
+  const drifted: string[] = []
+
+  for (const [node, blockId] of Object.entries(BLOCK_OF)) {
+    const block = doc.blocks.find((b) => b.id === blockId)
+    assert.ok(block, `DECISION.md 里没有 '${blockId}' 这块`)
+    const fromFile = frameSpecFromBlock(block, node)
+    if (!fromFile) continue // 这个节点还没搬进文件，只有代码那份
+    compared++
+
+    const a = compileFrame(fromFile, ctx).state
+    const b = compileFrame(FRAME_SPECS[node]!, ctx).state
+    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      if (JSON.stringify(a[key]) !== JSON.stringify(b[key])) {
+        drifted.push(`${node}.${key}：文件=${JSON.stringify(a[key])?.slice(0, 60)} 代码=${JSON.stringify(b[key])?.slice(0, 60)}`)
+      }
+    }
+  }
+
+  assert.equal(compared, 7, '七个节点都应当已经在文件里声明了 frame')
+  assert.deepEqual(drifted, [], `★ 两份声明分叉了：\n${drifted.join('\n')}`)
+})
+
+// ═══════════════════════════════════════════════════════════
 // ④b 信任边界 —— TODO §7 的第一条
 //
 // ★ 这一节钉的是**机制**（哪些栏被包、标记是什么、代价多大），不是效果。

@@ -69,6 +69,7 @@ import { compilePolicy, compileQuestions } from './decision-compile.ts'
 import { toolsFor, fileOptions, pickInputInstructions, describeDone, lastInput } from './frame.ts'
 import type { AgentCtx, FrameSpec } from './frame.ts'
 import { compileFrame, frameSpecViolations, AGENT_CTX_KEYS } from './frame.ts'
+import { PROJECTIONS, PROJECTION_NAMES, isProjectionName, type ProjectionName } from './frame-projections.ts'
 export type { AgentCtx, StepRecord } from './frame.ts'
 
 // ═══════════════════════════════════════════════════════════
@@ -116,51 +117,79 @@ const DONE_LINE_MAX_CHARS = 300
 // ★ 为什么需要这么多：`AgentCtx` 的格是可选的，而**每一栏缺省时发什么**是一个
 //   决定（空串？空表？省略这一栏？）。原来那些决定散在 `?? ''` 里。
 // ═══════════════════════════════════════════════════════════
-const FRAME_PROJECTIONS: Record<string, { from: keyof AgentCtx; fn: (ctx: AgentCtx) => unknown }> = {
+/*
+  ── 投影的**实现**（名字、来源格、返回形状在 `frame-projections.ts`）──────
+
+  ★ 这里只写函数体。键名由 `Record<ProjectionName, …>` 强制和声明**一一对应**：
+
+      声明里加了名字而这里没写实现   → 编译不过（缺键）
+      这里写了实现而声明里没有       → 编译不过（多余的键）
+
+    而 `from` **直接从声明里取**，所以两份不可能分叉 —— 以前 `from` 是手抄的，
+    抄错一格会让「这个判定看了什么」这件事静默说谎，而 `frameSpecViolations`
+    正是靠 `from` 工作的。
+*/
+const PROJECTION_IMPL: Record<ProjectionName, (ctx: AgentCtx) => unknown> = {
   // ── 空值兜底：缺省时发空串 / 空表（原来写作 `?? ''` / `?? []`）──
-  earlierMaybe: { from: 'earlier', fn: (ctx) => ctx.earlier ?? '' },
-  filesMaybe: { from: 'files', fn: (ctx) => ctx.files ?? [] },
-  readMaybe: { from: 'readFiles', fn: (ctx) => ctx.readFiles ?? [] },
-  resultMaybe: { from: 'lastResult', fn: (ctx) => ctx.lastResult ?? '' },
-  draftMaybe: { from: 'draft', fn: (ctx) => ctx.draft ?? '' },
-  toolOrEmpty: { from: 'lastTool', fn: (ctx) => ctx.lastTool ?? '' },
+  earlierMaybe: (ctx) => ctx.earlier ?? '',
+  filesMaybe: (ctx) => ctx.files ?? [],
+  readMaybe: (ctx) => ctx.readFiles ?? [],
+  resultMaybe: (ctx) => ctx.lastResult ?? '',
+  draftMaybe: (ctx) => ctx.draft ?? '',
+  toolOrEmpty: (ctx) => ctx.lastTool ?? '',
   // ── 非空兜底（缺省时那句默认话本身就是判据的一部分）──
-  lastOrNone: {
-    from: 'lastResult',
-    fn: (ctx) => ctx.lastResult ?? '（还没有做过任何动作）',
-  },
-  toolOrUnknown: { from: 'lastTool', fn: (ctx) => ctx.lastTool ?? 'unknown' },
+  lastOrNone: (ctx) => ctx.lastResult ?? '（还没有做过任何动作）',
+  toolOrUnknown: (ctx) => ctx.lastTool ?? 'unknown',
   // ── 派生 ──
-  describeDone: { from: 'history', fn: (ctx) => describeDone(ctx) },
-  lastInput: { from: 'history', fn: (ctx) => lastInput(ctx) },
-  readCount: { from: 'readFiles', fn: (ctx) => (ctx.readFiles ?? []).length },
-  recentSteps: {
-    from: 'history',
-    fn: (ctx) =>
-      (ctx.history ?? []).slice(-5).map((h) => `${h.tool}(${clip(h.input, 60)}) → ${clip(h.result, 200)}`),
-  },
-  writeEvidence: {
-    from: 'history',
-    fn: (ctx) =>
-      (ctx.history ?? []).slice(-3).map((h, i, all) => {
+  describeDone: (ctx) => describeDone(ctx),
+  lastInput: (ctx) => lastInput(ctx),
+  readCount: (ctx) => (ctx.readFiles ?? []).length,
+  recentSteps: (ctx) =>
+    (ctx.history ?? []).slice(-5).map((h) => `${h.tool}(${clip(h.input, 60)}) → ${clip(h.result, 200)}`),
+  /*
+    ★ 返回**字符串**，不是数组。2026-09-28 修正：
+
+    这一份是 `DECISION.md` 的 `can_deliver` **真正在用**的（`framed()` 里
+    文件赢、代码回退）。它以前 `.map()` 之后没有 join，于是运行时拿到数组 ——
+    两个后果都不是想要的：
+
+      · 声明里的 `chars: 600` **从来没有生效过**（`chars` 只管字符串）；
+      · 信任边界（TODO §7）包的是字符串，所以交付闸门的主输入**没被包上**。
+
+    而前面那次改动只改了**代码回退**那一份，所以它当时**没有生效** ——
+    测试用的也是代码回退，于是「测过了」和「真的改了」成了两件事。
+    现在两份一致，并由 `tests/frame.test.ts` 的「文件与代码回退必须逐字段一致」钉住。
+  */
+  writeEvidence: (ctx) =>
+    (ctx.history ?? [])
+      .slice(-3)
+      .map((h, i, all) => {
         const writes = h.tool === 'write_file'
         const inputBudget = writes ? 600 : 60
         const resultBudget = writes ? 60 : i === all.length - 1 ? 600 : 200
         return `${h.tool}(${clip(h.input, inputBudget)}) → ${clip(h.result, resultBudget)}`
-      }),
-  },
+      })
+      .join('\n'),
   /**
    * 工具的静态风险基线。认不出的工具名**不放这一栏** ——
    * 0 分的意思是「只读」，不能用它冒充「未知」（`absent` 与 `unfilled` 必须分开）。
    */
-  localToolRisk: {
-    from: 'lastTool',
-    fn: (ctx) => {
-      const t = ctx.lastTool
-      return t && isToolName(LOCAL_TOOLS, t) ? LOCAL_TOOLS[t].baseRisk : undefined
-    },
+  localToolRisk: (ctx) => {
+    const t = ctx.lastTool
+    return t && isToolName(LOCAL_TOOLS, t) ? LOCAL_TOOLS[t].baseRisk : undefined
   },
 }
+
+/** 实现 + 声明里的 `from`，合成 `frameSpecFromBlock` 要的那张表 */
+const FRAME_PROJECTIONS: Record<ProjectionName, { from: keyof AgentCtx; fn: (ctx: AgentCtx) => unknown }> =
+  Object.fromEntries(
+    // `from` 在声明里是 `string`（那一层够不到 `keyof AgentCtx`，见那个文件头的说明）；
+    // 每个名字都真的是 ctx 的格名，由 `tests/frame-projections.test.ts` 断言
+    PROJECTION_NAMES.map((name) => [
+      name,
+      { from: PROJECTIONS[name].from as keyof AgentCtx, fn: PROJECTION_IMPL[name] },
+    ]),
+  ) as Record<ProjectionName, { from: keyof AgentCtx; fn: (ctx: AgentCtx) => unknown }>
 
 /**
  * 把**一个块**的 `frame:` 声明编成 `FrameSpec`。没写 `frame:` 就返回 `null`，
@@ -180,7 +209,8 @@ export function frameSpecFromBlock(b: DocBlock, node: string): FrameSpec | null 
   return {
     node,
     fields: f.fields.map((x) => {
-      const p = x.project ? FRAME_PROJECTIONS[x.project] : undefined
+      // 文件是手写的 ⇒ 投影名是不可信输入，查表前先过 `isProjectionName`
+      const p = x.project && isProjectionName(x.project) ? FRAME_PROJECTIONS[x.project] : undefined
       if (x.project && !p) {
         throw new Error(
           `${where} 里，frame 投影 '${x.project}' 不在注册表里 —— ` +

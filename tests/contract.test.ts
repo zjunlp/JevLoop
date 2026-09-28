@@ -99,7 +99,7 @@ test('契约入口能把每个块编成问题与策略', () => {
 test('契约入口能核对宿主能力：够用放行，缺一项就报出来', () => {
   const caps: AdapterCapabilities = {
     stateCells: ['task', 'earlier', 'already_done', 'files_known', 'already_read', 'last', 'tool', 'input', 'output', 'target', 'evidence', 'answer'],
-    projections: ['earlierMaybe', 'describeDone', 'filesMaybe', 'readMaybe', 'lastOrNone', 'toolOrEmpty', 'lastResult', 'lastInput', 'toolOrUnknown', 'localToolRisk', 'resultMaybe', 'readCount', 'recentSteps', 'draftMaybe', 'writeEvidence'],
+    projections: ['earlierMaybe', 'describeDone', 'filesMaybe', 'readMaybe', 'lastOrNone', 'toolOrEmpty', 'lastInput', 'toolOrUnknown', 'localToolRisk', 'resultMaybe', 'readCount', 'recentSteps', 'draftMaybe', 'writeEvidence'],
     dynamicProviders: ['toolsFor', 'unreadFiles'],
     positions: {
       'step-start': ['use_tool', 'answer'],

@@ -66,7 +66,6 @@ const PROJECTIONS: Record<string, Projection> = {
   readMaybe: (state) => state.already_read,
   lastOrNone: (state) => state.last,
   toolOrEmpty: (state) => state.tool,
-  lastResult: (state) => state.output,
   lastInput: (state) => state.input,
   toolOrUnknown: (state) => state.tool || 'unknown',
   localToolRisk: () => 'host-defined',

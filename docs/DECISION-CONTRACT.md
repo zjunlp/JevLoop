@@ -172,7 +172,54 @@ runtime** — `tests/action-semantics.test.ts` drives the loop once per action a
 asserts the observed behaviour matches. A semantics table nobody checks is just
 another declaration that can lie.
 
-## 4. Adapter conformance checklist
+## 4. Projection declarations
+
+A `frame:` field can name a projection (`+ task 400 earlierMaybe`). A Markdown
+file cannot hold a function, so the host supplies the implementation — but until
+this declaration existed the host only got the **name**. "How does `lastOrNone`
+differ from `resultMaybe`?" was answerable only by reading JevLoop's code, and the
+difference *is part of the criterion*: one sends `（还没有做过任何动作）` when there
+is no result, the other sends an empty string, and a classifier cannot tell "no
+result yet" from "the result was empty" unless the projection says so.
+
+Each projection therefore declares what it reads, what shape it returns, and what
+it promises on a missing value:
+
+| projection | reads | returns | promise when the value is missing |
+|---|---|---|---|
+| `earlierMaybe` | `earlier` | string | empty string |
+| `filesMaybe` | `files` | list | empty list |
+| `readMaybe` | `readFiles` | list | empty list |
+| `resultMaybe` | `lastResult` | string | empty string |
+| `draftMaybe` | `draft` | string | empty string |
+| `toolOrEmpty` | `lastTool` | string | empty string |
+| `lastOrNone` | `lastResult` | string | **`（还没有做过任何动作）` — not empty** |
+| `toolOrUnknown` | `lastTool` | string | **`unknown` — not empty** |
+| `describeDone` | `history` | string | a one-line summary, never a raw array |
+| `lastInput` | `history` | string | — |
+| `readCount` | `readFiles` | count | 0 |
+| `recentSteps` | `history` | list | empty list |
+| `writeEvidence` | `history` | string | — |
+| `localToolRisk` | `lastTool` | count | **omitted entirely** (`absent`), never 0 |
+
+Two of those rows are the reason the table is worth publishing:
+
+- **The non-empty fallbacks are criteria, not cosmetics.** `lastOrNone` and
+  `toolOrUnknown` exist precisely because an empty string would let a judgement
+  confuse *absent* with *empty*, or *unknown tool* with *no tool*.
+- **`localToolRisk` returns no field at all for an unrecognised tool.** `0` means
+  "read-only", so it cannot stand in for "unknown" — the field is dropped and
+  recorded in `Frame.absent`.
+
+The name list and each `from` have **one source of truth**
+(`src/frame-projections.ts`); JevLoop's implementation supplies only function
+bodies, and the key type makes a missing or extra implementation a compile error.
+`tests/frame-projections.test.ts` additionally checks that every declared `from` is
+a real state cell, that every declared `returns` matches what the implementation
+actually returns, that no projection is declared without being used, and that the
+external host fixture's capability list matches the declaration exactly.
+
+## 5. Adapter conformance checklist
 
 An adapter is conforming only if it can demonstrate all of the following:
 
@@ -196,7 +243,7 @@ The test does not need a language model. A deterministic mock decision provider
 is sufficient; the purpose is to prove that the host consumes the contract and
 executes its actions.
 
-## 5. Extending beyond the reference loop
+## 6. Extending beyond the reference loop
 
 The reference JevLoop loop currently has seven named decision blocks and six
 closed positions. That is a property of the reference host, not a limit that a
@@ -306,7 +353,7 @@ The adapter must either implement a namespaced extension or reject it with a
 source-located error. It must never reinterpret an unknown extension as a
 portable action.
 
-## 6. Compatibility boundary
+## 7. Compatibility boundary
 
 The current JevLoop document contains some reference-host details:
 
@@ -320,15 +367,16 @@ These are intentional adapter seams, not yet an industry-wide ABI. A future
 schema version should still publish:
 
 ```text
-projection capability declarations
 dynamic provider input declarations (which state cells it reads)
 evidence schema
 event and replay schema
 ```
 
-Action semantics are **no longer on this list** — see §3. They are declared,
-exported through `jevloop/contract`, and checked against the runtime, so a host no
-longer has to read JevLoop's loop to learn what `stop` or `deliver` does.
+Two items have left this list. **Action semantics** (§3) are declared, exported
+through `jevloop/contract`, and checked against the runtime, so a host no longer
+has to read JevLoop's loop to learn what `stop` or `deliver` does. **Projection
+declarations** (§4) now say what each of the fourteen names reads, returns, and
+promises on a missing value, with one source of truth for the names.
 
 `DECISION.md` now declares its schema version, and a missing or unrecognised one
 is refused — by `schemaProblems()`, surfaced as the `schema` layer of
@@ -338,8 +386,8 @@ things: `problems` says *this file is malformed*; the schema layer says *I canno
 read the semantics this file claims*. A file written for a future version is the
 second case, not the first.
 
-Positions, dynamic providers and actions are now structured rather than
-re-parsed or inferred by each consumer. What is still missing: a `dynamic:`
+Positions, dynamic providers, actions and projections are now structured rather
+than re-parsed or inferred by each consumer. What is still missing: a `dynamic:`
 declaration says only that the provider takes the context, not which state cells
 it reads.
 
@@ -351,7 +399,7 @@ Until the remaining items land, the honest claim is:
 It is not yet correct to claim that any Agent runtime can execute the file
 without an adapter.
 
-## 7. Consuming the contract without the runtime
+## 8. Consuming the contract without the runtime
 
 A host that wants only the checker must not have to install — or satisfy —
 JevLoop's own runtime. Two entry points:
@@ -375,7 +423,7 @@ jevloop            fails without it — the module-load assertion needs our cont
 
 That is the difference between "portable" and "install us first".
 
-## 8. Reference implementation
+## 9. Reference implementation
 
 The reference adapter currently consists of:
 

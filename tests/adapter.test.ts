@@ -18,7 +18,7 @@ const doc = parseDecisionDoc(readFileSync(new URL('../DECISION.md', import.meta.
 
 const base: AdapterCapabilities = {
   stateCells: ['task', 'earlier', 'already_done', 'files_known', 'already_read', 'last', 'tool', 'input', 'output', 'target', 'evidence', 'answer'],
-  projections: ['earlierMaybe', 'describeDone', 'filesMaybe', 'readMaybe', 'lastOrNone', 'toolOrEmpty', 'lastResult', 'lastInput', 'toolOrUnknown', 'localToolRisk', 'resultMaybe', 'readCount', 'recentSteps', 'draftMaybe', 'writeEvidence'],
+  projections: ['earlierMaybe', 'describeDone', 'filesMaybe', 'readMaybe', 'lastOrNone', 'toolOrEmpty', 'lastInput', 'toolOrUnknown', 'localToolRisk', 'resultMaybe', 'readCount', 'recentSteps', 'draftMaybe', 'writeEvidence'],
   dynamicProviders: ['toolsFor', 'unreadFiles'],
   positions: {
     'step-start': ['use_tool', 'answer'],

@@ -34,7 +34,6 @@
     "readMaybe",
     "lastOrNone",
     "toolOrEmpty",
-    "lastResult",
     "lastInput",
     "toolOrUnknown",
     "localToolRisk",

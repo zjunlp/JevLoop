@@ -41,6 +41,10 @@ export { CURRENT_SCHEMA, SCHEMA_KEY, SUPPORTED_SCHEMAS, DYNAMIC_OUTPUTS, parseDy
 
 // ── 形状：消费方要能命名它拿到的每一个东西 ──────────────────
 export { ANY_POSITION_ACTIONS, KINDS, POSITIONS } from './decision-shape.ts'
+// 帧投影的能力声明：宿主必须实现这几个名字，这里说清各自读哪一格、返回什么
+export { PROJECTIONS, PROJECTION_NAMES, isProjectionName } from './frame-projections.ts'
+export type { ProjectionName, ProjectionReturns, ProjectionSpec } from './frame-projections.ts'
+
 // 动作语义：外部实现者照 `next` 写 switch 就够了，不必读我们的循环
 export { ACTION_SEMANTICS } from './action-semantics.ts'
 export type { ActionSemantics } from './action-semantics.ts'
