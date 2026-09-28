@@ -97,6 +97,32 @@ The host adapter is the only place where these names acquire runtime behavior.
 A portable file must not assume JevLoop's `AgentCtx`, local filesystem tools, or
 JevLoop's loop branches.
 
+### Provenance: which frame values came from a tool
+
+A frame field is only as trustworthy as the cell it reads. Cells carrying bytes
+returned by a tool call — a file body, a directory listing, a step record — are
+**untrusted input**, the same way the tool name the model returns is. A decision
+model does not follow instructions, so the classic injection attack does not
+apply the way it does to an LLM; what applies is **displacement**, untrusted text
+moving a probability across a threshold.
+
+So a conforming adapter should:
+
+- derive the trust of each frame field from its source cell, **not** from a
+  per-field flag anyone can forget to set;
+- mark untrusted values so the decision model can discount them by provenance;
+- keep the marker inside the frame digest, so a replay can tell whether a frame
+  was marked at all;
+- record which fields were untrusted on the frame artifact, so a trace can be
+  audited after the fact;
+- **not** silently rewrite the bytes: stripping imperative-looking sentences is
+  not obviously correct for a classifier, since a log that genuinely says "the
+  test failed" is both evidence and an imperative.
+
+The reference implementation wraps untrusted *string* channels. List-valued
+channels are unlabelled and that is a known gap, recorded in `TODO.md` §7 with
+the reason: putting a label inside a value breaks consumers that read it as data.
+
 ## 3. Adapter conformance checklist
 
 An adapter is conforming only if it can demonstrate all of the following:

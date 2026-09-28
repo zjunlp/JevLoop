@@ -528,18 +528,38 @@ const FRAME_CAN_DELIVER: FrameSpec = {
       key: 'evidence',
       from: 'history',
       chars: 600,
+      /*
+        ★ 返回**字符串**，不是数组 —— 两个理由，都不是风格问题：
+
+        ① 声明里写的是 `chars: 600`，而 `chars` 只管字符串。这一栏以前返回数组，
+           于是那个预算**从来没有生效过** —— 真正起作用的是下面逐条的
+           `inputBudget` / `resultBudget`（那也有用，见下）。一条写着 600 的预算
+           没人读，正是 §8.16 那类「声明了却没有消费方」。
+
+        ② 它读 `history` ⇒ 不可信（TODO §7）。而信任边界包的是字符串；
+           数组要包就得把标签放进值里，那会弄坏把帧值当数据读的消费方
+           （实测：`rule-judge` 读 `files_known` / `steps` / `already_read`
+           走的是 `Array.isArray`）。这一栏**没有任何代码**按数组读它，
+           所以它能安全地变成字符串，从而拿到边界。
+
+        交付闸门是这个仓库里安全上最要紧的判定之一（它决定一份回答能不能发出去），
+        而它的主输入以前既没有生效的预算、也没有信任标记。
+      */
       project: (ctx) =>
-        (ctx.history ?? []).slice(-3).map((h, i, all) => {
-          // ★ 预算跟着**载荷**走，不跟着位置走。以前是「最后一条 600、其余 200」，
-          //   而输入一律 clip 到 60。那对 read_file 对，对 write_file 两样都反了：
-          //   写操作的载荷是**输入**（`路径\n内容`），结果只有一句「已写入 X」。
-          //   实测：交付闸门核对一份如实报告「写进去的和原文不一样」的回答时，
-          //   `unsupported` 判 0.70；把写的输入给到 600、结果压到 60 之后同一个回答判 0.21。
-          const writes = h.tool === 'write_file'
-          const inputBudget = writes ? 600 : 60
-          const resultBudget = writes ? 60 : i === all.length - 1 ? 600 : 200
-          return `${h.tool}(${clip(h.input, inputBudget)}) → ${clip(h.result, resultBudget)}`
-        }),
+        (ctx.history ?? [])
+          .slice(-3)
+          .map((h, i, all) => {
+            // ★ 预算跟着**载荷**走，不跟着位置走。以前是「最后一条 600、其余 200」，
+            //   而输入一律 clip 到 60。那对 read_file 对，对 write_file 两样都反了：
+            //   写操作的载荷是**输入**（`路径\n内容`），结果只有一句「已写入 X」。
+            //   实测：交付闸门核对一份如实报告「写进去的和原文不一样」的回答时，
+            //   `unsupported` 判 0.70；把写的输入给到 600、结果压到 60 之后同一个回答判 0.21。
+            const writes = h.tool === 'write_file'
+            const inputBudget = writes ? 600 : 60
+            const resultBudget = writes ? 60 : i === all.length - 1 ? 600 : 200
+            return `${h.tool}(${clip(h.input, inputBudget)}) → ${clip(h.result, resultBudget)}`
+          })
+          .join('\n'),
       why:
         '★ 交付闸门要拿工具结果**逐句核对**回答，所以这一栏的预算比别处宽。' +
         '实测把证据 clip 到 100 字符时，它**正确地**判出 unsupported=0.67 —— ' +

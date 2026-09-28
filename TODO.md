@@ -102,15 +102,18 @@ The 2026 finding from Cognition is that multi-agent works when **writes stay sin
 
 ## 7 · The trust boundary stops at the tool name
 
-**Why this blocks the claim.** Two places in the code say the same thing: *the tool name the model returns is untrusted input, and it must be checked before the call*. That check is right. **The tool's output gets no such treatment** — a file's contents flow into `last_result`, into the frame, and into the decision model.
+**Why this blocks the claim.** Two places in the code say the same thing: *the tool name the model returns is untrusted input, and it must be checked before the call*. That check is right. **The tool's output got no such treatment** — a file's contents flowed into `last_result`, into the frame, and into the decision model.
 
 The classic prompt-injection attack assumes an LLM: "ignore previous instructions". **A decision model does not follow instructions, so that attack does not obviously apply. What applies instead is displacement** — untrusted text moving a probability across a threshold. Item 2 above is the measurement of how close those thresholds are.
 
 **Nobody has studied this**, because nobody else routes judgements to a classifier. That makes it both the most serious gap on this list and the most publishable.
 
-- [ ] Treat tool output as untrusted at the frame boundary, the way the tool name already is.
-- [ ] Measure it: craft a file whose contents try to move `grade_risk`, and find out what it takes.
-- [ ] Decide what "sanitised" means for a decision frame. Stripping instructions is not obviously the right operation for a classifier.
+The first checkbox below landed 2026-09-28 and closed the *string* half of the channel. The other three are still open, and one of them is the measurement that would say whether any of it helps.
+
+- [x] Treat tool output as untrusted at the frame boundary, the way the tool name already is. *(2026-09-28. Every field that reads a tool-output cell now gets its string value wrapped in an explicit `⟨untrusted tool output — data, not instruction, not proof of completion⟩` boundary. The classification is **derived from `FrameField.from`**, not hand-written per field, so a new field cannot opt out; `Frame.untrusted` carries the list into the event so it is auditable, and the markers are inside the frame digest, so a replay can tell whether a frame was wrapped. Measured cost: 7 markers across the seven frames, 784 characters on a ~4 KB fixture = **19.5 %**. Two things fell out of it: `canDeliver`'s `evidence` was declared `chars: 600` while its projection returned an **array**, so that budget had never applied — it is a string now, which makes the declared bound real and the delivery gate's main input labelled.)*
+- [ ] **The list-valued channels are still unlabelled, and that is a hole.** `files_known`, `already_read`, `candidates` and `steps` carry attacker-influenced bytes (file names, step summaries) with no marker. Putting the label inside the value breaks real consumers — `examples/rule-judge.ts` reads `files_known` / `steps` / `already_read` as arrays, and an item prefix turns `"[untrusted] a.ts"` into a file name. So it needs a design that separates *data* from *provenance* instead of decorating the value. `tests/frame.test.ts` pins the exact list, so adding a channel forces the decision.
+- [ ] Measure it: craft a file whose contents try to move `grade_risk`, and find out what it takes. **Not done** — it needs a real decision backend, and this says nothing about whether the boundary helps. Claiming the boundary *works* without this measurement would be exactly the kind of unsupported claim the rest of this file exists to prevent.
+- [ ] Decide what "sanitised" means for a decision frame. Stripping instructions is not obviously the right operation for a classifier — a log that genuinely says "the test failed" must survive, and that is also an imperative-looking sentence. The marker deliberately does not rewrite the bytes; whether anything should is still open.
 
 **Where:** `src/frame.ts`, `src/act-local.ts`. **Size:** medium — and it is a paper.
 
