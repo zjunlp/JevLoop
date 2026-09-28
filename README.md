@@ -128,7 +128,14 @@ node --experimental-strip-types src/cli.ts run "list the files and explain what 
 
 It resolves its own backend: the hosted Jev API if `TYPESAFE_API_KEY` is set, otherwise a local Laya on `:7789`. With neither, it says which one it wanted and every step escalates — it does not guess.
 
-> **Not on npm yet.** The CLI is written and packaged (`run` / `serve` / `spec`, `bin: jevloop`); publishing is waiting on a registry account recovery. Until it lands, the commands above are the same entry points — `npx jevloop …` is only their shorthand.
+**Consume the contract from a host that is not JevLoop** — offline, no key, no LLM:
+
+```bash
+npm run external-host     # a minimal external host: parse → decide → act, own state and graph
+npm run adapter-test      # the negative fixtures: unknown projection, unhandled action, …
+```
+
+> **On the npm status.** `jevloop` is on npm, but the newest published version (`0.2.0`) declares `github.com/Xubqpanda/JevLoop` as its repository, while this tree is `zjunlp/JevLoop` and its `package.json` still reads `0.1.0`. So the published tarball is **not** this revision. To get this one, install from git — `npm install github:zjunlp/JevLoop` — or clone it. `npx jevloop …` is shorthand for the CLI commands above.
 
 **Drive the demo with a real decision model:**
 
@@ -150,7 +157,7 @@ Two harnesses, measuring different things: `npm run bench` scores each **decisio
 
 Every generation of agent framework leaves behind a `.md`. `AGENTS.md` holds conventions, `SKILL.md` holds capabilities — and both are **prose for a model to read**. The model pays tokens for them every turn, it can ignore them, and nothing tells you whether it did.
 
-`DECISION.md` is the first one that gets **compiled**.
+`DECISION.md` is the one that gets **compiled**.
 
 > **Not a decision *record*.** A record is written afterwards, to explain what an agent did. `DECISION.md` declares what the loop is *going to* decide, and a program turns it into the questions the decision model is asked.
 
@@ -163,19 +170,18 @@ prose             →  system prompt       →  the LLM              (the one ex
 
 So it is subtraction: every block you move into the file is one question the LLM no longer has to be asked. [`headline()`](src/decisiondoc.ts) counts them **from the file itself** — change a `kind` and the sentence changes with it.
 
-**What does *not* compile is the frame.** Each decision also needs a `state` projection — which few fields of the agent's state go to the model, and how far each is clipped. That is a function, and markdown cannot express one. It stays in [`src/decisions.ts`](src/decisions.ts):
+**The frame is declared there too.** Each decision also needs a *frame*: which few fields of the agent's state reach the model, how far each is clipped, and — just as load-bearing — which fields are deliberately withheld and **why**. That is a `frame:` block in the file:
 
-```ts
-export const needsTool = defineDecision({
-  id: 'loop.needsTool',
-  state: ctx => ({ task: clip(ctx.task, 400), earlier: …, steps_done: … }),  // code
-  ...compiled('needs_tool', ['needs_tool']),                                  // the file
-})
+```markdown
+frame:
+  + task          400                   —— deciding "which file" needs the task
+  + tool          40     toolOrEmpty    —— one input slot means different things per tool
+  - history                             —— the candidate set *is* the projection; both would fight
 ```
 
-Squeezing a frame into markdown would mean either inventing a real DSL or letting the frame degenerate into "send the whole context" — which does not fit the 512/1024-token window the decision model works in. The boundary is deliberate, not unfinished.
+**The check that used to be impossible now runs.** [`scripts/conformance.ts`](scripts/conformance.ts) proves every cell of the agent state is either read by a decision or explicitly excluded with a reason. Delete the `- cwd —— …` line and it fails, naming the cell — where before, all four layers stayed green and `cwd` simply vanished from the declaration. Bounds are per-field and mandatory, so a frame cannot quietly degenerate into "send everything".
 
-The two halves stay honest in opposite directions. Questions and actions come from the file and the code is checked against them **at load**: name a question something the code does not expect and startup fails with both lists, rather than an `undefined` three steps into a run. The frame has no such check, because the file has nothing to check it against — which is exactly why it stays in code.
+What still lives in code is the projection **implementation** (`ctx` → the value of a named projection) and the host's own vocabulary — state cells, candidate providers, position and action handlers. That seam is the next section.
 
 The file cannot quietly rot, either. It is parsed on load and any problem — an action name that is not in the closed vocabulary, a predicate aimed at the wrong question type — throws with a line number, instead of compiling into a rule that never fires.
 
@@ -256,7 +262,7 @@ That unreachability is checked, not trusted: tiers on one question must stay **s
                        loop.canDeliver  ↗ is this shippable?  ──revise──▶ one more generate
 ```
 
-**All seven decision points live in one file: [`src/decisions.ts`](src/decisions.ts).** If you read one file in this repo, read that one — it's the whole idea.
+**That graph is the reference loop** — seven nodes, declared as seven blocks in [`DECISION.md`](DECISION.md) and wired by [`src/decisions.ts`](src/decisions.ts). It is not a limit on the format: a host may declare ten, thirty, or more nodes and connect them with its own graph. See [Bring your own agent loop](#bring-your-own-agent-loop).
 
 ### A decision is three things
 
@@ -264,16 +270,11 @@ That unreachability is checked, not trusted: tiers on one question must stay **s
 export const pickTool = defineDecision({
   id: 'loop.pickTool',
 
-  // ① Project the agent state into a BOUNDED decision frame.
-  //    This caps what the model can judge: what isn't in the
-  //    frame cannot be decided.
-  state: (ctx: AgentCtx) => ({
-    task: clip(ctx.task, 400),
-    already_done: describeDone(ctx),
-    files_known: (ctx.files ?? []).slice(0, 20),
-    already_read: (ctx.readFiles ?? []).slice(0, 10),
-    last_result: clip(ctx.lastResult ?? '', 300),
-  }),
+  // ① The frame: which bounded slices of agent state the model may
+  //    judge on. `frame:` in DECISION.md wins; FRAME_PICK_TOOL is the
+  //    in-code fallback, and hosts that are not JevLoop supply their
+  //    own projections instead.
+  ...framed(FRAME_PICK_TOOL, 'pick_tool'),
 
   // ② Typed questions. The wording comes from DECISION.md; the
   //    candidates cannot, because a Markdown file cannot hold a
@@ -413,7 +414,45 @@ new HttpGenerator({ baseUrl: "http://localhost:11434/v1", model: "qwen3" });  //
 
 Swapping either one touches exactly one file. The loop and the decision specs don't move.
 
-To depend on it rather than run it: `npm install jevloop` — once it is published. Until then, `npm install github:zjunlp/JevLoop` builds `dist/` through the `prepare` script.
+To depend on it rather than run it: `npm install github:zjunlp/JevLoop` builds `dist/` through the `prepare` script. The npm tarball is a separate release line — see the note under [Quick start](#quick-start).
+
+## Bring your own agent loop
+
+JevLoop is the **reference runtime**, not the only intended consumer. `DECISION.md` is meant to be consumed by your loop, with your state, your tools and your control flow.
+
+The split is:
+
+```
+portable core  (in the file)        host adapter  (in your runtime)
+─────────────────────────────       ────────────────────────────────────
+node id                             state cells: names, types, trust
+kind: choice | noul | score | …     projections: earlierMaybe, toolOrEmpty, …
+position (when:)                    dynamic candidates: toolsFor(ctx), …
+questions, options, criteria        position handlers: which actions each runs
+policy rules                        action handlers: use_tool, call, ask_human, …
+frame fields, bounds, exclusions    evidence providers
+generator instructions              event sink + digests
+```
+
+Your adapter is where those names acquire behavior. Nothing in the file assumes `AgentCtx`, JevLoop's four local tools, or JevLoop's loop branches.
+
+**Your graph, not ours.** The reference loop is linear-ish and seven nodes wide, but a host may declare dozens and wire them however it likes — branches, retries, escalation, nested loops, several terminal states. [`examples/external-host.ts`](examples/external-host.ts) is a minimal host that does exactly that, with no import of `agent.ts`, `decisions.ts` or `AgentCtx`:
+
+```bash
+npm run external-host
+#   needs_tool: fields=6, action=use_tool, rule=0
+#   …
+#   external host: custom graph reached done after 1 retry
+#   external host: graph trace classify_issue --inspect--> inspect_repository | … | --deliver--> done
+```
+
+Its graph is triage → inspect → plan → test → interpret → prepare → done, with a retry edge and a human-escalation edge, and its nodes come from [`examples/custom-graph.DECISION.md`](examples/custom-graph.DECISION.md) under a `host:` position namespace — i.e. **not** the seven reference nodes.
+
+**Unknown declarations are rejected before an action runs, not logged.** [`src/adapter.ts`](src/adapter.ts) checks a host's declared capabilities against the file and returns source-located problems for an unregistered projection, a missing state cell, an unhandled action, a position that does not handle the action, or a missing dynamic provider. [`tests/adapter.test.ts`](tests/adapter.test.ts) pins each of those as a negative fixture, so an incomplete adapter fails loudly instead of silently skipping a judgement.
+
+`npm run adapter-test` runs them. The capability report the fixture publishes is [`examples/external-host.capabilities.json`](examples/external-host.capabilities.json).
+
+**What we are not claiming.** `DECISION.md` has a portable declarative core and a JevLoop reference adapter. It is *not* yet true that any runtime can execute the file unchanged, that the projections or predicate semantics are frozen, or that replay is portable — those are open items in [`docs/DECISION-CONTRACT.md`](docs/DECISION-CONTRACT.md), which also holds the conformance checklist. [`docs/SKILL-DECISION-ADAPTER.md`](docs/SKILL-DECISION-ADAPTER.md) is a step-by-step guide for adapting an existing runtime, including how to inventory a host graph that is not shaped like ours.
 
 ## The UI
 
@@ -434,7 +473,7 @@ CWD_ROOT=./some-project PORT=7800 npm run serve
 
 It has no authentication and binds to loopback only. `HOST=0.0.0.0` means *anyone on this network can make it run tasks on this machine*.
 
-> Once the package is on npm, `npx jevloop serve --cwd … --port … --host …` takes the same three as flags.
+> The published CLI takes the same three as flags: `npx jevloop serve --cwd … --port … --host …`.
 
 ## What this is not
 
@@ -442,19 +481,24 @@ It has no authentication and binds to loopback only. `HOST=0.0.0.0` means *anyon
 - **Not "zero hallucination".** A decision model can't return an answer outside the type you asked for, but the answer can still be wrong. That's what the threshold is for.
 - **Not a general accuracy claim.** Our own ReAct comparison above is seven tasks, one run each, on one model — and this loop was accepted on 6 of 7 against ReAct's 7 of 7.
 - **Not production-hardened.** Tool sandboxing covers path escape only. Read [`src/act-local.ts`](src/act-local.ts) before pointing it at anything you care about.
+- **Not a portable runtime yet.** The contract is portable; the *execution* is not. Another Agent runtime needs an adapter — state cells, projections, candidate providers and action handlers — and `DECISION.md`'s predicate and projection semantics are not frozen. See [Bring your own agent loop](#bring-your-own-agent-loop).
 
 ## Layout
 
-Six files carry the idea. Read them in this order:
+The files that carry the idea, in reading order:
 
 | File | What it is |
 |---|---|
-| [`DECISION.md`](DECISION.md) | the judgements, as a document the runtime compiles |
-| [`src/decisions.ts`](src/decisions.ts) | ★ all seven of them, one file — the whole idea |
+| [`DECISION.md`](DECISION.md) | ★ the judgements, as a document the runtime compiles |
+| [`src/decisions.ts`](src/decisions.ts) | ★ the reference loop's seven nodes, and the frame specs behind them |
 | [`src/agent.ts`](src/agent.ts) | ★ the loop that asks them |
 | [`src/decide.ts`](src/decide.ts) | the six steps one decision takes |
 | [`src/policy.ts`](src/policy.ts) | answers → action, pure code |
 | [`src/meter.ts`](src/meter.ts) | ★ decisions against model calls |
+| [`src/adapter.ts`](src/adapter.ts) | the host-capability seam: state cells, projections, providers, actions |
+| [`examples/external-host.ts`](examples/external-host.ts) | a host that is not JevLoop, with its own graph |
+| [`docs/DECISION-CONTRACT.md`](docs/DECISION-CONTRACT.md) | the portable-core / host-adapter boundary and conformance checklist |
+| [`docs/SKILL-DECISION-ADAPTER.md`](docs/SKILL-DECISION-ADAPTER.md) | how to adapt an existing runtime, step by step |
 
 Everything else is plumbing. The parts you are most likely to want to replace:
 
@@ -463,6 +507,7 @@ Everything else is plumbing. The parts you are most likely to want to replace:
 | where judgements get answered | [`src/seam-provider.ts`](src/seam-provider.ts) defines the interface; `provider-http` / `provider-mock` / `provider-fallback` implement it |
 | what writes the answer | [`src/llm.ts`](src/llm.ts) |
 | what the tools can do | [`src/act-local.ts`](src/act-local.ts); the contract they must satisfy is [`src/act.ts`](src/act.ts) |
+| whether the file is still honest | [`scripts/conformance.ts`](scripts/conformance.ts) — `npm run conformance` |
 | the UI | [`web/`](web/) and [`src/server.ts`](src/server.ts) |
 | the CLI | [`src/cli.ts`](src/cli.ts) |
 

@@ -16,6 +16,8 @@
     "test": "node --experimental-strip-types --test \"tests/*.test.ts\"",
     "check": "node --experimental-strip-types scripts/check.ts",
     "conformance": "node --experimental-strip-types scripts/conformance.ts",
+    "external-host": "node --experimental-strip-types examples/external-host.ts",
+    "adapter-test": "node --experimental-strip-types --test tests/adapter.test.ts",
     "bench": "node --experimental-strip-types bench/run.ts",
     "compare": "node --experimental-strip-types bench/compare.ts",
     "latency": "node --experimental-strip-types bench/latency.ts"
@@ -45,9 +47,14 @@
     "dist",
     "src",
     "web",
+    "examples",
     "README.md",
+    "README.zh-CN.md",
     "LICENSE",
-    "DECISION.md"
+    "DECISION.md",
+    "docs/DECISION-CONTRACT.md",
+    "docs/SKILL-DECISION-ADAPTER.md",
+    "docs/RESEARCH-AND-STANDARD-DIRECTION-2026-09.md"
   ],
   "repository": {
     "type": "git",
