@@ -68,7 +68,7 @@ import { compilePolicy, compileQuestions } from './decision-compile.ts'
 
 import { toolsFor, fileOptions, pickInputInstructions, describeDone, lastInput } from './frame.ts'
 import type { AgentCtx, FrameSpec } from './frame.ts'
-import { compileFrame, AGENT_CTX_KEYS } from './frame.ts'
+import { compileFrame, frameSpecViolations, AGENT_CTX_KEYS } from './frame.ts'
 export type { AgentCtx, StepRecord } from './frame.ts'
 
 // ═══════════════════════════════════════════════════════════
@@ -163,26 +163,34 @@ const FRAME_PROJECTIONS: Record<string, { from: keyof AgentCtx; fn: (ctx: AgentC
 }
 
 /**
- * 把 `DECISION.md` 里那个块的 `frame:` 编成 `FrameSpec`。没写就返回 `null`，
+ * 把**一个块**的 `frame:` 声明编成 `FrameSpec`。没写 `frame:` 就返回 `null`，
  * 消费方回退到代码里那份 —— **迁移因此可以逐个节点做，不必一次全搬**。
+ *
+ * 参数是 `DocBlock` 而不是块 id：**合规检查要对任意一份文本跑**
+ * （`scripts/conformance.ts` 喂进来的是改坏过的），按 id 查只能看磁盘上那一份。
+ *
+ * ★ 两条**当场抛**（不是收进 `problems`）：投影名不在注册表里、格名既不是
+ *   `AgentCtx` 的格又没给投影。不抛的话，那一栏会永远取到 `undefined` ——
+ *   判定静默地少看一栏，而「少看一栏」正是这份文件要防的那件事。
  */
-function frameFromDoc(blockId: string, node: string): FrameSpec | null {
-  const f = block(blockId).frame
+export function frameSpecFromBlock(b: DocBlock, node: string): FrameSpec | null {
+  const f = b.frame
   if (!f) return null
+  const where = `DECISION.md 的 '${b.id}'`
   return {
     node,
     fields: f.fields.map((x) => {
       const p = x.project ? FRAME_PROJECTIONS[x.project] : undefined
       if (x.project && !p) {
         throw new Error(
-          `DECISION.md 的 '${blockId}' 里，frame 投影 '${x.project}' 不在注册表里 —— ` +
+          `${where} 里，frame 投影 '${x.project}' 不在注册表里 —— ` +
             `可选：${Object.keys(FRAME_PROJECTIONS).join(' / ')}`,
         )
       }
       // 不写投影 ⇒ 格名就是格（`task` 读 `task`）。写错要当场报，不能静默当成原样取
       if (!p && !AGENT_CTX_KEYS.includes(x.key as keyof AgentCtx)) {
         throw new Error(
-          `DECISION.md 的 '${blockId}' 里，frame 的 '${x.key}' 既不是 ctx 的格名，也没给投影 —— ` +
+          `${where} 里，frame 的 '${x.key}' 既不是 ctx 的格名，也没给投影 —— ` +
             `ctx 只有 ${AGENT_CTX_KEYS.join(' / ')}`,
         )
       }
@@ -200,13 +208,17 @@ function frameFromDoc(blockId: string, node: string): FrameSpec | null {
     excluded: f.excluded.map((e) => {
       if (!AGENT_CTX_KEYS.includes(e.field as keyof AgentCtx)) {
         throw new Error(
-          `DECISION.md 的 '${blockId}' 里，排除项 '${e.field}' 不是 ctx 的格名 —— ` +
-            `ctx 只有 ${AGENT_CTX_KEYS.join(' / ')}`,
+          `${where} 里，排除项 '${e.field}' 不是 ctx 的格名 —— ctx 只有 ${AGENT_CTX_KEYS.join(' / ')}`,
         )
       }
       return [e.field as keyof AgentCtx, e.why] as const
     }),
   }
+}
+
+/** 磁盘上那份 `DECISION.md` 里某个块的帧声明。消费方（`framed`）走这条 */
+function frameFromDoc(blockId: string, node: string): FrameSpec | null {
+  return frameSpecFromBlock(block(blockId), node)
 }
 
 /** 把声明编成 `state` —— 节点不再手拼 dict，帧的形状由声明决定 */
@@ -675,6 +687,67 @@ const SPEC_BLOCKS: ReadonlyArray<readonly [string, string]> = [
   ['is_done', 'loop.isDone'],
   ['can_deliver', 'loop.canDeliver'],
 ]
+
+/**
+ * 一份 `DECISION.md` 的**全部**帧声明 —— 合规检查的入口（`frameSpecViolations` 的输入）。
+ *
+ * ★★ 这个函数是**为了补一个洞**才存在的。`frameSpecViolations` 在此之前
+ *   只被单测拿手拼的 spec 调过，磁盘上那份文件**从来没被它检查过**。
+ *   后果实测过（2026-09-23）：把 `needs_tool` 的
+ *   `- cwd —— 路径不进判定：…` 整行删掉，
+ *
+ *     · 解析器不管 —— 行没了就是没了，没有东西记得它曾经在
+ *     · `frameSpecFromBlock` 也不管 —— 剩下的每一行都是合法的
+ *     · `jevloop spec` 打印「✓ parses clean and every predicate compiles」，exit 0
+ *     · `npm test` 61 个相关用例全绿
+ *
+ *   于是 §8.14 那条「删掉一个字段之后没有任何东西记得它曾经在过」
+ *   **原样活在这份用来消灭它的文件里**。检查写好了、没人跑，
+ *   和没有检查是同一件事（§8.16 的「声明了却没消费方」）。
+ *
+ * 拿 `DecisionDoc` 而不是读磁盘，是为了让合规检查能对**改坏过的文本**跑。
+ * 缺块要当场抛：`SPEC_BLOCKS` 里少一个块，说明文件已经不合格了。
+ */
+export function frameSpecsOf(doc: DecisionDoc): FrameSpec[] {
+  const out: FrameSpec[] = []
+  for (const [blockId, node] of SPEC_BLOCKS) {
+    const b = doc.blocks.find((x) => x.id === blockId)
+    if (!b) {
+      throw new Error(
+        `DECISION.md 里没有 '${blockId}' 这个块（现有：${doc.blocks.map((x) => x.id).join('、')}）—— ` +
+          `七个判定各对应一个块，少一个就没有判定规格`,
+      )
+    }
+    const spec = frameSpecFromBlock(b, node)
+    if (spec) out.push(spec)
+  }
+  return out
+}
+
+// ═══════════════════════════════════════════════════════════
+// 加载即验：帧声明不完整就**不许加载**
+// ═══════════════════════════════════════════════════════════
+//
+// ★ 放在这里而不是 `loadDecisionDoc()` 里：`frameSpecsOf` 依赖 `SPEC_BLOCKS`，
+//   而 `SPEC_BLOCKS` 在 `DOC` 之后才定义（模块尾的 `const`）。
+//
+// ★ 这一段补的是一个**实测过的洞**（2026-09-23）：`frameSpecViolations` 在此之前
+//   只被单测拿手拼的 spec 调过。把 `needs_tool` 的 `- cwd —— …` 整行删掉，
+//   解析、谓词、`jevloop spec`、相关测试**四层全绿** —— §8.14 那条
+//   「删掉一个字段之后没有任何东西记得它曾经在过」原样活在这份用来消灭它的文件里。
+//
+//   和上面 `loadDecisionDoc` 对解析问题抛是同一个态度：**没有判定规格就没有
+//   可用的降级**，所以宁可在加载时停住，也不带着一份缩水的声明跑起来。
+{
+  const bad = frameSpecViolations(frameSpecsOf(DOC))
+  if (bad.length > 0) {
+    throw new Error(
+      `DECISION.md 的帧声明不完整（${bad.length} 处）—— ` +
+        `每一个判定都要说清它**看什么**、以及**故意不看什么（带理由）**：\n` +
+        bad.map((m) => `  ${m}`).join('\n'),
+    )
+  }
+}
 
 /**
  * 覆盖表里可以写哪些键 —— 由 `DECISION.md` **现算**，不是抄一份清单。

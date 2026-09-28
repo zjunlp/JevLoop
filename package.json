@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test \"tests/*.test.ts\"",
     "check": "node --experimental-strip-types scripts/check.ts",
+    "conformance": "node --experimental-strip-types scripts/conformance.ts",
     "bench": "node --experimental-strip-types bench/run.ts",
     "compare": "node --experimental-strip-types bench/compare.ts",
     "latency": "node --experimental-strip-types bench/latency.ts"

@@ -1,0 +1,54 @@
+{
+  "adapter": "examples/external-host.ts",
+  "contractSchema": "draft-portable-core",
+  "level": 2,
+  "description": "Reference fixture: local decision execution plus a host-owned multi-node graph.",
+  "positions": {
+    "step-start": ["use_tool", "answer"],
+    "tool-choice": ["call"],
+    "input-choice": ["use"],
+    "before-call": ["auto", "auto_audit", "ask_human"],
+    "after-tool": ["continue", "stop", "finish", "keep_going"],
+    "after-generate": ["deliver", "revise"]
+  },
+  "customGraphNodes": [
+    "classify_issue",
+    "inspect_repository",
+    "plan_patch",
+    "run_tests",
+    "interpret_failure",
+    "prepare_candidate",
+    "request_review",
+    "done"
+  ],
+  "graphFeatures": ["branch", "retry", "escalation", "terminal-state"],
+  "projections": [
+    "earlierMaybe",
+    "describeDone",
+    "filesMaybe",
+    "readMaybe",
+    "lastOrNone",
+    "toolOrEmpty",
+    "lastResult",
+    "lastInput",
+    "toolOrUnknown",
+    "localToolRisk",
+    "resultMaybe",
+    "readCount",
+    "recentSteps",
+    "draftMaybe",
+    "writeEvidence"
+  ],
+  "dynamicProviders": ["toolsFor", "unreadFiles"],
+  "conformance": {
+    "command": "node --experimental-strip-types examples/external-host.ts",
+    "negativeFixtures": "tests/adapter.test.ts",
+    "dispatchAfterCapabilityCheck": true
+  },
+  "knownLimitations": [
+    "The fixture uses a deterministic mock provider.",
+    "Projection and dynamic-provider names are host-owned capabilities.",
+    "The graph is a demonstration, not a universal graph runtime.",
+    "Replay and event export are not yet implemented by this fixture."
+  ]
+}

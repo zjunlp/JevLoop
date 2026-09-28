@@ -260,6 +260,9 @@ const LAYER: Record<string, number> = {
   // L0 —— 词汇。彼此可以互相引用（词汇天然互相指涉）
   vocab: 0,
   'vocab-decision': 0,
+  // Adapter capability checks only consume the parsed contract shape; they do not
+  // know JevLoop's state, tools, or loop, so they stay at the portable bottom.
+  adapter: 0,
   'vocab-records': 0,
   util: 0,
   // L1 —— 机制。纯函数，不许有 IO

@@ -41,11 +41,14 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { USAGE, parseArgv } from './cli-args.ts'
-import { Decider, Meter, formatRatio, loadEnv, resolveGenerator, resolveProvider, runAgent } from './index.ts'
 import { compilePolicy, compileQuestions } from './decision-compile.ts'
 import { headline, parseDecisionDoc, isGate, summarize } from './decisiondoc.ts'
 import { describeGates, type GateOverrides } from './gates.ts'
-import { resolveGates } from './decisions.ts'
+// ⚠ `./decisions.ts` **不在这里静态 import**：它在**模块加载时**就把磁盘上那份
+//   DECISION.md 读进来、解析、并按块校验帧声明，不合格当场抛。静态 import 会让
+//   这个 CLI **在打印任何东西之前**就崩掉（一串栈回溯），而 `spec` 的职责
+//   正是诊断一份坏文件 —— 它必须能在「加载失败」的情况下仍然跑起来。
+//   需要它的两处（`runTask` 的门限覆盖、`spec` 的帧层）各自动态 import。
 
 /** 包根目录。编译后 `dist/cli.js` 与源码 `src/cli.ts` 都指回包根。 */
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -84,6 +87,18 @@ function onceNotifier(): (err: unknown, from: string, to: string) => void {
 }
 
 async function runTask(task: string, options: Map<string, string>): Promise<number> {
+  /*
+    ★ 动态 import `./index.ts`，理由是**加载期副作用**：facade 转出 `decisions.ts`，
+    而那个模块在**模块加载时**就要一份合格的 `DECISION.md`（解析 + 帧声明都过），
+    不合格当场抛。静态 import 会把这个依赖挂在**整个 CLI** 上，于是
+    `jevloop spec` 在打印任何东西之前就死于栈回溯 —— 而它的职责正是诊断一份坏文件。
+
+    ★ 这七个名字只有本函数用（`serve` 是把子进程拉起来，不用它们），
+    所以搬到这里就够了，不必动 `run`/`serve` 的其它部分。
+  */
+  const { Decider, Meter, formatRatio, loadEnv, resolveGenerator, resolveProvider, runAgent } =
+    await import('./index.ts')
+
   const cwd = resolve(options.get('cwd') ?? process.cwd())
   if (!existsSync(cwd)) {
     console.error(`✗ --cwd ${cwd} does not exist`)
@@ -140,6 +155,7 @@ async function runTask(task: string, options: Map<string, string>): Promise<numb
   */
   let gates: GateOverrides = {}
   try {
+    const { resolveGates } = await import('./decisions.ts')
     gates = resolveGates(options.get('gate') ?? process.env.JEVLOOP_GATES ?? '')
   } catch (err) {
     console.error(`✗ ${(err as Error).message}`)
@@ -250,7 +266,7 @@ function serve(options: Map<string, string>): Promise<number> {
  * 重点是**没编译出来的那部分**：一个认不出的谓词会退化成一条永不命中的规则，
  * 也就是一道不存在的闸门，而它是 fail open 的。人写这份文件，所以这里必须出声。
  */
-function spec(fileArg: string | undefined): number {
+async function spec(fileArg: string | undefined): Promise<number> {
   const local = join(process.cwd(), 'DECISION.md')
   const file = fileArg ? resolve(fileArg) : existsSync(local) ? local : join(PKG_ROOT, 'DECISION.md')
 
@@ -290,13 +306,51 @@ function spec(fileArg: string | undefined): number {
     for (const p of doc.problems) console.log(yellow(`    L${p.line}: ${p.message}`))
   }
 
+  /*
+    ── 第三层：帧声明 ──────────────────────────────────────────
+
+    ★ 这一层以前**没有**。`frameSpecViolations` 写好了，但只被单测拿手拼的
+      spec 调过 —— 磁盘上这份文件从来没被它检查过。后果实测过（2026-09-23）：
+      把 `needs_tool` 的 `- cwd —— …` 整行删掉，这个命令打印
+      「✓ parses clean and every predicate compiles」并 exit 0，
+      而 `cwd` 已经从声明里消失了 —— §8.14 那条「删掉一个字段之后没有任何
+      东西记得它曾经在过」原样活着。
+
+      所以一个判定的合规要三问：**读得懂吗**（parse）、**谓词编得出来吗**
+      （policy）、**看什么和不看什么都说清了吗**（frame）。
+
+    ★ 第三层**不用自己算**：`decisions.ts` 在模块加载时就把同一份文件读一遍、
+      编出七份帧声明、跑完整性检查，不合格当场抛。所以这里只要试着加载它 ——
+      加载成功就是这一层通过，抛出来的那句话就是问题本身。
+      走生产的同一条路，比在这里另算一遍可信。
+  */
+  let frameBad: string[] = []
+  if (doc.problems.length === 0) {
+    try {
+      await import('./decisions.ts')
+    } catch (err) {
+      // 换行分开打：抛出来的是一句提要 + 若干条具体缺什么，挤成一行没法读
+      frameBad = (err as Error).message.split('\n').map((s) => s.trim()).filter(Boolean)
+    }
+  } else {
+    // 解析都没过就不去碰它 —— 那时 `decisions.ts` 会抛出**同一批**解析错误，
+    // 混进帧层只会把同一个问题报两遍，还报错了层
+    frameBad = []
+  }
+  if (frameBad.length > 0) {
+    console.log('')
+    console.log(yellow(`  ${frameBad.length} frame problem(s):`))
+    for (const m of frameBad) console.log(yellow(`    ✗ ${m}`))
+  }
+
+  const problems = doc.problems.length + broken + frameBad.length
   console.log('')
-  if (doc.problems.length === 0 && broken === 0) {
-    console.log(green('  ✓ parses clean and every predicate compiles'))
+  if (problems === 0) {
+    console.log(green('  ✓ parses clean, every predicate compiles, and every judgement declares what it sees'))
   }
   console.log('')
 
-  return doc.problems.length === 0 && broken === 0 ? 0 : 1
+  return problems === 0 ? 0 : 1
 }
 
 async function main(): Promise<number> {

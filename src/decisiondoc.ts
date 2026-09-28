@@ -404,13 +404,13 @@ function interpretBlock(section: RawSection, problems: DocProblem[]): DocBlock {
   const position = when.trim().split(/\s|（|\(/)[0] ?? ''
   if (position) {
     const pos = POSITIONS[position]
-    if (!pos) {
+    if (!pos && !position.startsWith('host:')) {
       problems.push({
         line: section.line,
-        message: `when: '${position}' 不是一个位置（可选：${Object.keys(POSITIONS).join(' / ')}）—— ` +
+        message: `when: '${position}' 不是一个位置（可选：${Object.keys(POSITIONS).join(' / ')} 或 host:<name>）—— ` +
           '位置决定这个判定的动作由谁处理；写不出位置，就没有东西会按它的动作做事',
       })
-    } else {
+    } else if (pos) {
       for (const r of policy) {
         if (pos.actions.includes(r.action) || ANY_POSITION_ACTIONS.includes(r.action)) continue
         problems.push({
