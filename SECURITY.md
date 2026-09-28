@@ -31,12 +31,14 @@ None of these exist today. Do not assume any of them.
 ```text
 authentication or authorisation        no
 per-user isolation                     no — one process, one tenant
-a ceiling on CPU, memory or disk       no
+a ceiling on CPU, memory or disk       not by the harness. A container gives you
+                                       one; see below — that is where these live
 a ceiling on wall clock or spend       per run only, and opt-in: maxWallMs /
                                        maxModelCalls / maxTokens on runAgent,
                                        which halt the loop between steps
 per-call tool limits                   yes — enforced in the contract, see below
-a container, namespace or VM           no
+a container, namespace or VM           you supply it. We do not ship one, and the
+                                       reason is below; the invocation is verified
 path-escape sandboxing                 yes — and that is all it is
 tool-output trust boundary             partial — string channels are marked
                                        untrusted; list-valued channels are not
@@ -48,6 +50,59 @@ relevant attack is **displacement** — untrusted text nudging a probability acr
 a threshold. String-valued channels carry an explicit marker now. That is a
 mitigation, not a proof, and the measurement that would say how much it helps has
 not been run.
+
+## Running it in a container
+
+**The decision: we do not ship a container image, and you should run this inside
+one.** Those are one sentence because they are one decision — an image we build
+would be a build artifact to maintain for a project whose whole shape is "no build
+step, no dependencies", while the thing you actually need is the *bounds*, and
+those come from the runtime flags rather than from us.
+
+This invocation was **run and verified**, not written from memory:
+
+```bash
+WORK=/path/to/a/working/directory
+docker run --rm \
+  --network none \
+  --cpus 1 --memory 1g --pids-limit 256 \
+  --read-only --tmpfs /tmp:rw,size=64m \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD":/src:ro \
+  -v "$WORK":/work:rw \
+  -e HOME=/tmp -w /work \
+  node:22-slim \
+  node --experimental-strip-types /src/examples/demo.ts --rule
+```
+
+What each part is for, and what was checked:
+
+| flag | why | checked |
+|---|---|---|
+| `--network none` | the loop needs no network for an offline run, so it should not have one | the demo ran to completion with no network |
+| `--cpus` / `--memory` / `--pids-limit` | the CPU and memory ceilings this file says the harness does not have | a runaway allocator inside `--memory 128m` was killed (exit 137) |
+| `--read-only` + `--tmpfs /tmp:size=64m` | the disk ceiling, and no writable root | a 100 MB write got `ENOSPC`; writing to `/` got `EROFS` |
+| `--cap-drop ALL` + `no-new-privileges` | no capability to escalate with | see the `--user` note below |
+| `-v "$PWD":/src:ro` | the source is **read-only**; the loop never needs to write to itself | verified — the whole run works from a read-only mount |
+| `-v "$WORK":/work:rw` | the only writable place is the directory you chose | the work directory was untouched by the demo, which runs in `/tmp` |
+
+⚠️ **`--user "$(id -u):$(id -g)"` is not optional if you drop capabilities.**
+`--cap-drop ALL` removes `DAC_OVERRIDE`, so container-root can no longer read files
+it does not own — and a source checkout is often mode `600`. Without `--user` the
+first run fails with `EACCES` on the entry file. Found by running it; running as the
+file owner is the better practice anyway.
+
+⚠️ **`--network none` also means no hosted decision backend.** Use the offline
+judge (`--rule`), a local model, or drop `--network none` deliberately and accept
+that the loop can reach whatever the network allows. Inside a container,
+`HOST=0.0.0.0` plus a published port exposes it to your network — the loopback
+decision above is about the default, not a guarantee the flags cannot undo.
+
+**What this does not fix.** A container bounds the *process*; it does not make the
+decision layer correct, does not verify tool output, and does not stop a run from
+deleting files inside the work directory you mounted. It changes what a mistake
+costs, not whether one happens.
 
 ### Per-call tool limits
 
@@ -103,9 +158,16 @@ after the fact.
 ## Shell and git are deliberately absent
 
 A tool that starts a process would widen a boundary that is known not to be
-hardened — no resource limits, no isolation. The order is: provide the limits,
-then add the tools. [`TODO.md`](TODO.md) §1 records this as a condition rather
-than a checkbox that is merely unchecked.
+hardened. [`TODO.md`](TODO.md) §1 records this as a condition rather than a
+checkbox that is merely unchecked.
+
+**That condition is now half met, and the half that is missing is the default.**
+Resource limits and isolation exist — *in the container above*. A plain
+`npm run serve` still has no ceiling on CPU, memory or disk, and nothing stops a
+spawned process from doing whatever the user can. So the condition is met only when
+the operator opts in, and a shipped shell tool cannot assume that. Two ways to close
+it: make the container the only supported deployment, or give the tools their own
+limits. Until one of those lands, shell and git stay out.
 
 ## Reporting
 
