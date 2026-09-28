@@ -211,3 +211,121 @@ Do not claim that the adapter:
 - makes every Agent reliable;
 - replaces Workflow;
 - supports a field merely because the parser accepts its name.
+
+---
+
+## What this skill was missing
+
+Written after applying it to a host we do not own — Codex, via its lifecycle hooks. The
+worked scope is [`ADAPTER-CODEX-SCOPE.md`](ADAPTER-CODEX-SCOPE.md); what follows is what
+that exercise found missing here. Each entry is a step that cost real time to work out
+because the guidance was not there.
+
+### 1. Find the seam before inventorying anything
+
+Step 1 says to record the host's graph; it never says **where to look**. For a host you
+do not own, look for a documented extension point — hooks, plugins, event buses,
+lifecycle callbacks — and do not fork. Codex's hook mechanism turned out to be the whole
+answer: an external command that receives one JSON event and returns one JSON verdict.
+
+Add to Step 1: **find the extension point first, and only then inventory.** If the host
+offers only a log to read, the best you can do is Steps 6 and 8, and you should say so
+rather than attempting 2 through 5.
+
+### 2. `hostReach` per position, and partial adoption as a legitimate outcome
+
+Step 1 says that where a position has no branch, "stop and add the branch before claiming
+support". **For a host you do not own you cannot add a branch.** The instruction is fine
+for your own runtime and impossible for `codex`, `opencode`, or anything you install.
+
+Replace it with a declared reach per position:
+
+```text
+full         the host gives a real veto, and every action in the contract's position
+             is expressible
+partial      a veto exists but the verdict vocabulary is coarser (see item 3)
+unreachable  no interception point exists — record it and move on
+```
+
+Two of six positions were unreachable for Codex for **structural** reasons: there is no
+hook before the model turn, and `PreToolUse` fires after the tool has been chosen. A
+partial adapter that says this is more useful than a claim of support that cannot hold.
+
+### 3. Translate the action vocabulary, and declare the loss
+
+The Skill's Step 5 says an unhandled action is an adapter failure. True — but the harder
+case is an action the host can only express **approximately**. Codex accepts four
+verdicts (silence, `allow`+rewrite, `deny`+reason, `block`+reason) against the contract's
+fourteen actions.
+
+So add: for each contract action, record the host verdict **and, when the mapping is
+lossy, which way it fails**:
+
+```text
+action            host verdict            loss
+auto              silence                 none
+use               allow + updatedInput    none
+escalate          deny + reason           none
+ask_human         deny + reason           ★ the host cannot ask; this fails CLOSED
+```
+
+`ask_human` is the usual casualty, because a host hook is a program and a program cannot
+suspend for a human. Fail-closed is the defensible default for a contract whose premise
+is "do not proceed quietly" — but the point is that it is **declared**, per action, rather
+than discovered in production.
+
+### 4. The adapter is an external process with its own obligations
+
+Steps 2 through 5 read as though the adapter lives inside the host, next to its state.
+For a foreign host it does not: it is a command the host spawns, and it inherits four
+jobs the reference loop performed itself:
+
+```text
+state the host does not keep     Codex does not track which files were read — the
+                                 adapter must, and its copy can be wrong in ways the
+                                 contract cannot see
+reading and bounding its inputs  history comes from a transcript file, which is
+                                 unbounded by construction; the declared bounds must be
+                                 applied by the adapter or the frame grows silently
+the audit channel                auto_audit's "leaves a trace" becomes the adapter's
+                                 own obligation; the host has nowhere to put it
+computing the digests            see item 5
+```
+
+Call this out in Step 2, and make it a checklist item in Step 8's report.
+
+### 5. For a foreign host, records are derived — expect `unverifiable`
+
+Step 6 says "at every decision, record …". A host you do not own will not record what you
+want; it records what it already records. Codex writes JSONL transcripts, and no hook can
+add frame digests to them.
+
+So a derived record will verify as `unverifiable` unless the **adapter** computes and
+stores `sentFrameDigest` and `sentQuestions` itself. That is the expected result, not a
+failure — but it must appear in the report as such. Add to Step 6: distinguish
+**host-emitted** records (may verify) from **adapter-derived** ones (verify only if the
+adapter supplies the digest inputs).
+
+### 6. Adopt in the order the value is
+
+The Skill lists positions but not which to take first when only some are reachable. From
+the Codex exercise the order is:
+
+```text
+1. before-call     the authorization gate — a real veto, and a safety property
+2. after-generate / is_done   the termination gate — where quiet completion lives
+3. after-tool      step success
+4. input-choice    rewriting an argument (needs the host to allow a rewrite)
+```
+
+Positions 1 and 2 are where a host hook has a veto and where this project's claims are
+concentrated. A host that offers only observation gets **zero** of them, and the honest
+report is that the runtime is not adoptable yet rather than that the adapter is partial.
+
+### 7. Verdict schemas are strict; read the host's parser, not just its schema
+
+Codex rejects unknown fields, rejects `permissionDecision: allow` unless it accompanies
+an `updatedInput`, and rejects `permissionDecision: deny` without a non-empty reason. A
+schema alone would not have told us the second rule; the parser did. When integrating,
+read the code that validates your output — the schema is the shape, the parser is the
+contract.
