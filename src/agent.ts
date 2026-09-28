@@ -105,6 +105,22 @@ export interface AgentOptions {
    */
   allowDelete?: boolean
   /**
+   * 一次运行的**硬上限**（TODO §9）。三个都可以单独给，越线就**停机**。
+   *
+   * ★ 单位是墙钟毫秒 / 模型调用数 / token —— **不是钱**。仓库里没有价格表，
+   *   要报美元就得编一张，而那是「没人能复现的数字」（见 CONTRIBUTING）。
+   *
+   * ⚠️ **保证的是「越线之后不会再开新的一步」，不是「绝不超过」。**
+   *   检查在每步开始前做，而越线往往正是那一步的请求造成的 —— 一次请求
+   *   发出去就收不回来。它是刹车，不是预算封顶。撞上之后 `halt` 里会写清
+   *   是哪一条、上限多少（`budget_wall:3000ms` 这种），不会静默停住。
+   *
+   * 不给 = 不设上限（默认），行为和以前一样。
+   */
+  maxWallMs?: number
+  maxModelCalls?: number
+  maxTokens?: number
+  /**
    * 之前的轮次。**多轮会话的入口** —— 没有它，每一句都是孤立的任务，
    * 「再读一遍那个文件」里的"那个"无处可指。
    *
@@ -334,6 +350,38 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
   let step = 0
   let halt = 'max_steps'
 
+  /*
+    ── 每轮硬上限（TODO §9）────────────────────────────────────
+
+    §9 的原话是「唯一的上限是 maxSteps，跑一轮花多少钱、多少时间都没有盖」。
+    这里补上三个，**都是停机**，不是事后警告。
+
+    ★ 为什么是「墙钟 + 模型调用数 + token」，而不是「多少钱」：
+      `context.ts` 的 `priceGenerateRequest` 定价的单位是 **token**，仓库里
+      **没有**价格表 —— 也没有 provider 的单价。要报「美元」就得编一张表，
+      而 CONTRIBUTING 明确把「没人能复现的数字」列为会直接关掉的那一类。
+      所以上限只用真的量得到的单位。
+
+    ★ **它保证什么、不保证什么**（照实说，否则就是个安静的谎）：
+      检查发生在**每一步开始之前**，所以保证的是「越线之后不会再开新的一步」，
+      **不是**「总花费绝不超过这个数」—— 一次请求发出去就收不回来，
+      而越线往往正是那一次请求造成的。上限因此是个**刹车**，不是**预算封顶**。
+  */
+  const startedAt = Date.now()
+  const spent = (): string | null => {
+    if (opts.maxWallMs !== undefined && Date.now() - startedAt > opts.maxWallMs) {
+      return `budget_wall:${opts.maxWallMs}ms`
+    }
+    const s = meter.stats
+    if (opts.maxModelCalls !== undefined && s.modelCalls >= opts.maxModelCalls) {
+      return `budget_model_calls:${opts.maxModelCalls}`
+    }
+    if (opts.maxTokens !== undefined && s.inputTokens + s.outputTokens >= opts.maxTokens) {
+      return `budget_tokens:${opts.maxTokens}`
+    }
+    return null
+  }
+
   // 门限覆盖**进这一轮的第一条事件** —— 它是持久化的，所以事后翻日志能
   // 看出「这一轮跑在什么门限上」。没有它，一次跑在 0.7 上的运行和一个跑在
   // 默认值上的运行在日志里长得一模一样（§8.10）。
@@ -422,6 +470,14 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
 
   // ── 工具循环 ──────────────────────────────────────────────
   while (step < maxSteps) {
+    // 越线就不再开新的一步。放在这里（而不是每步结尾）是**为了在花钱之前停**：
+    // 越线之后的第一件事就是一次判定请求。
+    const over = spent()
+    if (over) {
+      halt = over
+      opts.onTrace?.(`  budget reached (${over}) → stopping before step ${step + 1}`)
+      break
+    }
     step++
     decider.setStep(step)
 
@@ -678,6 +734,41 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
 
   let genStep = step + 1
   decider.setStep(genStep)
+
+  /*
+    ★ 生成之前**再检查一次**上限。
+
+    只在循环头上检查是不够的：循环是因为 `max_steps` 正常退出时，后面还有
+    **整个 loop 里最贵的那一步**（生成，外加可能的 revise 再来一次）。
+    「越线就不再花钱」这句话要是漏掉这里，就是漏掉了花钱最多的地方。
+
+    越线时**不生成**，直接把已有的草稿（通常没有）当答案交出去，并在 halt
+    里说清是撞了哪条上限 —— 一次空回答加一句真话，好过一份超支的报告。
+  */
+  const overBeforeGenerate = spent()
+  if (overBeforeGenerate) {
+    halt = overBeforeGenerate
+    opts.onTrace?.(`  budget reached (${overBeforeGenerate}) → not generating`)
+    emit({
+      type: 'run:end',
+      halt,
+      steps: step,
+      answer: ctx.draft ?? '',
+      stats: meter.stats,
+      budget: runBudget(evidenceReport, folded.report, evidenceEstimate),
+    })
+    return {
+      answer: ctx.draft ?? '',
+      halt,
+      steps: step,
+      ctx,
+      meter,
+      context: evidenceReport,
+      conversation: folded.report,
+      request: evidenceEstimate,
+    }
+  }
+
   emit({ type: 'phase', step: genStep, kind: 'generate' })
   const gen = await generator.generate({
     task: ctx.task,

@@ -127,20 +127,21 @@ These are not about the loop. They are about handing this loop to someone who is
 
 ## 8 · The security boundary
 
-There is no authentication — `src/server.ts` says so itself, in a warning it prints. Sandboxing covers path escape and nothing else. There is no ceiling on CPU, memory, disk or wall clock. One process, local files, one tenant.
+There is no authentication — `src/server.ts` says so itself, in a warning it prints. Sandboxing covers path escape and nothing else. No ceiling on CPU, memory, disk or wall clock. One process, local files, one tenant.
 
-- [ ] Authentication, or an explicit written statement that this is loopback-only and will stay that way.
+- [x] Authentication, or an explicit written statement that this is loopback-only and will stay that way. *(2026-09-28. [`SECURITY.md`](SECURITY.md) is that statement: loopback-only, no authentication, and it will stay that way — "put it behind something that authenticates" rather than adding a password prompt here. The same file lists, as a table, what is **not** provided, so a partial mitigation cannot be read as a guarantee.)*
 - [ ] Resource limits at the tool layer: time, output size, and what a tool is allowed to write.
 - [ ] A container or namespace — or a documented decision not to have one.
 
 ## 9 · The cost boundary
 
-The only ceiling is `maxSteps`, default **12**. Nothing caps tokens, money or time for a run. "Budget" in this repository means *context characters*, not spend.
+The only ceiling **used to be** `maxSteps`, default **12**: nothing capped tokens, money or time for a run, and "budget" in this repository meant *context characters*, not spend.
 
-You can currently limit how many steps it takes. You cannot limit what it costs.
-
-- [ ] A per-run spend ceiling that **halts** the loop, rather than warning after the fact.
-- [ ] The same for wall clock.
+- [x] A per-run ceiling that **halts** the loop, rather than warning after the fact. *(2026-09-28. Three of them, all opt-in on `runAgent`: `maxWallMs`, `maxModelCalls`, `maxTokens`. Checked **before each step and again before generation** — generation is the expensive one, so a brake that missed it would miss the point. `halt` names which ceiling and at what value (`budget_wall:5000ms`), and a trace line is emitted, so it never stops silently.)*
+- [x] The same for wall clock. *(Same change.)*
+- [x] Spend is in **tokens, not money** — and that is deliberate. `priceGenerateRequest` prices in tokens; the repository has no price table and no provider unit prices, so a dollar figure would have to be invented, and CONTRIBUTING closes PRs whose numbers nobody can reproduce.
+- [ ] **What the ceiling does *not* do:** it guarantees "no further step starts after the line is crossed", **not** "spend never exceeds the limit". A request already sent cannot be recalled, and crossing the line is usually caused by that very request. `tests/budget-ceiling.test.ts` pins this with a deterministic slow-provider fixture: the step that starts before the line finishes after it.
+- [ ] A ceiling that covers **decision** tokens too. Today `Meter` only counts generation tokens, so a run whose decisions dominate (which is the hosted-Jev case, §8.11) is bounded by wall clock and call count but not by its real token spend.
 
 ## 10 · The failure boundary
 

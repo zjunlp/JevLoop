@@ -499,7 +499,7 @@ It has no authentication and binds to loopback only. `HOST=0.0.0.0` means *anyon
 - **Not a replacement for an LLM.** Drafting, coding and summarising still need one.
 - **Not "zero hallucination".** A decision model can't return an answer outside the type you asked for, but the answer can still be wrong. That's what the threshold is for.
 - **Not a general accuracy claim.** Our own ReAct comparison above is seven tasks, one run each, on one model — and this loop was accepted on 6 of 7 against ReAct's 7 of 7.
-- **Not production-hardened.** Tool sandboxing covers path escape only. Read [`src/act-local.ts`](src/act-local.ts) before pointing it at anything you care about.
+- **Not production-hardened.** Tool sandboxing covers path escape only. Read [`src/act-local.ts`](src/act-local.ts) before pointing it at anything you care about, and [`SECURITY.md`](SECURITY.md) for the deployment model — loopback-only, no authentication, and a table of what is explicitly **not** provided.
 - **Not a portable runtime yet.** The contract is portable; the *execution* is not. Another Agent runtime needs an adapter — state cells, projections, candidate providers and action handlers — and `DECISION.md`'s predicate and projection semantics are not frozen. See [Bring your own agent loop](#bring-your-own-agent-loop).
 
 ## Layout
