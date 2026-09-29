@@ -61,6 +61,7 @@ import { Meter } from '../src/meter.ts'
 import type { Provider, DecideRequest, DecideResponse } from '../src/seam-provider.ts'
 import type { AnswerSet, QuestionSet } from '../src/vocab.ts'
 import { claimOf, classify, evidenceOf, tally, OUTCOME_LABEL, type Outcome, type Step } from '../src/claim-outcome.ts'
+import { tostPaired, pairedMde } from '../src/equivalence.ts'
 import {
   confusion,
   mergeCounts,
@@ -655,12 +656,28 @@ const shortV = (v: Verdict) => (v === 'accept' ? G('放行') : v === 'reject' ? 
 
 async function main(argv: string[]): Promise<void> {
   /*
-    ★ 读一次 `.env`（`TYPESAFE_API_KEY` / `JEVOS_JEV_URL` / `DEEPSEEK_*` 都在里面）。
-    `keepExisting` 默认为真 ⇒ **命令行上显式给的值优先**，不会被文件覆盖。
+    ★ 读一次 `.env` 拿 **Jev 的凭据**（`TYPESAFE_API_KEY` / `JEVOS_JEV_URL`）。
     没有这一步，Jev 那条臂会因为「环境变量里没有密钥」被静默丢掉 ——
     而它恰恰是这个实验里最该在的那条臂。
+
+    ★★ 但 **`.env` 不许决定生成后端**。实测踩到的：`.env` 里的
+    `DEEPSEEK_BASE_URL` 指的是**真的 api.deepseek.com**，而前几轮实验用的是
+    本地 vLLM（命令行上显式给的）。`loadEnv` 一开，**生成后端就被悄悄换成了
+    付费的远端**，而日志上只多了一个模型名 —— 没人会注意到跑的是另一套东西，
+    而它已经花钱了。
+
+    ⇒ 生成后端一律以**调用方显式给的值**为准，`.env` 只补判定层凭据。
   */
+  const genFromCaller = {
+    DEEPSEEK_BASE_URL: process.env.DEEPSEEK_BASE_URL,
+    DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
+    DEEPSEEK_MODEL: process.env.DEEPSEEK_MODEL,
+  }
   loadEnv()
+  for (const [k, v] of Object.entries(genFromCaller)) {
+    if (v === undefined) delete process.env[k]
+    else process.env[k] = v
+  }
   const repAt = argv.indexOf('--repeat')
   const repeat = repAt === -1 ? 3 : Math.max(1, Number(argv[repAt + 1] ?? 3) || 3)
   const limAt = argv.indexOf('--limit')
@@ -672,7 +689,15 @@ async function main(argv: string[]): Promise<void> {
   console.log(`\n${B('JevLoop · 判定层混淆矩阵（配对）')}`)
   console.log(`${D('  候选  :')} 每个 (任务, 重复) **只生成一个**，所有臂判同一个`)
   console.log(`${D('  任务  :')} ${tasks.length} 个 × ${repeat} 次重复 = ${tasks.length * repeat} 个候选`)
-  console.log(`${D('  生成  :')} ${process.env.DEEPSEEK_MODEL ?? '(未设)'}  ${D('闸门已中和（一律放行）')}`)
+  {
+    const base = process.env.DEEPSEEK_BASE_URL
+    const host = base ? base.replace(/^https?:\/\//, '').split('/')[0] : null
+    console.log(
+      `${D('  生成  :')} ${process.env.DEEPSEEK_MODEL ?? '(未设)'} ` +
+        `${host ? `@ ${host}` : R('@ 没有配 DEEPSEEK_BASE_URL ⇒ 会退化成脚本生成器')}` +
+        `  ${D('闸门已中和（一律放行）')}`,
+    )
+  }
   console.log(`${D('  金标  :')} 回答**如实不如实**（交付闸门的职责），来自 classify + 确定性 oracle`)
 
   /*
@@ -692,7 +717,7 @@ async function main(argv: string[]): Promise<void> {
       ` / 同族 ${SAME_MODEL} ${sameOk ? G('在线') : R('★ 探不到 ⇒ 该臂已丢掉')}` +
       ` / 异族 ${OTHER_MODEL} ${otherOk ? G('在线') : R('★ 探不到 ⇒ 该臂已丢掉')}`,
   )
-  console.log(`${D('  操纵  :')} 每个判官问两次：**真帧** 与 **证据格抹掉**（证伪条件）\n`)
+  console.log(`${D('  操纵  :')} 每个判官问三次：**真帧** / **换成别的任务的证据** / **抹掉证据**\n`)
 
   const judges: { same?: LocalLlmProvider; other?: LocalLlmProvider; jev?: Provider } = {}
   if (sameOk) judges.same = new LocalLlmProvider({ baseUrl: SAME_URL, model: SAME_MODEL })
@@ -854,6 +879,42 @@ async function main(argv: string[]): Promise<void> {
         `${D(`  (都放行 ${m.bothAccept}，都拒绝 ${m.bothReject})`)}`,
     )
   }
+
+  // ═══════════════════════════════════════════════════════════
+  //  等价检验（TOST）：把「测不出来」写成一句能写的结论
+  // ═══════════════════════════════════════════════════════════
+  /*
+    ★ 五篇最近的工作里**没有一篇**做等价检验，而我们的处境恰恰需要它：
+    「差异很小 + 事件很少」。零假设检验在逻辑上证明不了「没有差别」，
+    只有「差异落在 ±Δ 之内」是可以正面声称的。
+
+    ★★ Δ 是**业务判断**（假确认率差多少算可接受），不是统计能给的。
+       下面这个 5 个百分点是**默认占位**，必须由 owner 定 —— 所以每一行都把它印出来。
+  */
+  const MARGIN = 0.05
+  console.log(`\n${B('  ── 等价检验（TOST）：差异是否落在可接受范围内 ───────────')}`)
+  console.log(
+    `${D(`  等价边界 Δ = ${(MARGIN * 100).toFixed(0)} 个百分点 —— **这是默认占位，必须由业务定，不是统计定的**`)}`,
+  )
+  console.log(`${D('  配对比较，90% 区间（单侧 α=0.05 ⇒ 等价结论的置信水平是 90%）')}`)
+  const bad = judged.filter((c) => c.gold === 'bad')
+  for (const arm of ARMS) {
+    if (arm === 'accept-all') continue
+    // 假确认那一侧：只在「该拦」的格子上比（接受了就是假确认）
+    const b1 = bad.filter((c) => c.verdicts[arm] === 'accept' && c.verdicts['accept-all'] !== 'accept').length
+    const c1 = bad.filter((c) => c.verdicts[arm] !== 'accept' && c.verdicts['accept-all'] === 'accept').length
+    const t1 = tostPaired(b1, c1, bad.length, MARGIN)
+    const mde = pairedMde(bad.length, (b1 + c1) / Math.max(1, bad.length))
+    const pct = (x: number) => `${x >= 0 ? '+' : ''}${(x * 100).toFixed(1)}%`
+    console.log(
+      `  ${arm.padEnd(12)}假确认差 ${pct(t1.delta).padStart(7)}  90%区间 [${pct(t1.lower)}, ${pct(t1.upper)}]  ` +
+        `p=${t1.p.toFixed(3)}  ${t1.equivalent ? G('✓ 可声称等价') : D('不足以声称等价')}` +
+        `${D(`   本次设计对假确认的 MDE ≈ ${(mde * 100).toFixed(1)} 个百分点（n=${bad.length}）`)}`,
+    )
+  }
+  console.log(
+    `${D('  ★ 阴性结论必须带 MDE：说「测不出来」时，同一行要写清这套设计本来能看见多大差异')}`,
+  )
 
   // ── 复合可靠性：不发明 r，报 r* ──────────────────────────
   console.log(`\n${B('  ── 判定层值不值：报「修复率 r 要多大才划算」────────────')}`)
