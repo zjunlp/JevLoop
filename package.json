@@ -24,7 +24,8 @@
     "latency": "node --experimental-strip-types bench/latency.ts",
     "gate-compare": "node --experimental-strip-types bench/gate-compare.ts",
     "gate-derivable": "node --experimental-strip-types bench/gate-derivable-run.ts",
-    "replay": "node --experimental-strip-types scripts/replay.ts"
+    "replay": "node --experimental-strip-types scripts/replay.ts",
+    "trace": "node --experimental-strip-types scripts/trace.ts"
   },
   "keywords": [
     "agent",
