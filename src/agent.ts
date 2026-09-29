@@ -40,6 +40,7 @@ import { Meter } from './meter.ts'
 import { clip } from './budget.ts'
 import { buildDecisions, GENERATOR_INSTRUCTION, type DecisionSet } from './decisions.ts'
 import type { GateOverrides } from './gates.ts'
+import type { ResumeState } from './resume.ts'
 import { hasFileOptions, type AgentCtx, type StepRecord } from './frame.ts'
 import { callTool, isToolName } from './act.ts'
 import { LOCAL_TOOLS, type ToolName, type ToolTable } from './act-local.ts'
@@ -132,6 +133,14 @@ export interface AgentOptions {
    * 那个变量正是容器配方里设的（见 `SECURITY.md`）。
    */
   assumeIsolated?: boolean
+  /**
+   * **从最后一个可恢复的步骤接着跑**（TODO §10）。由 `resumePointFrom()` 从
+   * 会话日志折出来，见 `src/resume.ts`。
+   *
+   * ★ 给了它之后，`task` / `cwd` 以它为准；两处**对不上就抛**，而不是悄悄挑一个
+   *   —— 静默挑一个意味着「跑的是哪个任务」这件事没人说得清。
+   */
+  resume?: ResumeState
   /**
    * 一次运行的**硬上限**（TODO §9）。三个都可以单独给，越线就**停机**。
    *
@@ -373,20 +382,41 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
       : opts.provideWriteInput
 
   const earlier = folded.recent.slice().reverse().map((t) => t.task).join(' / ')
+  /*
+    ★ 恢复：`task` / `cwd` / `files` / `readFiles` / `history` 全部来自恢复点，
+      **步号也接着数**。对不上就抛 —— 见 `AgentOptions.resume`。
+  */
+  if (opts.resume && (opts.resume.task !== opts.task || opts.resume.cwd !== opts.cwd)) {
+    throw new Error(
+      `恢复点与本次调用对不上：恢复点是 ${JSON.stringify(opts.resume.task)} @ ${opts.resume.cwd}，` +
+        `这次说的是 ${JSON.stringify(opts.task)} @ ${opts.cwd} —— 不猜，停在这里`,
+    )
+  }
   const ctx: AgentCtx = {
-    task: opts.task,
-    cwd: opts.cwd,
+    task: opts.resume?.task ?? opts.task,
+    cwd: opts.resume?.cwd ?? opts.cwd,
     earlier,
-    files: [],
-    history: [],
+    files: opts.resume?.files ?? [],
+    ...(opts.resume?.readFiles ? { readFiles: opts.resume.readFiles } : {}),
+    history: opts.resume?.history ?? [],
     // `null` = 调用方明确不要写入 → 门关上，`write_file` 不进候选（见 `frame.ts`）
     canWrite: typeof writeInput === 'function',
     // 删除**不跟着写入走**：默认 false，所以 `delete_file` 对现有调用方不存在。
     // 要看它进候选，调用方必须显式传 `allowDelete`（见 `AgentOptions`）
     canDelete: opts.allowDelete === true,
   }
-  let step = 0
+  let step = opts.resume?.step ?? 0
   let halt = 'max_steps'
+  /*
+    ★ 死在半路那一步的副作用是**未知的**，而它会被重跑。说出来 ——
+      静默重跑一个可能已经写过的操作，是这个文件最不该犯的那种错。
+  */
+  if (opts.resume?.inFlight) {
+    const f = opts.resume.inFlight
+    trace(
+      `resuming at step ${step} — step ${f.step} (${f.tool}) has no result, so whether its effect happened is unknown; it will run again`,
+    )
+  }
 
   /*
     ── 每轮硬上限（TODO §9）────────────────────────────────────

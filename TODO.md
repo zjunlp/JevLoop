@@ -151,7 +151,7 @@ The only ceiling **used to be** `maxSteps`, default **12**: nothing capped token
 
 Classification and backoff are better here than in most harnesses. What is missing is resuming: sessions persist and the UI restores them, but a run that died at step 7 cannot continue from step 7.
 
-- [ ] Resume a run from its last durable step.
+- [x] Resume a run from its last durable step. *(2026-09-29. `src/resume.ts` folds a session log back into a startable state, and `runAgent({ resume })` continues from it — `task`, `cwd`, `files`, `readFiles` and `history` are all rebuilt, and the **step counter continues** rather than restarting, which is the part the end-to-end test actually asserts. History is reconstructed by pairing `tool:call` with `tool:result`, so no second copy of the state exists to drift away from the event stream. Three things it refuses rather than guesses: no `run:start` (nothing to run), `agent_done` (nothing left to resume — but a run stopped by `max_steps` or a budget ceiling **is** resumable, which is the case that matters), and a resume point that disagrees with the task or cwd the caller passed, which throws instead of silently picking one. **The sharpest case is a step with a `tool:call` and no `tool:result`** — the process died mid-execution, so whether its side effect happened is *unknown*. It is kept out of `history` (putting it in would assert it succeeded), the resume point stays on that step so it re-runs, and the uncertainty is reported as `inFlight` and traced. Silently skipping it and silently re-running it are both guesses about a side effect.)*
 
 ## 11 · The operations boundary
 
