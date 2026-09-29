@@ -216,6 +216,17 @@ export interface DecisionResult<A = AnswerSet> {
    */
   warnings?: string[]
   /**
+   * 这一次前向**实际花掉的 token**（后端报的话）。TODO §9。
+   *
+   * ★ 后端不报时这里是 `undefined`，**不是 0** —— 0 分的意思是「没花钱」，
+   *   拿它冒充「不知道」会让一个漏报 token 的后端看起来免费，而预算封顶
+   *   正是建在这个数上（§8.14 那条 `absent` / `unfilled` 的同一个道理）。
+   */
+  inputTokens?: number
+  outputTokens?: number
+  /** true = 后端自己估的，不是真实计量 */
+  usageEstimated?: boolean
+  /**
    * 这一帧是怎么编出来的（§8.14）。**声明了帧的节点才有。**
    *
    * ★ 它回答「它看到了什么」；「它被问了什么」要看 `requestDigest`。

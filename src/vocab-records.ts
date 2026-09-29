@@ -43,6 +43,18 @@ export interface DecisionRecord {
   escalate: boolean
   /** 每个问题的答案摘要，用于 trace */
   answers: string
+  /**
+   * 这一次**前向**花掉的 token（后端报的话，TODO §9）。
+   *
+   * ★ 一次 `askMany` 把若干节点合并成一次请求，所以**这一批的每条记录都带
+   *   同一份 token**。求和必须按 `batch` 去重 —— 和 `latencyMs` 同一条规则、
+   *   同一个理由（那个事故记在 `batch` 的注释里：合并几路就多算几倍）。
+   *
+   * ★ 后端不报时是 `undefined`，**不是 0**。
+   */
+  inputTokens?: number
+  outputTokens?: number
+  usageEstimated?: boolean
 }
 
 export interface ModelCallRecord {
@@ -111,6 +123,27 @@ export interface MeterStats {
   degraded: number
   /** 审计留痕条数（`auto_audit` 动作触发） */
   audits: number
+  /**
+   * **生成 + 判定**的总 token。TODO §9：预算封顶看的是它。
+   *
+   * ★ 在这条改之前，它只统计模型调用 —— 于是一条判定占大头的运行
+   *   （托管 Jev 就是，§8.11）只被墙钟和调用次数框住，**没有被它真正花的
+   *   token 框住**。这才是那个缺口的样子。
+   */
   inputTokens: number
   outputTokens: number
+  /** 其中生成那部分 */
+  generationInputTokens: number
+  generationOutputTokens: number
+  /** 其中判定那部分（**按批去重**） */
+  decisionInputTokens: number
+  decisionOutputTokens: number
+  /**
+   * 一条 usage 都没报的**判定批次数**。
+   *
+   * ★ 那些批次只能按 0 计，所以上面两个判定数是**下界**。把它单列出来，
+   *   是为了让「后端漏报」这件事**可见** —— 否则一个不报 token 的后端
+   *   看起来是免费的，而封顶正好建在这个数上。
+   */
+  decisionBatchesWithoutUsage: number
 }

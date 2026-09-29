@@ -51,6 +51,10 @@ export class Meter {
       degraded: d.degraded,
       escalate: d.escalate,
       answers: summarizeAnswers(d.answers as Record<string, any>),
+      // ★ 一次前向的 token 落在这一批的每条记录上；求和时按 `batch` 去重
+      ...(d.inputTokens !== undefined ? { inputTokens: d.inputTokens } : {}),
+      ...(d.outputTokens !== undefined ? { outputTokens: d.outputTokens } : {}),
+      ...(d.usageEstimated !== undefined ? { usageEstimated: d.usageEstimated } : {}),
     }
     this.decisions.push(rec)
     return rec
@@ -115,6 +119,47 @@ export class Meter {
     const modelMs = this.modelCalls.reduce((a, m) => a + m.latencyMs, 0)
     const total = decisionMs + modelMs
 
+    /*
+      ── token 的两个来源（TODO §9）────────────────────────────
+
+      生成那部分是每一条模型调用自己报的，直接求和。
+
+      ★ 判定那部分**必须按批去重** —— 与上面 `decisionMs` 同一条规则、
+        同一个理由。一次 `askMany` 把若干节点合并成**一次前向**，于是那一批的
+        每条记录都带着同一份 `usage`；按记录求和会把它乘以路数，正是 3.31s
+        那个事故的同一个形状，只是这次错在 token 上。
+
+      ★ 没报 usage 的批次**单独计数**：那些只能按 0 计，于是判定那两个数是
+        **下界**。必须说出来 —— 一个漏报 token 的后端不该看起来免费，
+        而封顶就建在这个数上。0 分的意思是「没花钱」，不能用它冒充「不知道」。
+    */
+    const generationInputTokens = this.modelCalls.reduce((a, m) => a + (m.inputTokens ?? 0), 0)
+    const generationOutputTokens = this.modelCalls.reduce((a, m) => a + (m.outputTokens ?? 0), 0)
+    const seenBatch = new Set<number>()
+    let decisionInputTokens = 0
+    let decisionOutputTokens = 0
+    let decisionBatchesWithoutUsage = 0
+    for (const d of this.decisions) {
+      if (seenBatch.has(d.batch)) continue
+      seenBatch.add(d.batch)
+      if (d.inputTokens === undefined && d.outputTokens === undefined) {
+        decisionBatchesWithoutUsage++
+        continue
+      }
+      decisionInputTokens += d.inputTokens ?? 0
+      decisionOutputTokens += d.outputTokens ?? 0
+    }
+    const tokens = {
+      generationInputTokens,
+      generationOutputTokens,
+      decisionInputTokens,
+      decisionOutputTokens,
+      decisionBatchesWithoutUsage,
+      // ★ 封顶看的总数：生成 + 判定
+      inputTokens: generationInputTokens + decisionInputTokens,
+      outputTokens: generationOutputTokens + decisionOutputTokens,
+    }
+
     return {
       decisions: this.decisions.length,
       // ★ 请求数 = **不同的批号个数**。上面那个 `byBatch` 已经算好了这件事，
@@ -132,8 +177,7 @@ export class Meter {
       escalated: this.decisions.filter((d) => d.escalate).length,
       degraded: this.decisions.filter((d) => d.degraded).length,
       audits: this.audit.length,
-      inputTokens: this.modelCalls.reduce((a, m) => a + (m.inputTokens ?? 0), 0),
-      outputTokens: this.modelCalls.reduce((a, m) => a + (m.outputTokens ?? 0), 0),
+      ...tokens,
     }
   }
 

@@ -403,6 +403,10 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     if (opts.maxModelCalls !== undefined && s.modelCalls >= opts.maxModelCalls) {
       return `budget_model_calls:${opts.maxModelCalls}`
     }
+    // ★ `s.inputTokens` / `s.outputTokens` 是**生成 + 判定**的总数（TODO §9）：
+    //   判定占大头的运行（托管 Jev）以前只被墙钟和调用次数框住，现在被它
+    //   真正花的 token 框住。后端没报 usage 的批次按 0 计，所以它是下界 ——
+    //   `s.decisionBatchesWithoutUsage` 把这个下界说在明处。
     if (opts.maxTokens !== undefined && s.inputTokens + s.outputTokens >= opts.maxTokens) {
       return `budget_tokens:${opts.maxTokens}`
     }

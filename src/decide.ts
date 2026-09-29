@@ -31,7 +31,7 @@
  * @module JevLoop/decide
  */
 
-import type { Provider } from './seam-provider.ts'
+import type { Provider, Usage } from './seam-provider.ts'
 import type { DecisionSpec, DecisionResult } from './vocab-decision.ts'
 import type { QuestionSet, AnswerMap, AnswerSet } from './vocab.ts'
 import { resolvePolicy, closestMargin, type PolicyWarning } from './policy.ts'
@@ -276,6 +276,8 @@ export class Decider {
     const batch = this.meter.nextBatch()
     let answers: AnswerSet = {}
     let latencyMs = 0
+    // 后端报的 token（§9）。**没报就是 undefined**，见 DecisionResult 的说明
+    let usage: Usage | undefined
     let provider = this.provider.name
     let model: string | undefined
     let degraded = false
@@ -295,6 +297,7 @@ export class Decider {
       })
       answers = res.answers
       latencyMs = res.latencyMs
+      usage = res.usage
       provider = res.provider
       model = res.model
       degraded = !!res.degraded
@@ -377,6 +380,10 @@ export class Decider {
         action: outcome.action,
         reason: outcome.reason,
         latencyMs,
+        // ★ 一次前向的 token 记在**每条**记录上，求和时按批去重（见 Meter.stats）
+        ...(usage?.input_tokens !== undefined ? { inputTokens: usage.input_tokens } : {}),
+        ...(usage?.output_tokens !== undefined ? { outputTokens: usage.output_tokens } : {}),
+        ...(usage?.estimated !== undefined ? { usageEstimated: usage.estimated } : {}),
         provider,
         ...(model !== undefined ? { model } : {}),
         degraded: degraded || policyWarnings.length > 0,
