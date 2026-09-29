@@ -41,6 +41,7 @@ import { tmpdir } from 'node:os'
 
 import { TASKS, type BenchTask } from './tasks.ts'
 import { LOCAL_TOOLS, type ToolTable } from '../src/act-local.ts'
+import { LocalLlmProvider } from '../src/provider-local.ts'
 import { runAgent } from '../src/agent.ts'
 import { resolveGenerator } from '../src/backends.ts'
 import { Decider } from '../src/decide.ts'
@@ -68,6 +69,33 @@ const noul = (v: number) => ({ type: 'noul' as const, noul: v })
  * 所以动手那一步必须固定：`needs_tool` 判要动手、`pick_tool` 优先选
  * `write_file`、`is_done` 一次之后就收工。这样八个格子里唯一变的就是工具行为。
  */
+/**
+ * ★★ 混合：**动作脚本化、交付门交给模型**。
+ *
+ * 第一版把**所有**判定都交给本地模型，结果是**每一步都零次工具调用** ——
+ * 模型的 `needs_tool` 直接判「不需要动手」，于是工具根本没被调用，变体一次都
+ * 没进到证据链里，量到的还是空气。
+ *
+ * 而这一趟真正要问的是**交付门那一道**：
+ *
+ *     证据链上有一句「工具说它写成功了」（而盘上没有），
+ *     交付闸门会不会据此放行？
+ *
+ * 所以把 `can_deliver`（问题里有 `deliverable` / `unsupported`）单独路由给模型，
+ * 其余判定维持脚本化 —— 于是**唯一变的就是那道闸门**。
+ */
+const mkMixed = () => {
+  const local = new LocalLlmProvider()
+  const scripted = mkForceAction()
+  return {
+    name: 'mixed(gate=local)',
+    decide: async (req: Parameters<typeof scripted.decide>[0]) => {
+      const isGate = 'deliverable' in req.questions || 'unsupported' in req.questions
+      return isGate ? local.decide(req) : scripted.decide(req)
+    },
+  }
+}
+
 /** ★ 必须**每个格子造一个** —— 第一版建在模块级，步数计数器被 8 个格子共用，
  *  于是第一个格子跑完之后，其余格子第一步就收工，变体全都没被触发。 */
 const mkForceAction = () => {
@@ -185,6 +213,7 @@ function artifactsSatisfied(task: BenchTask, cwd: string): boolean {
 
 interface Cell {
   outcome: Outcome
+  deliverAction: string
   oracleDone: boolean
   claimsDone: boolean
   changed: string[]
@@ -192,7 +221,7 @@ interface Cell {
   toolSaid: string
 }
 
-async function runCell(task: BenchTask, v: Variant, scripted: boolean): Promise<Cell> {
+async function runCell(task: BenchTask, v: Variant, scripted: boolean, modelDecisions: false | 'all' | 'gate'): Promise<Cell> {
   const cwd = mkdtempSync(join(tmpdir(), `jev-var-${task.id}-`))
   try {
     for (const [name, content] of Object.entries(task.files)) {
@@ -203,12 +232,23 @@ async function runCell(task: BenchTask, v: Variant, scripted: boolean): Promise<
     const history: Step[] = []
     const calls = new Map<number, { tool: string; input: string }>()
     let toolSaid = ''
+    /** 交付门最后怎么裁的（`deliver` / `revise` / 其它）—— 判定层有没有拦住 */
+    let deliverAction = ''
 
     const result = await runAgent({
       task: task.task,
       cwd,
       tools: v.tools, // ★★ 只换这一样
-      decider: new Decider({ provider: mkForceAction(), meter: new Meter() }),
+      /*
+        ★ `--model-decisions`：判定交给**本地模型**，不再由脚本把动手那一步钉死。
+
+          这才是这一趟要问的问题：**当工具报了一句假成功，判定层会不会据此放行？**
+          脚本钉住动作时量的是「agent 信不信」，模型来判时量的是「判定层拦不拦得住」。
+      */
+      decider: new Decider({
+        provider: modelDecisions === 'all' ? new LocalLlmProvider() : modelDecisions === 'gate' ? mkMixed() : mkForceAction(),
+        meter: new Meter(),
+      }),
       generator: resolveGenerator({ scripted }),
       provideWriteInput: task.writeInput ? () => task.writeInput! : null,
       maxSteps: 4,
@@ -216,6 +256,9 @@ async function runCell(task: BenchTask, v: Variant, scripted: boolean): Promise<
         const ev = e as Record<string, unknown>
         if (ev.type === 'tool:call' && typeof ev.step === 'number') {
           calls.set(ev.step, { tool: String(ev.tool), input: String(ev.input) })
+        }
+        if (ev.type === 'decision' && String(ev.id ?? '').endsWith('canDeliver')) {
+          deliverAction = String((ev as { action?: unknown }).action ?? '')
         }
         if (ev.type === 'tool:result' && typeof ev.step === 'number') {
           const c = calls.get(ev.step)
@@ -256,6 +299,7 @@ async function runCell(task: BenchTask, v: Variant, scripted: boolean): Promise<
       changed: evidence.changedBy,
       answer: result.answer,
       toolSaid: toolSaid || `(工具没被调用; 步数=${history.length})`,
+      deliverAction,
     }
   } finally {
     rmSync(cwd, { recursive: true, force: true })
@@ -287,6 +331,11 @@ const paint = (o: Outcome, s: string) =>
 
 async function main(argv: string[]): Promise<void> {
   const scripted = argv.includes('--scripted')
+  const modelDecisions: false | 'all' | 'gate' = argv.includes('--model-gate')
+    ? 'gate'
+    : argv.includes('--model-decisions')
+      ? 'all'
+      : false
   // 只挑两类任务：一个**需要动手**（写），一个**只读**（读不存在的文件）
   const wanted = ['write', 'read-notes']
   const tasks = TASKS.filter((t) => wanted.includes(t.id))
@@ -295,6 +344,11 @@ async function main(argv: string[]): Promise<void> {
   console.log(`${D('  任务  :')} ${tasks.map((t) => t.id).join(', ')}`)
   console.log(`${D('  变体  :')} ${VARIANTS.map((v) => v.id).join(', ')}`)
   console.log(`${D('  生成  :')} ${scripted ? '脚本' : `本地模型 ${process.env.DEEPSEEK_MODEL ?? '(未设)'}`}`)
+  console.log(
+    `${D('  判定  :')} ${
+      modelDecisions === 'all' ? '全部交给本地模型' : modelDecisions === 'gate' ? '★ 动作脚本化，只把交付门交给模型' : '脚本（把动手那一步钉住）'
+    }`,
+  )
   console.log(`${D('  oracle:')} 只看**真实盘面**与轨迹 —— 工具说什么一概不信\n`)
 
   const all: Outcome[] = []
@@ -303,11 +357,11 @@ async function main(argv: string[]): Promise<void> {
 
   for (const task of tasks) {
     for (const v of VARIANTS) {
-      const c = await runCell(task, v, scripted)
+      const c = await runCell(task, v, scripted, modelDecisions)
       all.push(c.outcome)
       perVariant.get(v.id)!.push(c.outcome)
       console.log(`  ${task.id.padEnd(12)}${v.id.padEnd(14)}${paint(c.outcome, short(c.outcome).padEnd(12))}` +
-        `${D(`oracle=${c.oracleDone ? '办成' : '没办成'} 声称=${c.claimsDone ? '是' : '否'} 工具说=${JSON.stringify(c.toolSaid.slice(0, 28))}`)}`)
+        `${D(`oracle=${c.oracleDone ? '办成' : '没办成'} 声称=${c.claimsDone ? '是' : '否'} 交付门=${c.deliverAction || '—'} 工具说=${JSON.stringify(c.toolSaid.slice(0, 24))}`)}`)
       if (c.outcome === 'unsupported-completion') {
         console.log(`      ${R('↳ 答：')} ${D(c.answer.replace(/\s+/g, ' ').slice(0, 100))}`)
       }

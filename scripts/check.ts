@@ -328,6 +328,8 @@ const LAYER: Record<string, number> = {
   'seam-provider': 2,
   // 按 §12 拆成三件事，各自 L2（都只依赖 seam-provider / vocab）：
   'provider-http': 2,
+  // 本地 OpenAI 兼容判定后端（vLLM）：实现同一个接缝，同样只做网络 IO
+  'provider-local': 2,
   'provider-mock': 2,
   'provider-fallback': 2,
   // 有界重试：同层，但它只 import seam-provider（定义角）✓
