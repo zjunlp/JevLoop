@@ -26,7 +26,8 @@
     "gate-derivable": "node --experimental-strip-types bench/gate-derivable-run.ts",
     "replay": "node --experimental-strip-types scripts/replay.ts",
     "trace": "node --experimental-strip-types scripts/trace.ts",
-    "metrics": "node --experimental-strip-types scripts/metrics.ts"
+    "metrics": "node --experimental-strip-types scripts/metrics.ts",
+    "claim-audit": "node --experimental-strip-types scripts/claim-audit.ts"
   },
   "keywords": [
     "agent",

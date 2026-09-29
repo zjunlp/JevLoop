@@ -309,6 +309,11 @@ const LAYER: Record<string, number> = {
   // 指标导出：只 import vocab-records（L0）的类型，纯函数、零 IO。
   // 它把**已经落盘的账目**换成监视器能读的两种格式，不认识循环也不认识会话文件。
   metrics: 0,
+  // 「声称 vs 证据」对账：零 import、纯函数（只吃 `{tool,input,result}[]` 和一段文本），
+  // 所以放最底下 —— 谁都能依赖它，它不依赖谁。
+  'claim-outcome': 0,
+  // 声称的词表：纯数据 + 一个匹配函数，零 import
+  'claim-lexicon': 0,
   // `frame-merge` 同它：`mergeConflicts` 跨 L2/L3 共用（决定合并是否合法，
   // L2 的 `decide.ts` 必须查得了），而它对领域一无所知 ——
   // 只收「看了什么 / 故意不看什么」，出「能不能合」。零 import、纯函数。

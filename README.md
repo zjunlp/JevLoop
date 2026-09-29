@@ -138,6 +138,7 @@ npm run replay -- <session> # a real session's decision records must still add u
 npm run trace -- <session>  # …and render each one as its own readable decisions/*.md
 npm run trace -- --verify <dir> # re-derive the digests from those .md files alone
 npm run metrics -- <session> # decisions / calls / tokens as Prometheus text, offline
+npm run claim-audit -- <session>   # did it claim work the trajectory does not show?
 ```
 
 > **On the npm status.** `jevloop` is on npm, but the newest published version (`0.2.0`) declares `github.com/Xubqpanda/JevLoop` as its repository, while this tree is `zjunlp/JevLoop` and its `package.json` still reads `0.1.0`. So the published tarball is **not** this revision. To get this one, install from git — `npm install github:zjunlp/JevLoop` — or clone it. `npx jevloop …` is shorthand for the CLI commands above.
