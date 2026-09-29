@@ -62,7 +62,8 @@
     "docs/DECISION-CONTRACT.md",
     "docs/SKILL-DECISION-ADAPTER.md",
     "docs/RESEARCH-AND-STANDARD-DIRECTION-2026-09.md",
-    "docs/ADAPTER-CODEX-SCOPE.md"
+    "docs/ADAPTER-CODEX-SCOPE.md",
+    "adapters"
   ],
   "repository": {
     "type": "git",

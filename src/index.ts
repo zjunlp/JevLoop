@@ -73,6 +73,7 @@ export type { ToolLimits } from './act.ts'
  * ★ 它验证**记录完整性**与**请求同一性**，不验证「帧从原始 ctx 编得对不对」，
  *   也不验证「判定对不对」—— 后者要外部 oracle。`REPLAY_NOTES` 逐条写明了。
  */
+export { DIGEST_CHARS, frameDigest, requestDigest } from './frame-digest.ts'
 export { REPLAY_SCHEMA, REPLAY_NOTES, recordOf } from './replay-schema.ts'
 export type { ReplayRecord } from './replay-schema.ts'
 /** 一条记录能不能自洽：四项检查，四档结论（`verified` / `partial` / `unverifiable` / `mismatch`） */

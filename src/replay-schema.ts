@@ -135,7 +135,16 @@ export function recordOf(event: unknown): ReplayRecord | null {
     step,
     node,
     state,
-    ...(frame && typeof frame.digest === 'string' ? { frameDigest: frame.digest } : {}),
+    /*
+      ★ 两种形状都要认：**事件**把帧指纹嵌在 `frame.digest` 里，而
+        `decision-record/v1` 这份**文档化的记录格式**把它放在顶层 `frameDigest`。
+        只认前者的话，一个外部宿主按文档写出来的记录会被读成「没有指纹」⇒
+        `unverifiable` —— 那是把「格式对不上」误报成「记录不可验证」。
+        （由 codex 适配器按文档格式写记录时实测到。）
+    */
+    ...(typeof (frame?.digest ?? e.frameDigest) === 'string'
+      ? { frameDigest: (frame?.digest ?? e.frameDigest) as string }
+      : {}),
     ...(str(e, 'sentFrameDigest') ? { sentFrameDigest: str(e, 'sentFrameDigest')! } : {}),
     batchIds,
     ...(str(e, 'requestDigest') ? { requestDigest: str(e, 'requestDigest')! } : {}),

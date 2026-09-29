@@ -41,6 +41,15 @@ export { CURRENT_SCHEMA, SCHEMA_KEY, SUPPORTED_SCHEMAS, DYNAMIC_OUTPUTS, parseDy
 
 // ── 形状：消费方要能命名它拿到的每一个东西 ──────────────────
 export { ANY_POSITION_ACTIONS, KINDS, POSITIONS } from './decision-shape.ts'
+/*
+  两种指纹 —— 宿主**产出**可验证记录必须用到它们。
+
+  ★ 这一条是被适配器练习逼出来的：`verifyRecord` 早就在可移植面上，而**造**一条
+    能通过验证的记录所需的那两个函数却不在 —— 等于告诉宿主「你的记录必须可验证」
+    而不给他工具。两个指纹都是 L0 纯函数（零依赖），本来就该在这一层。
+*/
+export { DIGEST_CHARS, frameDigest, requestDigest } from './frame-digest.ts'
+
 // 决策记录与重放：宿主可以把一条记录拿走、在别处验证它自不自洽
 export { REPLAY_SCHEMA, REPLAY_NOTES, recordOf } from './replay-schema.ts'
 export type { ReplayRecord } from './replay-schema.ts'

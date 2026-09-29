@@ -6,8 +6,14 @@
 > `e72da2b`). It is Step 1 (inventory) and Step 2 (state cells) done for real, plus the
 > verdict on what is and is not reachable.
 >
-> **What it is not.** A working adapter. Nothing here has been run against Codex; every
-> host fact below was read out of its source, with the path cited, so you can check it.
+> **What it is not.** A *complete* adapter, and nothing here has been run against a live
+> Codex session — every host fact below was read out of its source, with the path cited,
+> so you can check it.
+>
+> **The adapter itself now exists:** [`adapters/codex/`](../adapters/codex/README.md).
+> It wires the three reachable hooks, and its records verify under our own verifier
+> (`npm run replay` reports `3 verified · 0 mismatch · 0 unverifiable`). The frames are
+> thin until it reads the transcript — see that README's roadmap.
 
 ## The seam: Codex hooks, not a fork
 
@@ -113,6 +119,27 @@ itself**; otherwise `verifyRecord()` correctly returns `unverifiable` for every 
 That is the expected outcome, not a failure — but it has to be *reported* as such. The
 Skill's Step 8 asks for a "replay status" field, and for this host the honest value is
 "derived records, digests only if the adapter writes them, otherwise unverifiable".
+
+## What the built adapter confirmed
+
+Writing it turned the analysis above into three concrete results, and one of them
+contradicted the document you are reading:
+
+- **`PostToolUse` → `step_ok` works too**, so the reachable set was three blocks, not two.
+  The capability check is what caught the difference: it derived "supported" from
+  *positions*, so `step_ok` was counted as supported because it shares `after-tool` with
+  `is_done` — while no hook called it. The adapter now derives the report from its
+  **wiring**, and reports "declared but unwired" as its own category. `adapterProblems()`
+  checks the vocabulary, not the wiring; an adapter still has to assert the wiring itself.
+- **An unknown projection name used to degrade into `absent`.** Treating "the host has no
+  implementation for this name" and "this projection says *not applicable today*" as the
+  same thing silently drops a field — the exact failure the Skill's Step 3 forbids. There
+  are three cases, not two.
+- **A foreign host can close a gap the reference implementation cannot.** The reference
+  does not mark list-valued untrusted channels, because its own rule judge reads them as
+  arrays (`TODO.md` §7). This adapter has no such consumer — the decision model is the only
+  reader — so it joins and marks them. That localises the gap: it comes from an in-process
+  consumer, not from the contract.
 
 ## Verdict on the exercise
 
