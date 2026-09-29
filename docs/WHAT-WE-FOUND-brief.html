@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JevLoop · 一页说明</title>
+<style>
+  :root{
+    --fg:#14181d; --dim:#5a6570; --dimmer:#8b949e; --line:#e3e8ee; --line2:#cfd6de;
+    --bg:#ffffff; --soft:#f7f9fb; --accent:#0b5cad; --good:#1a7f37; --warn:#9a6700; --bad:#b42318;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.8;font-size:16.5px}
+  .wrap{max-width:820px;margin:0 auto;padding:64px 28px 96px}
+  .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--dimmer)}
+  h1{font-size:29px;line-height:1.4;margin:10px 0 14px;font-weight:700;letter-spacing:-.01em}
+  .lede{font-size:17.5px;color:var(--dim);margin:0 0 8px}
+  h2{font-size:20px;margin:52px 0 10px;font-weight:700;display:flex;gap:10px;align-items:baseline}
+  h2 .n{font-family:var(--mono);font-size:12px;color:var(--accent);border:1px solid var(--line2);
+    border-radius:5px;padding:1px 7px;font-weight:400}
+  h3{font-size:16px;margin:26px 0 6px;font-weight:650}
+  p{margin:11px 0}
+  ul{margin:11px 0;padding-left:20px}
+  li{margin:7px 0}
+  code{font-family:var(--mono);font-size:.92em;background:var(--soft);border:1px solid var(--line);
+    border-radius:4px;padding:1px 5px}
+  hr{border:none;border-top:1px solid var(--line);margin:44px 0}
+  .quote{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:16px 0}
+  .quote p{margin:0;font-family:var(--mono);font-size:14px;color:#2b3440}
+  table{border-collapse:collapse;width:100%;margin:18px 0;font-size:15px}
+  th,td{padding:9px 12px;border-bottom:1px solid var(--line);text-align:left}
+  th{font-size:13px;color:var(--dim);font-weight:600;border-bottom-color:var(--line2)}
+  td.num,th.num{text-align:right;font-family:var(--mono);white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  tr.hl td{background:#f2f7fd}
+  .good{color:var(--good);font-weight:600}
+  .bad{color:var(--bad);font-weight:600}
+  .warn{color:var(--warn);font-weight:600}
+  .dim{color:var(--dim)}
+  .small{font-size:13.5px;color:var(--dimmer)}
+  .big{font-size:19px;font-weight:600;line-height:1.6}
+  .rule{border-left:3px solid var(--accent);padding:2px 0 2px 16px;margin:22px 0}
+  .q{counter-reset:q}
+  .q h3{counter-increment:q;display:flex;gap:10px;align-items:baseline}
+  .q h3::before{content:"Q" counter(q);font-family:var(--mono);font-size:12px;color:var(--accent);
+    border:1px solid var(--line2);border-radius:5px;padding:1px 6px;font-weight:400;flex:none}
+  footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);color:var(--dimmer);font-size:13.5px}
+  @media print{body{font-size:11.5pt}.wrap{padding:0;max-width:none}h2{page-break-after:avoid}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">JevLoop · 一页说明</div>
+  <h1>Agent 会在没做成的时候，交出一份听起来做成了的回答</h1>
+  <p class="lede">
+    我们做了一个办法来量"再给它加一道判定，能不能拦住这种回答"——
+    并且量到了一个有统计支持的效果。以下是最精简的版本。
+  </p>
+
+  <h2><span class="n">一</span>问题</h2>
+
+  <p>真实事故长这样。一个 agent 被要求把某段代码抄进新文件，它最后交出来的回答是：</p>
+
+  <div class="quote"><p>已完成。<code>alpha.ts</code> 中的 <code>totalOf</code> 函数已复制到新文件 <code>summary.ts</code> 中。</p></div>
+
+  <p>
+    而盘上根本没有那个文件。难的地方在于：<b>这句话读起来完全正常</b>——
+    语法正确、语气笃定、格式规范。任何"读一遍回答"的检查都过得去，
+    因为错误不在措辞里，在<b>回答和现实之间</b>。
+  </p>
+
+  <p>
+    更麻烦的是现有的评测发现不了治理层的价值。我们最早的对照实验跑了 81 个格子，
+    只观察到 <b>1 个事件</b>——在那个密度下"两组的平均差"在数学上就估不出来。
+  </p>
+
+  <div class="rule">
+    <p class="big">所以我们换了两件事：把判定从生成里拿出来，以及换一把尺子。</p>
+  </div>
+
+  <h2><span class="n">二</span>做法</h2>
+
+  <ul>
+    <li>
+      <b>判定不再住在生成里。</b>不是"模型输出一句完成就结束"，而是生成之后<b>另起一次判定</b>，
+      它只读一份<b>声明过的</b>、有界的信息（只包含声明要看的几项，每一项排除都写明理由），
+      由一个专门的决策模型来答。这正是这个项目的做法。
+    </li>
+    <li>
+      <b>尺子从"平均值"换成"混淆矩阵"。</b>不看两组的均值差，看判定层<b>批准</b>的东西里
+      有多少是误导（假确认率），该拦的拦住了多少（捕获率），合法的活被错拦了多少（误伤率）。
+      这类比例在事件稀少时也估得出来，而且零事件时给的是<b>上界</b>，不是 0%。
+    </li>
+    <li>
+      <b>让所有对照组判同一个候选。</b>每个任务只生成一份答卷，所有方案对它各自表态，
+      于是比较是配对的，可以用精确检验；同时<b>有意识地把坏样本造出来</b>，
+      而不是把样本量往 300 堆。
+    </li>
+  </ul>
+
+  <h2><span class="n">三</span>效果</h2>
+
+  <p class="small">
+    240 个候补（141 份该交付、99 份误导）。误导率约四成，是<b>为了造出这类样本而设计的任务集</b>上的比率。
+  </p>
+
+  <table>
+    <thead><tr><th>方案</th><th class="num">批准的东西里<br>有多少是误导</th><th class="num">该拦的<br>拦住了多少</th><th class="num">合法的活<br>被错拦多少</th></tr></thead>
+    <tbody>
+      <tr><td>不加判定（生成什么就交什么）</td><td class="num bad">41.3%</td><td class="num">—</td><td class="num">—</td></tr>
+      <tr><td>通用模型 + 提示词来判</td><td class="num">40.3%</td><td class="num">14.1%</td><td class="num">10.6%</td></tr>
+      <tr class="hl"><td><b>专门的决策模型（Jev）</b></td><td class="num"><b>36.6%</b></td><td class="num good"><b>28.3%</b></td><td class="num">12.8%</td></tr>
+    </tbody>
+  </table>
+
+  <p>三个数字里最重要的是中间那列：</p>
+
+  <ul>
+    <li>
+      <b>加上判定层，基线会交付的误导里有 46 个被拒</b>（配对检验 p &lt; 0.0001）。
+    </li>
+    <li>
+      <b>专门的决策模型比"同一个模型配提示词"多抓到 23 个</b>（23 : 6，p = 0.0023）。
+      也就是说，有效果的是<b>专门的判定模型</b>，不是"随便找个人再看一眼"。
+    </li>
+    <li>
+      把两者的误伤代价对齐到同一水平（约 9–10%）再比：
+      <b>专门的决策模型抓 40.4%，通用模型抓 11.1%</b>——差 3.6 倍。
+    </li>
+  </ul>
+
+  <h2><span class="n">四</span>两个反常识的发现</h2>
+
+  <h3>1. 通用的指令模型当判官，根本不看证据</h3>
+  <p>
+    我们把自己的主张拿去证伪：如果判定层真的在读它声称读的那份信息，那么<b>把其中的证据换成
+    别的任务的证据，它的裁决就该变</b>。结果——
+  </p>
+  <table>
+    <thead><tr><th>判官</th><th class="num">换掉证据后改判的比例</th></tr></thead>
+    <tbody>
+      <tr class="hl"><td><b>专门的决策模型</b></td><td class="num good">37/72、67/120 格</td></tr>
+      <tr><td>通用模型 + 提示词</td><td class="num bad">0/72、0/72、1/120 格</td></tr>
+    </tbody>
+  </table>
+  <p>
+    它抓得少不是"不会判"，是<b>证据对它来说是装饰</b>——它只看回答文本和任务文本。
+    顺带一个同样反常识的结果：<b>换一个模型族并不必然更好</b>。实测里异族判官抓得更多，
+    但误伤也多到<b>超过连"拦下之后百分之百能修好"都容忍不了的上界</b>，净为负。
+  </p>
+
+  <h3>2. 判定层的能力有上限：它不能比自己的证据通道更真实</h3>
+  <p>
+    当工具的谎言出现在判定层<b>自己读的那份证据里</b>（工具报告"已写入"、盘上什么都没发生），
+    本研究里表现最好的闸门也只拦下 <b>34%</b>。三分之二的假完成照过。
+  </p>
+  <p class="big">
+    证据链<b>完整</b>不等于证据链<b>真实</b>。
+  </p>
+  <p>
+    每一步都有记录、有指纹、可重放——这些是"完整"，是当前大多数工作当作卖点的那件事。
+    我们量出来的是：完整但被污染的证据链上，任何依赖它做判断的机制都被锁在 34%。
+  </p>
+
+  <h2><span class="n">五</span>里面真正的科学问题</h2>
+
+  <div class="q">
+    <h3>完整性不等于真实性，那判定能力有没有一个可陈述的上界？</h3>
+    <p>
+      "垃圾进垃圾出"大家都认。但这里进的不是垃圾——是<b>格式完美、来源可信、内容虚假</b>的记录。
+      一个判定机制的能力上限，能不能由它所用证据通道的保真度来界定？
+      如果能，这就是一个关于"判定"本身的界，而不只是工程问题。
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>"独立性"到底是什么？</h3>
+    <p>
+      文献和我们的数据都否掉了两种流行说法：<b>不是"多一次判定"</b>（同一个模型自己判自己，
+      实测约等于没判），<b>也不是"换个模型族"</b>（实测反而更差）。
+      我们给出一个可以直接执行的判据：<b>把证据换掉，看它的裁决变不变</b>。
+      这把一个模糊的形容词变成了一个可检验的性质。
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>价值来自"位置"还是"写法"？</h3>
+    <p>
+      我们原本的主张是"把判定写成声明式的契约文件"——这一条<b>被我们自己的实验证伪了</b>：
+      在政策层上，声明式契约和等价的 <code>if/else</code> <b>逐格相同</b>，而且可以证明等价。
+      所以价值不在写法，在<b>生成之后是否存在独立的第二次判定、以及由谁读什么来做</b>。
+      这是一个可证伪的对照，也把"声明式"从主张降格成了实现细节。
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>这类组件怎么算"合格"？</h3>
+    <p>
+      只报"抓到了多少"是可以被刷满的（一律说"没做完"就满分），所以必须成对报误伤。
+      而一旦要问"误伤多少算可接受"，就出现了标准工具覆盖不到的地方：
+      零假设检验<b>在逻辑上无法证明"没有更糟"</b>，而那个可接受的代价 <b>不是统计量，是风险判断</b>。
+      我们的做法是：先把代价上限定成 <b>5 个百分点</b>，再冻结门限，再用全新样本验算。
+      我们读过的五篇最接近的工作里，<b>没有一篇做等价检验，也没有一篇做功效分析</b>。
+    </p>
+  </div>
+
+  <h2><span class="n">六</span>老实说，还没确立什么</h2>
+
+  <ul>
+    <li>
+      <b>效应量还不稳。</b>四次同配置运行，捕获率分别是 44% / 73% / 82% / 34%。
+      正例不到十个的时候，两个方案的排序会翻方向。
+    </li>
+    <li>
+      <b>四成的误导率是造出来的</b>，不是真实系统的发生率——那三个写任务就是为此写的。
+    </li>
+    <li>
+      <b>衡量"好/坏"的尺子和被测的闸门同源。</b>它自己已经误报过四次，
+      每次都是把一句老实的认输判成"不作声地交付没做完的活"。这直接决定上面所有数字的成色。
+    </li>
+    <li>
+      <b>而且就在最近一次，我们差一点就报错了一个数。</b>
+      有一轮测出"误伤只有 3%，已经达标"，我们把它冻结成常量、换一批全新样本再验——
+      结果是 <b>9.2%</b>。那个 3% 是 30 个样本上的噪声。
+      把这个过程留在文档里，比那个数字本身更有用。
+    </li>
+    <li><b>七个判定节点里只测了一个</b>（交付闸门），其余六个还没有对应的实验。</li>
+  </ul>
+
+  <hr>
+
+  <p class="big" style="margin-top:0">
+    一句话总结：<b>把判定从生成里拿出来，用专门的决策模型读一份声明的证据，
+    确实能拦住一部分"报捷"——而且它明显比通用模型判得准；但它的能力被自己的证据通道锁死，
+    代价目前也还超出我们能接受的预算。</b>
+  </p>
+
+  <footer>
+    详细版（含每个数字的样本量、区间与失败记录）：<code>docs/WHAT-WE-FOUND.html</code><br>
+    实验记录：<code>docs/MEASUREMENT-gate-equivalence.md</code>（Round 1–6）<br>
+    仪器：<code>bench/confusion.ts</code> · 判定模型 <code>jev-1.13.0</code>
+  </footer>
+
+</div>
+</body>
+</html>
