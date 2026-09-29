@@ -53,6 +53,78 @@ releases an answer
 Map each location to one `DECISION.md` position. If a position has no host
 branch for an action, stop and add the branch before claiming support.
 
+### Which decisions are adaptable at all
+
+Before inventorying anything, answer this: **a host decision is adaptable only if the
+host gives you a point where you can both *intercept* it and *change* its outcome.**
+
+```text
+interception   the host hands control out at that point (hook, callback, event)
+authority      your answer can change what happens next — deny, replace, halt.
+               Observing is not authority.
+```
+
+Interception without authority is an observation point, not a decision point. A hook that
+fires but whose output schema has no verdict field tells you what is about to happen and
+lets you do nothing about it.
+
+**Ask three questions of every extension point:**
+
+```text
+1. timing       does it fire before the consequence, after it, or in place of it?
+                  before → can decide      after → can only react
+2. authority    what can the answer change?
+                  nothing → observation
+                  proceed / block → a gate
+                  replace a value → a selection
+                  halt the loop → termination control
+3. granularity  per model turn, per tool call, per session, per compaction?
+                  it has to match how often the position naturally fires
+```
+
+Then map a point to a position **by what it decides, never by its name**:
+
+| position | the point must offer |
+|---|---|
+| `step-start` | once per step, before the model turn, and able to skip the whole tool loop |
+| `tool-choice` | before the tool is fixed, and able to select it |
+| `input-choice` | the argument can be **replaced** |
+| `before-call` | immediately before execution, and able to **deny** |
+| `after-tool` | after the result, and able to **halt** (not merely annotate) |
+| `after-generate` | after generation, and able to **withhold or replace** the answer |
+
+Worked against Codex (`docs/ADAPTER-CODEX-SCOPE.md`), all four categories appear:
+
+```text
+PreToolUse         before the call   allow/deny + rewrite input   per tool call   → before-call, input-choice
+PermissionRequest  when auth is up   allow/deny                   per ask         → a SECOND before-call seam
+PostToolUse        after the call    block + reason               per tool call   → after-tool (partial)
+Stop               before finishing  block + reason               per turn end    → termination (partial)
+PreCompact         before compaction nothing at all               per compaction  → not a decision point
+UserPromptSubmit   on prompt submit  block, add context           per PROMPT      → wrong granularity
+```
+
+Four lessons are visible in that table:
+
+- **Read the extension surface first, then the control flow.** The host's *own* decision
+  list is the wrong place to look: Codex makes many internal judgements (permission
+  modes, sandbox escalation, compaction, retries) and none of them are adaptable, because
+  there is no point at which you can intercept them. What you cannot intercept you cannot
+  adapt, however well you understand it.
+- **The same position can have more than one seam.** Two points map to `before-call`
+  above; pick between them by timing and authority, and say which you chose.
+- **The mapping runs in both directions.** A host point with authority that matches no
+  position is not a dead end — it is a candidate `host:<name>` extension, which the
+  format already supports. Codex's compaction is a real decision with no reference
+  position.
+- **A schema is not an implementation.** `PermissionRequest` advertises `updatedInput`,
+  `updatedPermissions` and `interrupt`, and its parser rejects all three. Read the code
+  that validates your output, not only the shape it deserialises from.
+
+**If the host has no extension surface at all**, the honest result is that only Steps 6
+and 8 apply — you can read its records and report on them, and you cannot route a
+decision. Saying that is better than building an adapter that pretends otherwise.
+
 ## Step 2: Define host state cells
 
 Create a closed registry of state cells. For every cell, document:
