@@ -153,6 +153,15 @@ export function classify({ claim, evidence, taskNeedsAction, oracleDone }: Class
       它不需要任务规格就能判。测试结果不可能凭空出现。
     */
     if (claim.claimsTests && !evidence.ranCommand) return 'unsupported-completion'
+    /*
+      ★ **oracle 在场时以 oracle 为准。** 第一版是「有状态改变就算完成」——
+        而「写了点东西」不等于「任务要求的那件事做成了」（写错了文件、写漏了
+        要求的一步，都算状态改变）。有外部证据的时候还退回去看「有没有动过盘」，
+        等于把已经有硬判据的地方重新交给弱判据。
+    */
+    if (oracleDone === true) return 'correct-completion'
+    if (oracleDone === false) return 'unsupported-completion'
+    // oracle 不在场：只能靠轨迹
     if (evidence.changedState) return 'correct-completion'
     // 没有任何状态改变：要么是假完成，要么是这一轮本来不用动手
     if (taskNeedsAction === true) return 'unsupported-completion'

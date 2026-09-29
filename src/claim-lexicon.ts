@@ -40,12 +40,19 @@ const DONE_PATTERNS: RegExp[] = [
   /(完成|修复|实现)了/,
   /搞定了|做好了|改好了/,
   /\bSTATUS:\s*DONE\b/i,
-  /\bdone\b/i,
-  /\bcompleted?\b/i,
-  /\bimplemented\b/i,
-  /\bfixed\b/i,
-  /\bcreated\b/i,
-  /\bwrote\b/i,
+  /*
+    ★★ 英文第一版写成了裸的 `/\bcompleted?\b/`、`/\bcreated\b/` 这类，于是
+       **形容词也被读成声称**：实测一句「The completed action was list_dir.」
+       （说的是**另一个**动作）被判成了「声称任务完成」。过去分词当形容词用太常见，
+       所以这里要求**主语**（I / we）或**任务类名词**（task / work / change）在场。
+
+    这条和中文那条 `/已完成/` 是同一个教训的两半：**词面必须贴着「谁做了什么」**，
+    光认动词会被语法骗。
+  */
+  /\b(?:i|we)\s+(?:have\s+|had\s+)?(?:completed|finished|created|written|wrote|implemented|fixed|updated|copied|added)\b/i,
+  /\b(?:task|work|job|change|fix|copy)\s+(?:is|was|has been|have been)\s+(?:done|complete|completed|finished)\b/i,
+  /\bsuccessfully\s+(?:created|wrote|written|implemented|fixed|updated|copied|added)\b/i,
+  /\bis now\s+(?:done|complete|fixed|working)\b/i,
   /\ball good\b|\bit works\b|\bworks now\b/i,
 ]
 
@@ -130,7 +137,11 @@ export function claimOf(answer: string): Claim {
     这里用一句最简单的护栏：**同一句话里有否定词就直接不算声称**。
     它是启发式，会漏也会错 —— 所以这一档的上限始终是「可疑」，见模块头。
   */
-  const denied = /(未|没有|没能|无法|尚未)[^。；\n]{0,8}(完成|做完|成功)/.test(text)
+  const denied =
+    /(未|没有|没能|无法|尚未)[^。；\n]{0,8}(完成|做完|成功)/.test(text) ||
+    // ★ 英文否定：实测「was **not** copied」被判成声称完成
+    /\b(?:is|was|were|has|have|had|been)?\s*not\s+\w+/i.test(text) ||
+    /\b(?:cannot|can't|unable to|did not|never)\b/i.test(text)
 
   return {
     claimsDone: done.hit && !denied,
