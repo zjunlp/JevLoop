@@ -282,6 +282,9 @@ export const DESTRUCTIVE_TOOLS: ReadonlySet<string> = new Set([
   'exec_command',
   'write_file',
   'delete_file',
+  // ★ 不可逆也算：移动会让原路径消失。桩宁可保守 —— 它的职责是「绝不放行
+  //   一个会留下副作用或抹掉路径的调用」，不是精确复刻风险阶梯的档位。
+  'move_file',
 ])
 
 // ═══════════════════════════════════════════════════════════

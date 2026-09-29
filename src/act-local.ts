@@ -21,7 +21,7 @@
  * @module JevLoop/act-local
  */
 
-import { readFile, writeFile, readdir, mkdir, stat, unlink, rmdir } from 'node:fs/promises'
+import { readFile, writeFile, readdir, mkdir, stat, unlink, rmdir, rename } from 'node:fs/promises'
 import { resolve, relative, dirname, sep } from 'node:path'
 
 import type { ToolRegistry } from './act.ts'
@@ -113,6 +113,60 @@ export const LOCAL_TOOLS = {
       await mkdir(dirname(path), { recursive: true })
       await writeFile(path, content, 'utf8')
       return `已写入 ${relative(cwd, path)}（${content.length} 字符）`
+    },
+  },
+
+  /*
+    ── 阶梯的第 2 档（TODO §1 剩下的那个缺口）────────────────────
+
+    `irreversible` (2) 一直是空的。`move_file` 指向它 —— 而它**不是** `delete_file`
+    的复制品，三件事都不一样：
+
+      1. **输入是两行**（来源 + 目标），目标不在任何闭集里。所以和 `write_file` /
+         `delete_file` 一样，它由调用方的 `provideWriteInput` **生成**，不是从
+         候选里挑的。★ 那个钩子能分辨自己被问的是哪个工具：`agent.ts` 在
+         `resolveInput` **之前**就把 `ctx.lastTool` 设成了选中的工具。
+      2. ★ **它拒绝覆盖已存在的目标**，而这一条正是它停在 2 档而不是 3 档的原因：
+         改名之后原路径没了（不可逆），但**一个字节都没丢**。一旦允许覆盖，
+         它就是 `destructive`（3）—— 被覆盖的那份捞不回来。档位是行为的结论，
+         不是给工具贴的标签。
+      3. **不创建父目录**。`write_file` 会建（写文件必然要建它的目录），
+         而移动不该顺手造出目录：一个失败的操作不该在盘上留下东西。
+         这也和 `mv` 的行为一致。
+
+    ★ 为什么不是 shell：§8 的安全边界还开着（见下面 delete_file 那段说明）。
+      这个工具仍然只动工作目录里的东西，路径照走 `safePath`，不起进程。
+  */
+  move_file: {
+    name: 'move_file',
+    description:
+      '移动或重命名一个文件/目录。输入格式：`来源\\n目标`（两行，都相对工作目录）。不可逆：原路径会消失。不会覆盖已存在的目标',
+    // 2 = irreversible：原路径没了，但内容还在目标位置上
+    baseRisk: 2,
+    // 不声明 timeoutMs：移动取消不掉，报超时而其实移成功了是最坏的一种谎
+    // （见 Tool.timeoutMs 的说明）
+    maxInputChars: 4096,
+    async run(input: string, cwd: string): Promise<string> {
+      const nl = input.indexOf('\n')
+      if (nl < 0) throw new Error('move_file 需要两行输入：第一行来源，第二行目标')
+      const from = safePath(cwd, input.slice(0, nl).trim())
+      const to = safePath(cwd, input.slice(nl + 1).trim())
+
+      if (from === to) throw new Error('来源与目标相同 —— 没有东西可以移动')
+
+      const src = await stat(from).catch(() => undefined)
+      if (!src) throw new Error(`来源不存在：${relative(cwd, from)}`)
+
+      // ★ 拒绝覆盖：这一条就是 2 档与 3 档的分界。先查再移，不是移完再看
+      const dst = await stat(to).catch(() => undefined)
+      if (dst) {
+        throw new Error(
+          `目标已存在：${relative(cwd, to)} —— 移动不覆盖（覆盖会丢掉目标那份，那是破坏性操作）`,
+        )
+      }
+
+      await rename(from, to)
+      return `已移动 ${relative(cwd, from)} → ${relative(cwd, to)}`
     },
   },
 

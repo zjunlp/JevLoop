@@ -515,7 +515,27 @@ export function toolsFor(ctx: AgentCtx): Record<string, string> {
   }
 
   /*
-    `delete_file` —— 唯一一个**破坏性**候选（TODO §1：让风险阶梯有真东西可爬）。
+    `move_file` —— 阶梯第 2 档（`irreversible`），TODO §1 剩下的那个缺口。
+
+    ★ 它要**两道**门，而且两道都不可省：
+
+      1. `ctx.canDelete` —— 移动会让**来源路径消失**，这一半是删除性质的。
+         只给 `canWrite` 就放它进来，等于让一个只被允许改内容的调用方凭空拿到
+         一个能抹掉路径的工具（和 `delete_file` 不跟着 `canWrite` 是同一条理由，
+         只是这里更隐蔽：名字里有个「文件」，看着像写）。
+      2. `ctx.canWrite` —— 目标位置会被**创建**，这一半是写入性质的。
+
+    只要求其中之一，都会朝另一边**放宽边界**。所以两个都要，宁可严。
+
+    ★ criteria 同样写成条件句，并且站在谨慎那一边：移动不是「还能做点什么」，
+      而是「它必须换个位置，且原来的位置不该再存在」。
+  */
+  if (ctx.canWrite && ctx.canDelete && !done.has('move_file'))
+    out.move_file =
+      'The task requires this file to exist at a different path, and the original path must stop existing. Requires explicit authorisation.'
+
+  /*
+    `delete_file` —— **破坏性**那一档（3）唯一的候选（TODO §1）。
 
     ★ 它有两道门，而且第一道**比 write_file 严**：
 

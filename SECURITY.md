@@ -111,7 +111,7 @@ cannot drop them:
 
 | Limit | Value | When it applies |
 |---|---|---|
-| Input ceiling | declared per tool (`write_file` 64 KB, `delete_file` 4 KB) | checked **before** `run()`, so an oversized call has no side effect at all |
+| Input ceiling | declared per tool (`write_file` 64 KB, `delete_file` / `move_file` 4 KB) | checked **before** `run()`, so an oversized call has no side effect at all |
 | Timeout | declared per tool, **read-only tools only** (5 s) | the call is abandoned, not cancelled |
 | Output ceiling | 8000 chars, every tool | truncated **and labelled** with how much was dropped |
 
@@ -119,9 +119,10 @@ Two honest caveats:
 
 - **A timeout is giving up on observing, not on executing.** JavaScript cannot
   cancel a promise already in flight, so a timed-out call may still be running.
-  That is why `write_file` and `delete_file` deliberately do **not** declare one:
-  reporting "timed out" for a write that actually succeeded would let the loop
-  continue on the basis of something that did not happen.
+  That is why `write_file`, `delete_file` and `move_file` deliberately do **not**
+  declare one: reporting "timed out" for a write that actually succeeded would let
+  the loop continue on the basis of something that did not happen. For a move it is
+  worse than for the others — the source may already be gone.
 - **The output ceiling bounds what comes back, not what a tool did.** It stops a
   provider from flooding the context; it does not bound disk or memory.
 
@@ -136,6 +137,7 @@ can touch is bounded by the working directory:
 | `list_dir` | 0 | lists the working directory |
 | `read_file` | 0 | reads a file |
 | `write_file` | 1 | writes or overwrites a file, up to 64 KB of input |
+| `move_file` | 2 | moves or renames a file/directory; **refuses to overwrite** an existing target, and does not create parent directories |
 | `delete_file` | 3 | deletes a file or an **empty** directory; never recurses |
 | `done` | 0 | no-op |
 
@@ -144,6 +146,10 @@ Two gates matter more than the table:
 - **Mutation is opt-in.** `write_file` only enters the candidate set when the
   caller supplies an input source; `delete_file` needs `allowDelete` **in
   addition**, because writing and deleting are not the same trust level.
+  `move_file` needs **both** gates: it creates a destination (write) and makes the
+  source path stop existing (delete), so granting only one would widen a boundary
+  on the other side. Its risk is 2 rather than 3 precisely because it refuses to
+  overwrite — nothing is lost, only the old path.
 - **Risk 2 and above requires authorisation.** `DECISION.md`'s
   `score:risk >= 2 → ask_human` is a hard rule, not a threshold, and a decision
   model's own confidence cannot bypass it. Without an `onAskHuman` handler the

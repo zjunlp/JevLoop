@@ -33,7 +33,7 @@ frame:
   + last          300    lastOrNone     —— 刚刚发生了什么 —— 判「还要不要动手」时最近一步的结果是主要依据
   - cwd                                 —— 路径不进判定：目标由 `target` 那一栏（gradeRisk）或候选（pickInput）表达，工作目录本身没有信息
   - canWrite                            —— 「能不能写」是**代码**按精确规则判的（§8.1 第三行），不该让判定模型再判一遍
-  - canDelete                           —— 能力门是**代码**的规则（同 canWrite）——它决定 `delete_file` 进不进候选，不进帧
+  - canDelete                           —— 能力门是**代码**的规则（同 canWrite）——它决定 `delete_file` / `move_file` 进不进候选，不进帧
   - lastTool                            —— 工具名单独列出来会诱导它去评判「上一个工具选得对不对」——那是 `stepOk` 的职责
   - draft                               —— 草稿是生成之后才有的东西；这一步根本还没到生成
 
@@ -71,6 +71,7 @@ ask: Which tool should the agent call next?
 - read_file — 需要文件内容才能继续，且这个文件还没读过
 - list_dir — 还不知道目录里有什么
 - write_file — 要写的内容已经拿到，且目标路径明确
+- move_file — 任务要求这个文件换个位置，且原来的位置不该再存在。**需要显式授权**
 - delete_file — 任务要求移除这个文件（或它挡着路），留着它是错的。**需要显式授权**
 - done — 已有足够证据回答任务，工具循环可以结束了
 
@@ -83,7 +84,7 @@ frame:
   + last_result   300    resultMaybe    —— 上一步的结果决定下一步该做什么
   - cwd                                 —— 同 needsTool：工作目录本身没有信息，目标由候选表达
   - canWrite                            —— 「能不能写」是代码的规则，不是判定 —— 它决定 `write_file` 进不进候选，不进帧
-  - canDelete                           —— 同 canWrite —— 它决定 `delete_file` 进不进候选；进了候选就说明调用方已经开了这道门
+  - canDelete                           —— 同 canWrite —— 它决定 `delete_file` / `move_file` 进不进候选；进了候选就说明调用方已经开了这道门（★ `move_file` 还要 `canWrite`：它既创建目标也抹掉来源，两道门缺一不可）
   - lastTool                            —— ★ 候选本身**已经按做过的动作重建过**（§8.4）；再把「上一个是什么」放进来，会让「还有哪些工具」和「已经做过什么」互相打架
   - draft                               —— 还没到生成那一步
 
@@ -119,7 +120,7 @@ frame:
   - cwd                                 —— 同前：目标由候选表达，不由工作目录表达
   - history                             —— ★ 候选（`fileOptions`）本身已经是「还没读过的那些」这个闭集的投影；再给一遍历史会让「还剩哪些」和「做过什么」两个信号互相打架（§8.4 的同一个坑）
   - canWrite                            —— 写路径的候选不由这里产生 —— `write_content` 生成路径，判定不参与
-  - canDelete                           —— 删哪一个不由这一栏产生 —— 目标路径来自调用方的输入来源（同 `write_file`）
+  - canDelete                           —— 删/移到哪一个不由这一栏产生 —— 路径来自调用方的输入来源（同 `write_file`；`move_file` 的来源与目标两行都来自那里）
   - earlier                             —— 这一步是在一个已经选定的工具内部挑参数，指代关系由 task + 候选表达就够了
   - lastResult                          —— 结果的**内容**与「挑哪个文件」无关；它是 `stepOk` 与 `canDeliver` 的依据
   - draft                               —— 还没到生成那一步

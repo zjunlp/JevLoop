@@ -1017,6 +1017,19 @@ async function resolveInput(
       // 路径和内容一起生成。拿不到就**停机**，绝不退化成占位符 ——
       // 那个占位符会被真的写到盘上（见 `AgentOptions.provideWriteInput`）
       return writeInput?.(ctx)
+    case 'move_file':
+      /*
+        来源与目标**两行**一起生成，理由和 `delete_file` 完全一样（下面那段），
+        只是这里要定的是两个路径而不是一个。
+
+        ★ 钩子能分辨自己被问的是哪个工具 —— `ctx.lastTool` 在调用本函数**之前**
+          就被设成了选中的工具（见上面那行 `ctx.lastTool = tool`）。所以同一个
+          `provideWriteInput` 可以按工具返回不同形状，不需要第二套钩子。
+
+        ★ 路径从哪来不是判定能挑的：目标不在任何闭集里，所以不经过 `pickInput`。
+          判定只负责**授权**（`grade_risk` 的 `score:risk >= 2 → ask_human`）。
+      */
+      return writeInput?.(ctx)
     case 'delete_file':
       /*
         ★ 「删哪一个」也走**调用方给的输入来源**，不走 `pickInput` 的候选 ——

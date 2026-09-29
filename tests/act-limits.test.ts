@@ -130,10 +130,11 @@ test('★ 会动盘的工具都不许声明超时 —— 清单钉在这里', ()
     `timeoutMs`，它就会红，于是他必须回来读 `Tool.timeoutMs` 那段说明，
     并在这里表态。
 
-    理由：超时的语义是「我不再等了」。`write_file` / `delete_file` 报超时而
-    其实执行成功了，loop 会基于一件没发生的事继续往下走 —— 那比不设超时更糟。
+    理由：超时的语义是「我不再等了」。`write_file` / `delete_file` / `move_file`
+    报超时而其实执行成功了，loop 会基于一件没发生的事继续往下走 ——
+    那比不设超时更糟。移动漏掉的话尤其坏：来源可能已经没了。
   */
-  const mutating = ['write_file', 'delete_file']
+  const mutating = ['write_file', 'delete_file', 'move_file']
   for (const name of mutating) {
     assert.equal(
       (LOCAL_TOOLS as Record<string, { timeoutMs?: number }>)[name]!.timeoutMs,
