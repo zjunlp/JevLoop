@@ -139,15 +139,48 @@ position/action checking** (which prevents a gate that does not exist), **refusa
 time**, and **records an outside party can audit**. None of those are reachable with a
 plain branch — and none of them have been measured.
 
+### It came out the other way — measured
+
+That test has now been run on the `can_deliver` gate
+([`MEASUREMENT-gate-equivalence.md`](MEASUREMENT-gate-equivalence.md), reproducible via
+`bench/gate-compare.ts`, pinned by 11 tests). **The condition holds: there is no measurable
+difference.**
+
+The result is sharper than "no difference", and two of its three findings are corrections
+to this document:
+
+- With no drift, the contract gate and an equivalent hand-written gate agree on every
+  scenario — as they must, since the policy layer is an `if`/`else` chain.
+- **Under drift the contract, as the reference runtime actually implements it, is
+  indistinguishable from a hand-written gate that never considered drift.** Losing a
+  declared cell does not stop the decision: `unfilled` is recorded and nothing consumes it.
+  The refusal that does exist lives in the **Codex adapter**, and the best-practice
+  hand-written gate reproduces it exactly. So *"refusal at load time"* — listed above as a
+  contract advantage — is currently an **adapter property**, and this document was
+  crediting the contract for it.
+- A zero false-accept rate under drift is **not** safety: empty evidence makes every claim
+  unsupported, so the gate rejects everything. It has stopped working. That is why the
+  measurement reports both false-accepts and false-rejects.
+
+What survives is narrower and specific: **a declared frame makes the drift check
+derivable**, so a cell added to the contract is covered automatically, while a hand-written
+gate covers exactly the cells its author remembered. That is the one claim this round did
+not falsify — and it is structural here, not yet measured. Measuring it (mutate the
+declaration; see which arm stays covered) is the next experiment this document should
+carry, not another format feature.
+
 ## What follows for priorities
 
 ```text
 not next    another format feature. The checklist in §12 of TODO.md is empty of them.
 done        run the adapter inside a live Codex session. It found two silently-wrong reads
             (see the gaps above); both are fixed and the fixes are pinned by tests.
-next        the measurement: contract-driven gate versus an equivalent if/else gate, on
-            unsupported completion. It is the positive form of the falsification
-            condition, and it is the same experiment the paper needs.
+done        the falsification test. It came out against us — see above. The contract does
+            not judge better, and the refusal is the adapter's, not the contract's.
+next        the claim that survived: is the drift check actually *derivable*? Mutate a
+            frame declaration and measure whether the contract stays covered while a
+            hand-written gate silently does not. That is the one advantage this round
+            could not falsify, and it is the honest form of "load-time refusal".
 ```
 
 The uncomfortable summary: **the specification is the more interesting artifact and the

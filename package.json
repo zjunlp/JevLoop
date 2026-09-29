@@ -22,6 +22,7 @@
     "bench": "node --experimental-strip-types bench/run.ts",
     "compare": "node --experimental-strip-types bench/compare.ts",
     "latency": "node --experimental-strip-types bench/latency.ts",
+    "gate-compare": "node --experimental-strip-types bench/gate-compare.ts",
     "replay": "node --experimental-strip-types scripts/replay.ts"
   },
   "keywords": [
@@ -64,6 +65,7 @@
     "docs/RESEARCH-AND-STANDARD-DIRECTION-2026-09.md",
     "docs/ADAPTER-CODEX-SCOPE.md",
     "docs/POSITIONING-spec-vs-hook.md",
+    "docs/MEASUREMENT-gate-equivalence.md",
     "adapters"
   ],
   "repository": {

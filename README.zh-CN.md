@@ -444,6 +444,7 @@ CWD_ROOT=./你的项目 PORT=7800 npm run serve
 | [`docs/SKILL-DECISION-ADAPTER.md`](docs/SKILL-DECISION-ADAPTER.md) | 逐步改造一个已有运行时 |
 | [`docs/ADAPTER-CODEX-SCOPE.md`](docs/ADAPTER-CODEX-SCOPE.md) | 把那份 Skill 用在一个我们不拥有的真实宿主上 —— 哪些接得到、哪些接不到 |
 | [`docs/POSITIONING-spec-vs-hook.md`](docs/POSITIONING-spec-vs-hook.md) | ★ 它是一份规范，还是一个 hook —— 以及两种读法各自依赖什么条件 |
+| [`docs/MEASUREMENT-gate-equivalence.md`](docs/MEASUREMENT-gate-equivalence.md) | ★ 把那个条件测了：契约门 vs 等价的 `if`/`else` 门 —— falsification 成立 |
 | [`adapters/codex/`](adapters/codex/README.md) | 照着 Skill 做出来的那个真实适配器 |
 
 其余都是接线。最可能想换掉的那几块：
