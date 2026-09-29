@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JevLoop · 把判定层从循环里拆出来</title>
+<style>
+  :root{
+    --bg:#0b0f14; --bg2:#0f151c; --line:#1f2a35; --fg:#e6edf3;
+    --dim:#8b98a5; --dimmer:#5b6672;
+    --accent:#58a6ff; --good:#3fb950; --warn:#d29922; --bad:#f85149;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.7;
+    -webkit-font-smoothing:antialiased;scroll-behavior:smooth}
+  code,pre,.mono{font-family:var(--mono)}
+
+  /* ── 顶部进度条 ── */
+  #bar{position:fixed;top:0;left:0;height:2px;background:var(--accent);width:0;z-index:50;transition:width .18s}
+
+  /* ── 右下角页码 ── */
+  #pager{position:fixed;right:18px;bottom:14px;z-index:50;font-family:var(--mono);font-size:12px;
+    color:var(--dimmer);background:rgba(11,15,20,.82);border:1px solid var(--line);border-radius:999px;
+    padding:5px 12px;backdrop-filter:blur(6px)}
+  #hint{position:fixed;left:18px;bottom:14px;z-index:50;font-size:12px;color:var(--dimmer)}
+
+  /* ── 幻灯片 ── */
+  section{min-height:100vh;padding:78px 30px 64px;display:flex;flex-direction:column;justify-content:center;
+    border-bottom:1px solid var(--line);position:relative}
+  .wrap{width:100%;max-width:1080px;margin:0 auto}
+  .kick{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:14px}
+  h1{font-size:clamp(30px,4.4vw,54px);line-height:1.16;margin:0 0 18px;letter-spacing:-.02em}
+  h2{font-size:clamp(23px,2.9vw,34px);line-height:1.24;margin:0 0 22px;letter-spacing:-.01em}
+  h3{font-size:16px;margin:0 0 8px;color:var(--fg)}
+  p{margin:0 0 14px;color:#c6d2de}
+  .lead{font-size:clamp(16px,1.5vw,19px);color:#c6d2de;max-width:80ch}
+  .dim{color:var(--dim)}
+  .dimmer{color:var(--dimmer)}
+  strong{color:#fff;font-weight:640}
+  a{color:var(--accent);text-decoration:none;border-bottom:1px solid rgba(88,166,255,.35)}
+  ul,ol{margin:0 0 14px;padding-left:22px;color:#c6d2de}
+  li{margin:6px 0}
+  li::marker{color:var(--dimmer)}
+
+  /* ── 网格 ── */
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  @media(max-width:820px){.g2,.g3{grid-template-columns:1fr}}
+
+  .card{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+  .card.bad{border-left:3px solid var(--bad)}
+  .card.good{border-left:3px solid var(--good)}
+  .card.warn{border-left:3px solid var(--warn)}
+  .card.accent{border-left:3px solid var(--accent)}
+  .card h3{display:flex;align-items:baseline;gap:8px}
+  .card p{margin:0;font-size:14.5px;color:#b9c6d3}
+  .tag{font-family:var(--mono);font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--line);color:var(--dim)}
+  .tag.bad{color:var(--bad);border-color:rgba(248,81,73,.35)}
+  .tag.good{color:var(--good);border-color:rgba(63,185,80,.35)}
+  .tag.accent{color:var(--accent);border-color:rgba(88,166,255,.35)}
+
+  pre{background:#070a0e;border:1px solid var(--line);border-radius:9px;padding:14px 16px;overflow:auto;
+    font-size:13px;line-height:1.62;color:#cbd5e1;margin:0 0 14px}
+  pre .c{color:var(--dimmer)}      /* 注释 */
+  pre .k{color:#ff7b72}            /* 关键字 */
+  pre .s{color:#a5d6ff}            /* 字符串 */
+  pre .f{color:#d2a8ff}            /* 函数/字段 */
+  pre .n{color:#79c0ff}            /* 数字 */
+  pre.bad{border-left:3px solid var(--bad)}
+  pre.good{border-left:3px solid var(--good)}
+
+  table{width:100%;border-collapse:collapse;font-size:14px;margin:0 0 14px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:12.5px;letter-spacing:.03em;text-transform:uppercase}
+  td.mono,th.mono{font-family:var(--mono);font-size:12.5px}
+  tr.hi td{background:rgba(88,166,255,.06)}
+  .ok{color:var(--good)} .no{color:var(--bad)} .mid{color:var(--warn)}
+
+  .kpis{display:flex;flex-wrap:wrap;gap:26px;margin-top:26px}
+  .kpi .n{font-family:var(--mono);font-size:26px;color:#fff;line-height:1.1}
+  .kpi .l{font-size:12px;color:var(--dim)}
+  .quote{border-left:3px solid var(--accent);padding:4px 0 4px 16px;margin:18px 0;color:#dbe6f1;font-size:16.5px}
+  .foot{margin-top:22px;font-size:13px;color:var(--dimmer)}
+
+  /* ── 打印成 PDF：一页一张 ── */
+  @media print{
+    #bar,#pager,#hint{display:none}
+    section{min-height:auto;page-break-after:always;border:0;padding:26px 0}
+    body{background:#fff;color:#000}
+    pre{background:#f6f8fa;color:#111}
+  }
+</style>
+</head>
+<body>
+<div id="bar"></div>
+<div id="hint">← → / 空格 翻页</div>
+<div id="pager"><span id="cur">1</span> / <span id="tot">11</span></div>
+
+<!-- ══════════════════ 1 · 封面 ══════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="kick">JevLoop · decision-contract/v1</div>
+    <h1>把<b>判定层</b><br>从循环里拆出来</h1>
+    <p class="lead">
+      agent 循环里那些「该不该动手、选哪个工具、这一步成没成、任务做完了没、这份回答能不能交付」的分支，
+      今天散在 prompt 里和 <code>if</code> 里。我们把它抽成一份<b>可编译、有界、可拒绝、可复核</b>的声明式契约。
+    </p>
+    <div class="quote">
+      它<b>没有让判定更准</b> —— 这是量出来的。<br>
+      它让判定从<b>一句话</b>，变成一个<b>可以被机器核对一遍的产物</b>。
+    </div>
+    <div class="kpis">
+      <div class="kpi"><div class="n">7 / 14 / 6</div><div class="l">判定节点 / 动作 / 位置</div></div>
+      <div class="kpi"><div class="n">15 / 4</div><div class="l">拦下的变异 / 未误伤的阴性对照</div></div>
+      <div class="kpi"><div class="n">602</div><div class="l">测试，123 文件格式检查全过</div></div>
+      <div class="kpi"><div class="n">2</div><div class="l">消费者：参考循环 + 一个真实宿主</div></div>
+    </div>
+    <div class="foot">本页所有数字都可在仓库里复现；命令见最后一页。含对我们不利的实测结果，是刻意的。</div>
+  </div>
+</section>
+
+<!-- ══════════════════ 2 · 以前是啥样的 ══════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="kick">以前是啥样的</div>
+    <h2>判定不是不存在，它<b>寄生</b>在别的东西里</h2>
+    <p class="lead">懂行的人会说：LangGraph 里就有 <code>should_continue</code>，位置明明是显式的。对 —— 所以差别不在<b>有没有</b>，在它是<b>什么形态</b>。三种常见形态，后两种最普遍。</p>
+
+    <div class="grid g3" style="margin-top:20px">
+      <div class="card bad">
+        <h3>① 融进生成 <span class="tag bad">看不见它看了什么</span></h3>
+        <p>用模型输出的一个标记来表示判定结果。判定与生成<b>共用一次前向</b>，也共用「上下文里有什么」—— 输入无界、不可声明。</p>
+      </div>
+      <div class="card bad">
+        <h3>② 融进计算 <span class="tag bad">不读语义</span></h3>
+        <p>撞上限就停、字符串里有没有 <code>DONE</code>。这是<b>用计算冒充判定</b>：它读的不是语义，是形状。</p>
+      </div>
+      <div class="card warn">
+        <h3>③ 有位置、没规格 <span class="tag">最常见</span></h3>
+        <p>节点是显式的（<code>should_continue</code>），但它的规格是零：允许看什么、答案集合、每个答案对控制流做什么、留没留记录 —— 全没有。</p>
+      </div>
+    </div>
+
+    <pre class="bad" style="margin-top:22px"><span class="c">// 形态①：判定融进生成 —— 「做完了」是模型生成出来的一个标记</span>
+<span class="k">const</span> res = <span class="k">await</span> <span class="f">llm</span>(<span class="s">`${systemPrompt}
+
+Conversation so far:
+${JSON.stringify(messages)}
+
+If the task is complete, reply DONE.`</span>)
+<span class="k">if</span> (res.<span class="f">includes</span>(<span class="s">'DONE'</span>)) <span class="k">break</span>   <span class="c">// 形态②：判定融进计算</span></pre>
+
+    <ul>
+      <li>它看到的是 <code>messages</code> —— <b>「给判定看什么」不是一个可以声明、可以检查的东西</b>，它是「上下文里恰好有什么」。</li>
+      <li>判据是一句英文散文。<b>没有任何机制能告诉你：它被喂了判这件事所需的证据没有。</b></li>
+      <li><code>DONE</code> 到「结束整轮」的映射是隐式的 —— 换个人接手，第一个人猜错。</li>
+      <li>离门限多远、谁答的、能不能换后端答 —— 一个都问不出来。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ══════════════════ 3 · 观察到的缺陷 ══════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="kick">我们观察到了什么</div>
+    <h2>四个缺陷，都是<b>真实事故</b>，不是假想</h2>
+    <p class="lead">下面每一条都来自这个仓库的原型阶段，且都记在文档里（含坟头）。共同点：<b>没有一个会报错</b>。</p>
+
+    <div class="grid g2" style="margin-top:18px">
+      <div class="card bad">
+        <h3>① 计数冒充判断 <span class="tag bad">静默</span></h3>
+        <p>帧里放的是 <code>steps_done: 2</code>。任务「把 alpha.ts 里的 totalOf 抄到 summary.ts」，读完 alpha.ts 之后判了<b>「不需要工具」</b> —— <b>文件从没被写出来</b>。<br><span class="dim">因为「读过」和「写过」在一个计数里长得一模一样。</span></p>
+      </div>
+      <div class="card bad">
+        <h3>② 候选项没有区分度 <span class="tag bad">静默</span></h3>
+        <p>曾有一个「写哪个文件」的判定，候选＝已存在的文件，判据＝「任务要求改它」。<b>每个选项都在声称同一件事</b> —— 模型给选中项 <b>1.00</b> 的把握，然后选错。<br><span class="dim">那不是判定，是让模型在无差别选项里掷骰子。</span></p>
+      </div>
+      <div class="card bad">
+        <h3>③ 拿不到内容就填占位符 <span class="tag bad">有副作用</span></h3>
+        <p>取不到写入内容时，代码填了一个占位符字符串 —— 而它<b>真的被写进了目标文件</b>。<br><span class="dim">「容错」在这里变成了往用户盘上写垃圾。</span></p>
+      </div>
+      <div class="card bad">
+        <h3>④ 不可信文本挤掉判据 <span class="tag bad">19.5%</span></h3>
+        <p>给不可信通道加标记的实测开销：<b>7 个标记、784 字符 / ~4 KB 帧 = 19.5%</b>。「给判定看什么」是个真取舍，不是格式问题 —— 而传统形态下它<b>根本没被当成一个问题</b>。</p>
+      </div>
+    </div>
+
+    <div class="quote" style="margin-top:22px">
+      四个缺陷共享一个形状：<b>循环得出一个证据不支持的结论，而全程没有任何地方说过一句不。</b>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════ 4 · 提出的概念：三分法 ══════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="kick">提出来的概念 · 一</div>
+    <h2>三分法：循环里每一步只做三件事之一</h2>
+    <table>
+      <thead><tr><th style="width:16%"></th><th style="width:34%">判据</th><th style="width:26%">谁来答</th><th>贵不贵</th></tr></thead>
+      <tbody>
+        <tr><td><b>计算</b></td><td>一个<b>不读自然语言</b>的函数就能判出来</td><td>代码</td><td>免费、可单测</td></tr>
+        <tr class="hi"><td><b>判定</b></td><td>答案在<b>闭集</b>里，但要从非结构化内容里读出来</td><td>判定模型 / 规则表 / 桩</td><td>一次判定请求（或编译掉）</td></tr>
+        <tr><td><b>生成</b></td><td>答案<b>枚举不出来</b>（自由文本、任意路径、任意内容）</td><td>生成模型</td><td>最贵，且无界</td></tr>
+      </tbody>
+    </table>
+
+    <div class="grid g2" style="margin-top:6px">
+      <div class="card accent">
+        <h3>界线一：计算 / 判定</h3>
+        <p><code>if (!existsSync(p))</code> 是计算 —— 不读自然语言。<br>「这一步成没成」是判定 —— 要看工具输出。</p>
+      </div>
+      <div class="card accent">
+        <h3>界线二：判定 / 生成</h3>
+        <p><b>能不能枚举答案。</b><br>「选哪个工具」「要不要授权」「做完了没」能枚举 ⇒ 判定。<br>「写什么内容」「移到哪个新路径」不能 —— 目标不在任何闭集里 ⇒ 生成。</p>
+      </div>
+    </div>
+
+    <div class="quote">
+      这条线不是审美：它决定<b>花不花钱</b>（候选项已知的判定可以编译成策略，不发给模型），
+      也决定<b>归谁管</b>（判定是数据，可换后端；生成是自由文本，塞进帧里只会挤掉别的）。
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════ 5 · 判定层的定义与推论 ══════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="kick">提出来的概念 · 二</div>
+    <h2>判定层 = 答案在闭集里、要从自然语言里读出来、并且会改变控制流的分支点</h2>
+
+    <div class="grid g2">
+      <div>
+        <h3 style="color:var(--accent)">为什么「拆出来」在技术上有抓手</h3>
+        <p>抓手就是<b>闭集</b>这一个性质：判定的答案在有限集合里，所以它<b>不必由生成模型回答</b>。这条推论一路走下去就是全部价值：</p>
+        <ul>
+          <li>候选已知、判据可写成条件句 ⇒ <b>编译成策略</b>，零模型调用；</li>
+          <li>要模型答 ⇒ 换后端不动循环 ⇒ <b>可注入</b>（规则表、分类器、测试桩）；</li>
+          <li>答案在闭集里 ⇒ 动作可以<b>穷尽检查</b>（14 个动作的语义是驱动真循环对账出来的）；</li>
+          <li>有帧 ⇒ <b>「它该看什么」可以机器核对</b>。</li>
+        </ul>
+        <div class="quote">判定有闭集答案，<b>所以它可以不是生成的一部分</b>。拿出来之后，它可以被编译、被替换、被检查、被记录。</div>
+      </div>
+      <div>
+        <h3 style="color:var(--accent)">两种界：判定侧 / 执行侧</h3>
+        <table>
+          <thead><tr><th></th><th>界的是什么</th><th>落点</th></tr></thead>
+          <tbody>
+            <tr><td><b>判定侧</b></td><td>它<b>能看什么</b></td><td class="mono">帧预算 + 显式排除</td></tr>
+            <tr><td><b>执行侧</b></td><td>它<b>能做什么</b></td><td class="mono">输入/输出上限、超时、隔离</td></tr>
+          </tbody>
+        </table>
+        <p><code>grade_risk</code> 正好坐在交界上：它是判定，但它判的是「接下来那次执行有多危险」。这也解释了为什么「能写多少」不写在判定里，而是执行侧在 <code>run()</code> <b>之前</b>检查 —— 判定只负责<b>授权</b>。</p>
+        <h3 style="color:var(--accent);margin-top:16px">一个用词约定</h3>
+        <p><b>判定</b>＝一个闭集问题的回答（<code>is_done</code> → finish / keep_going）。<br><b>决策（decision）</b>＝整条记录：帧 + 答案 + 策略 → 动作 + 指纹。<br><span class="dim">所以「决策层」听起来比实际的大；实际是判定层，加一份可复核的记录。</span></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════ 6 · 实现① 一个节点 ══════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="kick">具体怎么实现 · ①</div>
+    <h2>一个判定就是一个块：问题 + 闭集选项 + <b>有界帧</b> + 策略</h2>
+    <p class="lead">根目录一份 <code>DECISION.md</code>，编译成 7 个节点。这是交付闸门（该不该把这份回答发出去）：</p>
+
+<pre class="good"><span class="k">## can_deliver</span>
+kind: mixed
+when: after-generate —— 生成之后，回答发出去之前
+
+<span class="k">### unsupported</span>
+ask: The answer states something that the tool output does not support
+- true — it claims a fact, file or result that was never observed
+
+<span class="k">frame:</span>
+  + task       400                <span class="c">—— 判据是「任务要求的事做了、并如实报告」，两边都要有任务</span>
+  + answer     900  draftMaybe    <span class="c">—— 判的对象就是刚生成的这份草稿</span>
+  + evidence   600  writeEvidence <span class="c">—— ★ 交付闸门要拿工具结果逐句核对回答，所以预算比别处宽</span>
+  - cwd                           <span class="c">—— 与「回答有没有证据支撑」无关</span>
+  - readFiles                     <span class="c">—— 读过哪些文件同样不是证据本身</span>
+  - lastResult                    <span class="c">—— 最近一条结果已逐字在 evidence 里，单列会让最近一步获得不成比例权重</span>
+
+<span class="k">policy:</span>
+  - prob:unsupported &gt;= 0.5 → revise
+  - prob:deliverable &gt;= 0.6 → deliver</pre>
+
+    <div class="grid g3">
+      <div class="card accent"><h3>帧是有界的</h3><p>每一格有<b>字符预算</b>；不看的格要点名，并写出<b>为什么</b>。</p></div>
+      <div class="card accent"><h3>选项是闭集</h3><p>14 个动作，每个声明 <code>next / endsLoop / moreModelCalls / needsEvidence / retries</code>。</p></div>
+      <div class="card accent"><h3>策略是可编译的</h3><p>门限 + 谓词 → 纯函数。<b>候选项已知时，这道判定不发给模型。</b></p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════ 7 · 实现② 四层与拒绝 ══════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="kick">具体怎么实现 · ②</div>
+    <h2>四层检查：<b>写错就在加载期失败</b>，而不是编译成一条永不触发的规则</h2>
+
+    <div class="grid g2">
+      <div>
+        <table>
+          <thead><tr><th>层</th><th>查什么</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">parse</td><td>语法、kind、<b>闭集</b>的动作与位置、每一格必须有界</td></tr>
+            <tr><td class="mono">policy</td><td>每个谓词必须能编译 —— 编译不了的闸门<b>永远不会触发</b></td></tr>
+            <tr><td class="mono">frame</td><td>每一格状态要么被某道判定读了、要么被排除<b>并写了理由</b>。没有第三种状态</td></tr>
+            <tr><td class="mono">schema</td><td>版本缺失或不认识 ⇒ 拒绝，不是猜着读</td></tr>
+          </tbody>
+        </table>
+        <div class="quote">
+          <code>conformance</code>：<b>15 / 15</b> 个「会安静地判错」的改法被拦下；<br>
+          <b>4 / 4</b> 个「意思没变」的改法<b>没被</b>误伤（阴性对照）。
+        </div>
+      </div>
+      <div>
+        <h3 style="color:var(--accent)">一个能立刻看懂的例子</h3>
+        <p>把 <code>can_deliver</code> 帧里那一行排除项删掉：</p>
+<pre class="bad">- cwd    <span class="c">—— 与「回答有没有证据支撑」无关</span>   <span class="k">← 删掉它</span></pre>
+        <p><code>npm run conformance</code> <b>失败，并点名 <code>cwd</code></b>。</p>
+        <p class="dim">在它存在之前：四层全绿，<code>cwd</code> 就这么从声明里消失了 —— 判定的输入悄悄变大，没有任何人知道。</p>
+        <h3 style="color:var(--accent);margin-top:14px">投影表是封闭的</h3>
+        <p>编一个不存在的投影名，<b>解析器当场抛</b>：<code>投影 'cwdLength' 不在注册表里</code>。<br><span class="dim">这是真的加载期拒绝 —— 而「漂移期的拒绝」住在适配器里，见第 10 页。</span></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════ 8 · 实现③ 记录 ══════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="kick">具体怎么实现 · ③</div>
+    <h2>每条判定留一份可复核的记录，而且<b>人读的那一份就是可审计的那一份</b></h2>
+
+    <div class="grid g2">
+      <div>
+        <h3 style="color:var(--accent)">记录里有什么</h3>
+        <pre><span class="f">node</span>, <span class="f">state</span>            <span class="c">← 当时真正发出去的那份有界帧</span>
+<span class="f">frameDigest</span>          <span class="c">← 该节点自己那份帧</span>
+<span class="f">sentFrameDigest</span>      <span class="c">← 实际发出去那份（合并判定时不同）</span>
+<span class="f">batchIds</span>, <span class="f">sentQuestions</span> <span class="c">← 哪几个节点合并成一次前向</span>
+<span class="f">requestDigest</span>        <span class="c">← 帧 + 实际发出去的问题集</span>
+<span class="f">questions</span>, <span class="f">answers</span>, <span class="f">action</span>, <span class="f">reason</span>, <span class="f">provider</span></pre>
+        <p><code>npm run replay</code> 给四档结论：<b>verified / partial / unverifiable / mismatch</b>。</p>
+      </div>
+      <div>
+        <h3 style="color:var(--accent)">一个决策一个 .md（<code>decisions/2026-09-29-001.md</code>）</h3>
+        <ul>
+          <li>可读：结论、节点、动作、理由、<b>当时发出去的那份帧</b>、问答、指纹。</li>
+          <li><b>可复核</b>：记录原样嵌在文件里，<code>--verify</code> <b>只读 .md</b> 就能重算指纹。</li>
+          <li><b>正文也被核对</b>：从机器可读块<b>重算正文并逐字比对</b>。改渲染出来的表格？报出来。</li>
+        </ul>
+        <div class="card warn">
+          <h3>为什么非要做最后那一条</h3>
+          <p>第一版只查那个块。于是把表格里的命令从 <code>ls -la</code> 改成 <code>rm -rf /</code>，<b>照样报 <code>verified</code></b> —— 因为改的不是那个块，而<b>人读的恰恰是表格</b>。一份能被人读出错误结论却报 verified 的文件，不算可审计。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════ 9 · 实现④ 两个消费者 ══════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="kick">具体怎么实现 · ④</div>
+    <h2>两个消费者 —— 以及一个真实宿主告诉我们的事</h2>
+
+    <div class="grid g2">
+      <div class="card good">
+        <h3>① 参考循环 <span class="tag good">src/</span></h3>
+        <p>内进程。判定是数据，所以整套 bench 与实验都能拿规则表或桩驱动 —— <b>没有这条，我量不了任何东西</b>。</p>
+      </div>
+      <div class="card good">
+        <h3>② 一个我们不拥有的宿主 <span class="tag good">adapters/codex/</span></h3>
+        <p>Codex 的 hook 面，真在 <code>codex exec</code> 里跑起来过：<code>ls -la</code> 被契约判为 <code>ask_human</code> 并<b>拦下</b>，记录重放 <b>verified</b>。</p>
+      </div>
+    </div>
+
+    <h3 style="color:var(--warn);margin-top:22px">而在真实宿主上，六个位置只有三个够得着</h3>
+    <table>
+      <thead><tr><th>位置</th><th>够不够得着</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">before-call</td><td class="ok">完整</td><td><code>PreToolUse</code> + <code>PermissionRequest</code></td></tr>
+        <tr><td class="mono">input-choice</td><td class="ok">完整</td><td>同上</td></tr>
+        <tr><td class="mono">after-tool</td><td class="mid">部分</td><td><code>PostToolUse</code> / <code>Stop</code></td></tr>
+        <tr><td class="mono">tool-choice</td><td class="no">结构上不可达</td><td><code>PreToolUse</code> 在模型<b>已经选完工具之后</b>才触发</td></tr>
+        <tr><td class="mono">step-start</td><td class="no">不存在</td><td>每个模型步之前没有任何 hook</td></tr>
+        <tr><td class="mono">after-generate</td><td class="no">不存在</td><td>生成完没有拦截点</td></tr>
+      </tbody>
+    </table>
+
+    <div class="quote">
+      <b>哪些判定能被适配，由宿主的扩展面决定，不由哪些判定重要决定。</b><br>
+      <span class="dim">参考循环里最常被引用的 <code>pick_tool</code>，在那里恰恰接不到。而 <code>ask_human</code> 根本表达不了（它的 parser 拒 <code>ask</code>）⇒ 映射成 <code>deny</code>，<b>fail closed</b>。</span>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════ 10 · 我们量了什么 ══════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="kick">我们量了什么 · 含对自己不利的</div>
+    <h2>falsification 条件<b>成立</b>：契约门没有可测优势</h2>
+    <p class="lead">先把能证明的说清楚：<code>can_deliver</code> 的策略就是一条 if/else 链，所以<b>策略层不可能有优势</b>。差异只能来自「帧怎么编、怎么校验」。于是只变那两处，门限逐字抄成一样。</p>
+
+    <table style="margin-top:14px">
+      <thead><tr><th>臂</th><th>一致</th><th>假接受</th><th>假拒绝</th><th>拒绝</th></tr></thead>
+      <tbody>
+        <tr class="hi"><td class="mono">contract <span class="dim">（照参考实现真实行为）</span></td><td>33</td><td>0</td><td>9</td><td>0</td></tr>
+        <tr><td class="mono">contract-strict <span class="dim">（+ 适配器纪律）</span></td><td>30</td><td>0</td><td>6</td><td>6</td></tr>
+        <tr><td class="mono">ifelse-best <span class="dim">（带守卫的手写门）</span></td><td>30</td><td>0</td><td>6</td><td>6</td></tr>
+        <tr class="hi"><td class="mono">ifelse-naive</td><td>33</td><td>0</td><td>9</td><td>0</td></tr>
+      </tbody>
+    </table>
+    <p><b>逐格比较：<code>contract</code> ≡ <code>ifelse-naive</code>，<code>contract-strict</code> ≡ <code>ifelse-best</code>，在所有扰动上完全相同。</b></p>
+
+    <div class="grid g3" style="margin-top:16px">
+      <div class="card bad">
+        <h3>更正一：拒绝是适配器的</h3>
+        <p>参考实现把缺失的格记进 <code>unfilled</code>，然后<b>没人读它</b>（<code>grep</code> 过：<code>src/</code> 里唯一命中在注释里）。所以「照契约跑」和一个从没想过漂移的手写门<b>不可区分</b>。</p>
+      </div>
+      <div class="card bad">
+        <h3>更正二：0 假接受不是安全</h3>
+        <p>证据一空，每条主张都不被支持 ⇒ 闸门把每份回答都打回。它<b>不是判得更准，是停摆了</b>。这就是为什么每张表都报两根轴。</p>
+      </div>
+      <div class="card bad">
+        <h3>更正三：抓不住自洽的错帧</h3>
+        <p>真跑那次，适配器拿<b>错的 <code>task</code></b>（codex 塞的环境块占了「第一条用户消息」）判了 4 条，<code>replay</code> 报 <b>4 verified / 0 mismatch</b>。<br><b>帧有界、指纹全对、可重放，而判定建立在错的东西上。</b></p>
+      </div>
+    </div>
+
+    <div class="quote" style="margin-top:18px">
+      唯一没被证伪的声明是「漂移检查<b>可导出</b>」—— 加一格声明/改一个界，检查自动跟上，<b>零行检查代码改动</b>。<br>
+      但它很薄：按<b>依赖集</b>量，勤快的手写门也是 100%。差距只在依赖集变化时出现：<b>0 处改动 vs 1 行守卫</b>。<br>
+      ⇒ 留下的是<b>一致性性质，不是能力性质</b>。
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════ 11 · 边界与邀请 ══════════════════ -->
+<section>
+  <div class="wrap">
+    <div class="kick">边界与邀请</div>
+    <h2>我们不主张什么 —— 以及我缺的那一块</h2>
+
+    <div class="grid g2">
+      <div>
+        <h3 style="color:var(--bad)">明确不主张</h3>
+        <ul>
+          <li><b>不主张判得更准</b> —— 上面那个实验说的是没有差异。</li>
+          <li><b>不主张快</b> —— 一次判定只要 <b>78 ms 计算</b>（一次生成是 2000+ ms），但托管 API 上它还要付 <b>254 ms 握手</b>，合计 <b>~390 ms/判定</b>；13 次判定 : 1 次生成时<b>判定主导墙钟（79%）</b>。在那种延迟下，「判定很便宜」是假的。</li>
+          <li><code>13 : 1</code> 是<b>判定次数 : 生成次数</b>，<b>不是</b>「省了 13 次模型调用」。一个像样的 ReAct 循环大概只要 3–4 次调用。</li>
+          <li><b>replay 不说明判定对错</b>，也抓不住自洽的错帧。</li>
+          <li><b>没有第二个实现者。</b>跨宿主结论目前只覆盖一个宿主，而那还是我们自己写的适配器。</li>
+        </ul>
+        <h3 style="color:var(--good);margin-top:14px">价值落在哪（诚实的尺寸）</h3>
+        <p>买到的是<b>可检查、可替换、可审计</b>，不是更准。<br>而<b>跨宿主一致性与第三方可审计性</b>—— 契约真正多出来的那两样 —— <b>要等第二个消费者才兑现</b>。</p>
+      </div>
+      <div>
+        <h3 style="color:var(--accent)">自己验（离线、无 key）</h3>
+        <pre>npm run conformance     <span class="c"># 契约自己还成不成立</span>
+npm run gate-compare    <span class="c"># 第 10 页那张对照表</span>
+npm run gate-derivable  <span class="c"># 可导出性的三个探针</span>
+npm run replay  -- &lt;session&gt;
+npm run trace   -- &lt;session&gt;
+npm run trace   -- --verify &lt;dir&gt;
+npm run metrics -- &lt;session&gt;</pre>
+        <div class="card accent" style="margin-top:6px">
+          <h3>我缺的那一块</h3>
+          <p>不是 review，是<b>你把 <code>DECISION.md</code> 接到你的 loop 上，然后把卡住的地方告诉我</b>。按预期，最先咬人的顺序是：动作语义（这边 14 个动作、你那边可能只有 4 种裁决）、动态候选提供者读哪几格、判定用哪个模型答。</p>
+        </div>
+        <div class="quote" style="margin-top:16px;font-size:15px">
+          契约是更有意思的那件东西，适配器是能跑起来的那件东西。<br>这个项目在两者都存在、而且被治理的是别人的 runtime 那一刻，才算真的开始。
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  const slides = [...document.querySelectorAll('section')]
+  const bar = document.getElementById('bar')
+  const cur = document.getElementById('cur')
+  document.getElementById('tot').textContent = slides.length
+  let idx = 0
+
+  const paint = () => {
+    bar.style.width = ((idx + 1) / slides.length * 100) + '%'
+    cur.textContent = idx + 1
+  }
+  const go = (n) => {
+    idx = Math.max(0, Math.min(slides.length - 1, n))
+    slides[idx].scrollIntoView({ behavior: 'smooth', block: 'start' })
+    paint()
+  }
+
+  addEventListener('keydown', (e) => {
+    if (['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); go(idx + 1) }
+    else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key)) { e.preventDefault(); go(idx - 1) }
+    else if (e.key === 'Home') go(0)
+    else if (e.key === 'End') go(slides.length - 1)
+  })
+
+  // 滚动时按可视位置更新页码（鼠标滚轮 / 触屏也能用）
+  const io = new IntersectionObserver((es) => {
+    for (const en of es) if (en.isIntersecting) {
+      idx = slides.indexOf(en.target)
+      paint()
+    }
+  }, { threshold: 0.55 })
+  slides.forEach((s) => io.observe(s))
+
+  paint()
+</script>
+</body>
+</html>
