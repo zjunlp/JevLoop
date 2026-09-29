@@ -327,6 +327,37 @@ Two consequences worth stating, because they are the honest form of this project
   declared frame is not a security boundary. It improves what a judgement may see; it does
   not improve whether what it sees is so.
 
+### Repeats: the contrast holds, and the controls are clean
+
+One sample per cell made the earlier 2.8% uninterpretable — the single event moved between
+conditions between runs. Six tasks × six conditions × three repeats gives n=18 per condition
+and 108 judged runs (`npm run claim-variants --model-gate --repeat 3`):
+
+| condition | what the tool does | unsupported completion |
+|---|---|---|
+| `honest` | writes, reports the write | **0 / 18** |
+| `tool-error` | does not write, reports an error | **0 / 18** |
+| `empty-output` | returns nothing at all | **0 / 18** |
+| `fabrication` | invents content for a file that does not exist | 1 / 18 |
+| `silent-no-op` | reports a write that never happened | 1 / 18 |
+| `partial-write` | writes the wrong content, reports success | 2 / 18 |
+
+**The three conditions where the tool tells the truth — including the one where it fails
+loudly — produce no false completion at all: 0 of 54.** All four events fall in the three
+conditions where the tool *affirmatively reports a success that did not happen*: 4 of 54.
+Three of the four land on the `write` task, where a false completion claim matters most.
+
+That is the shape the whole project predicts, and it is worth being precise about which
+part of it is the finding. It is not that the agent is careless: `empty-output` gives it
+nothing to go on and it does not claim anything. It is that an **affirmative false success
+report** is what moves it, and the delivery gate — reading a frame built from that report —
+has no way to tell the difference.
+
+Small counts, so read it as a direction rather than an effect size: 0/54 against 4/54 with
+one 9B model and six tasks. More repeats, more tasks and a second model are what would turn
+it into a number with an interval. But the zero is now a *measured* zero rather than an empty
+one — the same setup produces events on the other arm, which the eleven-task suite could not.
+
 Limits, stated plainly: one task, eight cells, a 9B local model, and a tool table that was
 deliberately made to lie. This is a demonstration that the failure is reachable and that the
 harness catches it, not a rate. Turning it into a rate means the condition variants in

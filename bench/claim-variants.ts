@@ -360,6 +360,8 @@ const paint = (o: Outcome, s: string) =>
 
 async function main(argv: string[]): Promise<void> {
   const scripted = argv.includes('--scripted')
+  const repAt = argv.indexOf('--repeat')
+  const repeat = repAt === -1 ? 1 : Math.max(1, Number(argv[repAt + 1] ?? 1) || 1)
   const modelDecisions: false | 'all' | 'gate' = argv.includes('--model-gate')
     ? 'gate'
     : argv.includes('--model-decisions')
@@ -382,21 +384,31 @@ async function main(argv: string[]): Promise<void> {
       modelDecisions === 'all' ? '全部交给本地模型' : modelDecisions === 'gate' ? '★ 动作脚本化，只把交付门交给模型' : '脚本（把动手那一步钉住）'
     }`,
   )
-  console.log(`${D('  oracle:')} 只看**真实盘面**与轨迹 —— 工具说什么一概不信\n`)
+  console.log(`${D('  oracle:')} 只看**真实盘面**与轨迹 —— 工具说什么一概不信`)
+  console.log(
+    `${D('  重复  :')} 每格 ${repeat} 次${repeat === 1 ? '（★ n=1 时哪个变体出事件是噪声，不是率）' : `（每格 n=${repeat}）`}\n`,
+  )
 
   const all: Outcome[] = []
   const perVariant = new Map<string, Outcome[]>()
   for (const v of VARIANTS) perVariant.set(v.id, [])
 
-  for (const task of tasks) {
-    for (const v of VARIANTS) {
-      const c = await runCell(task, v, scripted, modelDecisions)
-      all.push(c.outcome)
-      perVariant.get(v.id)!.push(c.outcome)
-      console.log(`  ${task.id.padEnd(12)}${v.id.padEnd(14)}${paint(c.outcome, short(c.outcome).padEnd(12))}` +
-        `${D(`oracle=${c.oracleDone ? '办成' : '没办成'} 声称=${c.claimsDone ? '是' : '否'} 交付门=${c.deliverAction || '—'} 工具说=${JSON.stringify(c.toolSaid.slice(0, 24))}`)}`)
-      if (c.outcome === 'unsupported-completion') {
-        console.log(`      ${R('↳ 答：')} ${D(c.answer.replace(/\s+/g, ' ').slice(0, 100))}`)
+  for (let r = 1; r <= repeat; r++) {
+    if (repeat > 1) console.log(`  ${B(`── 第 ${r} / ${repeat} 轮 ──`)}`)
+    for (const task of tasks) {
+      for (const v of VARIANTS) {
+        const c = await runCell(task, v, scripted, modelDecisions)
+        all.push(c.outcome)
+        perVariant.get(v.id)!.push(c.outcome)
+        // 多轮时只逐格打第一轮，后面只报异常，免得刷屏
+        const quiet = repeat > 1 && r > 1 && c.outcome !== 'unsupported-completion'
+        if (!quiet) {
+          console.log(`  ${task.id.padEnd(12)}${v.id.padEnd(14)}${paint(c.outcome, short(c.outcome).padEnd(12))}` +
+            `${D(`oracle=${c.oracleDone ? '办成' : '没办成'} 声称=${c.claimsDone ? '是' : '否'} 交付门=${c.deliverAction || '—'} 工具说=${JSON.stringify(c.toolSaid.slice(0, 24))}`)}`)
+        }
+        if (c.outcome === 'unsupported-completion') {
+          console.log(`      ${R(`↳ [第${r}轮 ${task.id}] 答：`)} ${D(c.answer.replace(/\s+/g, ' ').slice(0, 100))}`)
+        }
       }
     }
   }
