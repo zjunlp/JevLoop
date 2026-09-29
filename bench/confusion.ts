@@ -898,22 +898,40 @@ async function main(argv: string[]): Promise<void> {
   )
   console.log(`${D('  配对比较，90% 区间（单侧 α=0.05 ⇒ 等价结论的置信水平是 90%）')}`)
   const bad = judged.filter((c) => c.gold === 'bad')
+  const good = judged.filter((c) => c.gold === 'good')
+  const pct = (x: number) => `${x >= 0 ? '+' : ''}${(x * 100).toFixed(1)}%`
+  console.log(`${D('  ① 拦住坏东西的能力差（正 = 闸门比「没有闸门」抓得多）')}`)
   for (const arm of ARMS) {
     if (arm === 'accept-all') continue
-    // 假确认那一侧：只在「该拦」的格子上比（接受了就是假确认）
-    const b1 = bad.filter((c) => c.verdicts[arm] === 'accept' && c.verdicts['accept-all'] !== 'accept').length
-    const c1 = bad.filter((c) => c.verdicts[arm] !== 'accept' && c.verdicts['accept-all'] === 'accept').length
-    const t1 = tostPaired(b1, c1, bad.length, MARGIN)
-    const mde = pairedMde(bad.length, (b1 + c1) / Math.max(1, bad.length))
-    const pct = (x: number) => `${x >= 0 ? '+' : ''}${(x * 100).toFixed(1)}%`
+    // 捕获那一侧：只在「该拦」的格子上比。正负号翻过来，让「正数 = 更好」符合直觉
+    const b = bad.filter((c) => c.verdicts[arm] !== 'accept' && c.verdicts['accept-all'] === 'accept').length
+    const c = bad.filter((c) => c.verdicts[arm] === 'accept' && c.verdicts['accept-all'] !== 'accept').length
+    const t = tostPaired(b, c, bad.length, MARGIN)
+    const mde = pairedMde(bad.length, (b + c) / Math.max(1, bad.length))
     console.log(
-      `  ${arm.padEnd(12)}假确认差 ${pct(t1.delta).padStart(7)}  90%区间 [${pct(t1.lower)}, ${pct(t1.upper)}]  ` +
-        `p=${t1.p.toFixed(3)}  ${t1.equivalent ? G('✓ 可声称等价') : D('不足以声称等价')}` +
-        `${D(`   本次设计对假确认的 MDE ≈ ${(mde * 100).toFixed(1)} 个百分点（n=${bad.length}）`)}`,
+      `  ${arm.padEnd(12)}${pct(t.delta).padStart(7)}  90%区间 [${pct(t.lower)}, ${pct(t.upper)}]  ` +
+        `p=${t.p.toFixed(3)}  ${t.equivalent ? G('✓ 可声称等价') : D('不足以声称等价')}` +
+        `${D(`   MDE ≈ ${(mde * 100).toFixed(1)} 个百分点（n=${bad.length} 个该拦的）`)}`,
+    )
+  }
+  console.log(`${D('  ② 误伤好活的程度（正 = 闸门比「没有闸门」更容易拦下合法的活）')}`)
+  for (const arm of ARMS) {
+    if (arm === 'accept-all') continue
+    // 假警报那一侧：只在「该放行」的格子上比
+    const b = good.filter((c) => c.verdicts[arm] !== 'accept' && c.verdicts['accept-all'] === 'accept').length
+    const c = good.filter((c) => c.verdicts[arm] === 'accept' && c.verdicts['accept-all'] !== 'accept').length
+    const t = tostPaired(b, c, good.length, MARGIN)
+    const mde = pairedMde(good.length, (b + c) / Math.max(1, good.length))
+    console.log(
+      `  ${arm.padEnd(12)}${pct(t.delta).padStart(7)}  90%区间 [${pct(t.lower)}, ${pct(t.upper)}]  ` +
+        `p=${t.p.toFixed(3)}  ${t.equivalent ? G('✓ 可声称等价（误伤可忽略）') : D('不足以声称等价')}` +
+        `${D(`   MDE ≈ ${(mde * 100).toFixed(1)} 个百分点（n=${good.length} 个该放行的）`)}`,
     )
   }
   console.log(
-    `${D('  ★ 阴性结论必须带 MDE：说「测不出来」时，同一行要写清这套设计本来能看见多大差异')}`,
+    `${D('  ★ 阴性结论必须带 MDE：说「测不出来」时，同一行要写清这套设计本来能看见多大差异。')}` +
+      `\n${D('  ★ 这个工具真正的用武之地是「两组本来就没差别」的那些比较（如 Round 1 的契约 vs if/else），')}` +
+      `\n${D('    它在那里才能把「测不出来」写成正面结论；在本文这批数据上各组是真有差别的。')}`,
   )
 
   // ── 复合可靠性：不发明 r，报 r* ──────────────────────────
