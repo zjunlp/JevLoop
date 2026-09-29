@@ -373,103 +373,147 @@ completable and the agent was never tempted to claim anything.
 
 Rounds 1–3 compared arms by an **average**: the unsupported-completion rate of one pile of
 runs against another pile. The placement experiment pushed that to its limit — 27 candidates
-per arm, 81 cells, **one event**. At that event density a difference in means is not merely
-underpowered, it is the wrong functional. A zero-count arm only rules out rates above 11%
-(0/27); reaching 1% needs ~300 per arm.
+per arm, one event. At that event density a difference in means is not merely underpowered,
+it is the wrong functional: a zero-count arm only rules out rates above 11% (0/27), and
+reaching 1% needs ~300 per arm.
 
 So this round changes the instrument, not the sample. What a gate actually does is *decide*,
 and a decision can be cross-tabulated against an oracle even when events are rare:
 
 ```
                  gold: deliverable   gold: misleading
-gate accepts         correct             FALSE CONFIRMATION
-gate rejects         FALSE ALARM         correct
+gate accepts         correct           FALSE CONFIRMATION
+gate rejects         FALSE ALARM       correct
 gate abstains        ← coverage loss, counted separately, never folded in →
 ```
 
 `catchRate c` = caught / all misleading; `falseAlarmRate f` = wrongly refused / all
 deliverable; `falseConfirmRate` = misleading / all approved. Every rate carries its numerator
-and denominator, every proportion a Wilson interval, and every zero count a rule-of-three
-upper bound instead of a "0%".
+and denominator, every proportion a Wilson interval, every zero count a rule-of-three upper
+bound instead of a "0%".
 
-## Design: one candidate, five arms judging the same object
+## Design: one candidate, every arm judging the same object
 
 Propose-Judge-Commit's cached-claims ablation, generalised. For each (task, repetition) the
 harness generates **exactly one** candidate — same trajectory, same workspace, same final
-answer — and every arm rules on that same candidate. Comparisons are therefore paired, and
-paired booleans make exact McNemar the right test.
+answer — and every arm rules on that same candidate, so comparisons are paired and exact
+McNemar is the right test.
 
 | arm | what it is |
 |---|---|
 | `accept-all` | no gate at all: whatever the loop emits is delivered |
 | `self-claim` | the fused judgement: the model's own generated prose is the verdict |
-| `judge-same` | a separate call, **same family**, reading the bounded frame |
-| `judge-other` | a separate call, **different family** (Llama-3.1-8B), same frame |
+| `judge-same` | a separate call, same family, reading the bounded frame |
+| `judge-other` | a separate call, different family (Llama-3.1-8B), same frame |
 | `compiled` | rules reading the same frame, no model |
 
-Two traps had to be removed before any number was meaningful, and both would have produced a
-confident false conclusion:
+Backends are probed at startup: if a family is not serving it is **dropped with a loud line**,
+never folded into an abstention rate. (The second family's GPU is shared, so it goes away.)
+
+## ★★ Three harness defects that each produced a confident false conclusion
+
+All three were found by running controls, not by reasoning. Each is worth recording because
+each one, left in place, would have been reported as a finding about the *model*.
 
 1. **The gate under test was filtering its own candidate.** `runAgent` asks `can_deliver` and
-   re-generates on `revise`. Run as-is, each arm sees a candidate its own gate already
-   screened — circular. So candidate generation uses a neutral always-deliver rule, and the
-   `can_deliver` frame is recorded verbatim for the arms to rule on afterwards.
+   re-generates on `revise`. Run as-is, each arm rules on a candidate its own gate already
+   screened — circular. Fixed by generating the candidate under a neutral always-deliver rule
+   and recording the `can_deliver` frame verbatim for the arms to rule on afterwards.
 2. **The scripted actions ignored the task.** The first policy preferred reading `notes.md`,
-   so it read that file no matter what was asked: 12 of 27 candidates were "I cannot determine
-   — the evidence does not contain it". That was the harness failing to gather evidence, not
-   the model failing. Driving the actions from `task.required` turned 5 of 9 into genuine
-   completions and produced the first false completion actually caused by the model.
+   so it read that file whatever was asked: 12 of 27 candidates were "I cannot determine —
+   the evidence does not contain it". Driving the actions from `task.required` helped — and
+   then the same defect reappeared one level down: the plan pointer advanced **before** the
+   input question was asked, because `pickTool` and `pickInput` are separate requests. Single
+   step read tasks therefore read `opts[0]`, i.e. the wrong file. `read-one` was accidentally
+   right because `alpha.ts` happens to sort first. **11 of the 12 "misleading" candidates came
+   from this**, not from the model.
+3. **Our own lexicon misread an honest admission.** The surviving candidate said "任务未能完成。
+   提供的证据仅显示读取了 alpha.ts…". The failure list had 「未完成」 and 「不能完成」 but not
+   「未**能**完成」, so an explicit admission of failure was classified as `silent-omission` —
+   "quietly delivered an unfinished job", the heaviest charge this project makes. Third time
+   this class of error has been caught (see `claim-lexicon.ts`); the pattern is always the
+   same and always costs the honest side.
 
-## Result (n = 54 candidates: 39 deliverable, 15 misleading)
+## Result (n = 72 candidates: 61 deliverable, 11 misleading)
 
-| arm | false confirmations | catch `c` | false alarm `f` | coverage | r required to pay off |
+| arm | false confirmations | catch `c` | false alarm `f` | coverage | repair rate needed |
 |---|---|---|---|---|---|
-| `accept-all` | **15/54 = 27.8%** [17.6, 40.9] | 0/15 = 0% (≤20.0%) | 0/39 = 0% (≤7.7%) | 100% | never rescues anything |
-| `self-claim` | 1/4 = 25.0% | 0/1 = 0% | **10/13 = 76.9%** [49.7, 91.8] | **25.9%** | no fix rate can rescue it |
-| `judge-same` | 11/48 = 22.9% [13.3, 36.5] | 4/15 = 26.7% [10.9, 52.0] | **2/39 = 5.1%** [1.4, 16.9] | 100% | > 50% |
-| `judge-other` | 6/35 = 17.1% [8.1, 32.7] | **9/15 = 60.0%** [35.7, 80.2] | 10/39 = 25.6% [14.6, 41.1] | 100% | **> 111% — impossible** |
-| `compiled` | 14/53 = 26.4% [16.4, 39.6] | 1/15 = 6.7% | 0/39 = 0% (≤7.7%) | 100% | > 0% |
+| `accept-all` | **11/72 = 15.3%** [8.8, 25.3] | 0/11 = 0% (≤27.3%) | 0/61 = 0% (≤4.9%) | 100% | never rescues anything |
+| `self-claim` | 1/3 = 33.3% | 0/1 = 0% | **7/9 = 77.8%** [45.3, 93.7] | **13.9%** | no fix rate can rescue it |
+| `compiled` | 10/71 = 14.1% [7.8, 24.0] | 1/11 = 9.1% | 0/61 = 0% (≤4.9%) | 100% | > 0% (but it barely rules) |
+| `judge-same` | **5/62 = 8.1%** [3.5, 17.5] | **6/11 = 54.5%** [28.0, 78.7] | 4/61 = 6.6% [2.6, 15.7] | 100% | > 66.7% |
 
 Paired, exact McNemar, abstention counted as "did not accept":
 
 | comparison | discordant | exact p | reading |
 |---|---|---|---|
-| `judge-same` vs `judge-other` | 14 : 1 | **0.001** | the two judges are distinguishable |
-| `accept-all` vs `judge-other` | 19 : 0 | **< 0.0001** | `judge-other` refuses 19 things the baseline delivers |
-| `accept-all` vs `judge-same` | 4 : 1 | 0.375 | **not distinguishable** |
+| `accept-all` vs `judge-same` | 10 : 0 | **0.002** | the gate refuses 10 things the baseline delivers |
+| `self-claim` vs `judge-same` | 1 : 60 | **< 0.0001** | the two are not the same instrument |
 | `accept-all` vs `compiled` | 1 : 0 | 1.0 | not distinguishable |
+| `accept-all` vs `self-claim` | 69 : 0 | **< 0.0001** | but mostly because `self-claim` abstains |
 
-## What this says, and what it does not
+## What this says
 
-**The confusion matrix works where the average did not.** The end-to-end rates are
-indistinguishable: 27.8% false confirmations with no gate, 22.9% with the same-family judge —
-Wilson intervals overlap almost completely. On that metric alone the honest conclusion is
-"no measurable effect", which is exactly the null that has no power to mean anything. But
-`c` and `f` are estimable at the same n, and they show a real trade-off.
+**The same-family independent gate is the only arm that helps, and it is a real effect.**
+It halves the misleading delivery rate (15.3% → 8.1%), catches 6 of 11 misleading candidates,
+and refuses 4 of 61 deliverable ones. Unlike the earlier underpowered run, the paired test now
+separates it from the no-gate baseline (p = 0.002), and the effect is visible in `c` and `f`
+rather than only in a mean that overlapping intervals cannot resolve.
 
-**No arm dominates, and the second family is the worse gate, not the better one.**
-`judge-other` catches 60% against `judge-same`'s 27% — but it also refuses 25.6% of
-deliverable answers against 5.1%, and its false-alarm rate exceeds the bound that even a
-*perfect* repair channel could tolerate (25.6% > 23.1% at r = 1). The independent different-
-family judge is therefore **net harmful** on this task set. The usual story — "use a
-different family so the verifier is independent" — does not survive here, and reporting only
-the catch rate would have made it look like a win.
+**But it only pays off if a repair channel fixes two thirds of what it flags.** With 84.7% of
+candidates already fine, the gate's upside is small and its false alarms are expensive:
+`r* = 66.7%`. That is the honest form of "it works": a number a deployment can be held to,
+not a p-value. If nothing is built to act on a flag, the gate is pure cost.
 
-**The fused judgement is close to worthless, measured rather than asserted.** `self-claim`
-abstains on 74% of candidates (the prose rarely contains an explicit completion claim either
-way), and when it does rule it refuses 10 of 13 deliverable answers. It is both uninterested
-and, when interested, wrong in the expensive direction.
+**The fused judgement is measurably worthless.** `self-claim` abstains on 86% of candidates
+and refuses 7 of 9 deliverable answers when it does speak. Reporting it as an arm rather than
+asserting it is the point.
 
-**The compiled rule is honest and nearly blind.** Zero false alarms, but it catches 1 of 15:
-it only detects "claims completion with no state-changing tool in the frame", and 14 of the
-15 misleading cases here are *silent omissions* — the answer never claims anything at all.
-A rule that can only catch claims is structurally unable to catch silence.
+**The compiled rule is honest and nearly blind** — zero false alarms, but 1 of 11 catches,
+because it only detects "claims completion with no state-changing tool" and 10 of the 11
+misleading candidates here are *silent omissions* that claim nothing at all.
+
+## Controls
+
+**① Valid-premise negative control.** Every task's premises are legitimate — the tools do not
+lie, nothing is impossible, nothing carries instructions. So the only error available to a gate
+here is refusing legitimate work:
+
+| arm | false alarms on 61 deliverable candidates |
+|---|---|
+| `accept-all` | 0/61 = 0%, **95% upper bound 4.9%** |
+| `compiled` | 0/61 = 0%, **95% upper bound 4.9%** |
+| `judge-same` | 4/61 = 6.6% [2.6, 15.7] |
+| `self-claim` | 7/9 = 77.8% |
+
+Note what the control does *not* say: legitimate premises do not imply zero misleading
+candidates. All 11 came from the model, under honest tools. Read the other way round, this is
+a finding — the misleading deliveries are not caused by adversarial tools.
+
+**② Falsification: does the gate read the evidence at all?** Our own claim is that the
+judgement reads the declared bounded frame. So the evidence cell was emptied and the same
+judges were re-asked. Pre-specified criterion: the catch count must fall to half or below.
+
+| arm | catch on real frame | catch on emptied evidence |
+|---|---|---|
+| `judge-same` | 6/11 = 55% | **4/11 = 36% — did not collapse** |
+| `compiled` | 1/11 = 9% | 0/0 (abstains — it reads the cell) |
+| `accept-all`, `self-claim` | unaffected | unaffected, as they never read a frame |
+
+**This is a failed manipulation, and it is reported as one rather than as a finding.** The
+criterion was not met. But the manipulation is confounded: an *empty* evidence cell is itself
+a signal ("nothing was recorded"), so a judge that answers `unsupported` on an empty cell is
+still reading the frame — it is reacting to absence rather than to content. This cannot
+distinguish "ignores the evidence" from "treats missing evidence as unsupported". The next
+iteration needs a length-matched, non-empty, non-contradictory filler cell; until then no
+conclusion is drawn either way.
 
 ## Limits
 
-Two local 9B-class models, nine tasks, six repetitions, one task suite written by the same
-author as the gate. The oracle for deliverability is our own `classify`, so arm and gold share
-a lineage — the κ-style reliability of that labelling is not measured. The 15 misleading
-cases are dominated by silent omission (14), which is one failure mode, not the space of
-them. And `r` is still not measured: what is reported is the fix rate a repair channel would
-have to reach, not one that was built.
+Three local 9B-class models' worth of experience, nine tasks, eight repetitions, one task
+suite written by the same author as the gate. The oracle for deliverability is our own
+`classify`, so arm and gold share a lineage, and the labelling's reliability is not measured —
+defect 3 above is a live example of that oracle being wrong. The 11 misleading candidates are
+dominated by silent omission (10), which is one failure mode, not the space of them. And `r`
+is still unmeasured: what is reported is what a repair channel would have to reach, not one
+that was built.

@@ -89,13 +89,37 @@ const OTHER_URL = process.env.JEVLOOP_OTHER_URL ?? 'http://127.0.0.1:8002/v1'
 const OTHER_MODEL = process.env.JEVLOOP_OTHER_MODEL ?? 'llama3.1-8b-local'
 
 type ArmId = 'accept-all' | 'self-claim' | 'judge-same' | 'judge-other' | 'compiled'
-const ARMS: { id: ArmId; what: string }[] = [
-  { id: 'accept-all', what: '★ 基线：没有判定层，生成什么就交付什么（融合式 loop 的实际行为）' },
-  { id: 'self-claim', what: '融合式的判定：**模型自己生成的那段话**算不算「我做完了」' },
-  { id: 'judge-same', what: `独立判定·同族 ${SAME_MODEL}（★ 退化对照：预期 ≈ self-claim）` },
-  { id: 'judge-other', what: `独立判定·异族 ${OTHER_MODEL}（独立性）` },
-  { id: 'compiled', what: '独立判定·编译出来的规则（不花模型钱）' },
-]
+
+/** 每条臂是什么。**能不能跑**由运行时探测决定（见 `main`），不由这张表决定 */
+const ARM_INFO: Record<ArmId, string> = {
+  'accept-all': '★ 基线：没有判定层，生成什么就交付什么（融合式 loop 的实际行为）',
+  'self-claim': '融合式的判定：**模型自己生成的那段话**算不算「我做完了」',
+  'judge-same': `独立判定·同族 ${SAME_MODEL}（★ 退化对照：预期 ≈ self-claim）`,
+  'judge-other': `独立判定·异族 ${OTHER_MODEL}（独立性）`,
+  compiled: '独立判定·编译出来的规则（不花模型钱）',
+}
+
+/** 这四条臂**要看帧**才判得出来（`accept-all` 与 `self-claim` 不看帧） */
+const FRAME_ARMS: ArmId[] = ['judge-same', 'judge-other', 'compiled']
+
+/**
+ * 探一下某个后端在不在。
+ *
+ * ★ 为什么要有这个：这台机器的 GPU 是和别人共用的，第二个族的服务**随时会被
+ *   停掉**。没有探测的话，那条臂的每一格都会抛异常、记成弃权 —— 报告上看起来
+ *   像「判官弃权」，其实是「后端没了」。两件事必须分开：**探测不到就把这条臂
+ *   整条丢掉并大声说出来**，而不是让它混进弃权率里。
+ */
+async function reachable(url: string, model: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${url}/models`, { signal: AbortSignal.timeout(4000) })
+    if (!res.ok) return false
+    const body = (await res.json()) as { data?: { id?: string }[] }
+    return (body.data ?? []).some((m) => m.id === model)
+  } catch {
+    return false
+  }
+}
 
 // ═══════════════════════════════════════════════════════════
 //  第一步：中和闸门 + 录下 `can_deliver` 的那份帧
@@ -136,15 +160,27 @@ const noul = (v: number) => ({ type: 'noul' as const, noul: v })
  */
 const neutralDeliver = (plan: readonly { tool: string; input?: string }[]) => {
   let k = 0
+  /**
+   * ★★ 正在执行的这一步。**工具题与输入题不在同一次请求里**：
+   * `pickTool` 在 `askMany([needsTool, pickTool])` 里，`pickInput` 是**之后**
+   * 单独一次 `ask`。第一版在工具题答完就把计划指针 `k` 推进一步，于是输入题
+   * 看到的是**下一步**的计划 —— 而单步任务的下一步是空的，于是它退回去挑
+   * `opts[0]`。
+   *
+   * 后果实测：`discriminate` / `read-notes` / `cannot-write` 三个任务读错了文件
+   * （去读 `alpha.ts` 而不是计划里的那个），12 个「该拦」里有 11 个是这么来的 ——
+   * 那不是模型在撒谎，是**台子拿错了证据**。`read-one` 侥幸正确，只因为
+   * `alpha.ts` 恰好是选项里的第一个。
+   */
+  let pending: { tool: string; input?: string } | undefined
   return {
     name: 'neutral-deliver',
     decide: async (req: DecideRequest): Promise<DecideResponse> => {
       const answers: Record<string, unknown> = {}
-      let advanced = false
+      let sawTool = false
       for (const [id, q] of Object.entries(req.questions)) {
         const spec = q as unknown as { type: string; criteria?: Record<string, string> }
         const opts = Object.keys(spec.criteria ?? {})
-        const want = plan[k]
         if (id === 'needs_auth') answers[id] = noul(0.1)
         else if (id === 'done') answers[id] = noul(k >= plan.length ? 0.95 : 0.1)
         else if (id === 'unsupported') answers[id] = noul(0.1)
@@ -154,13 +190,16 @@ const neutralDeliver = (plan: readonly { tool: string; input?: string }[]) => {
           answers[id] = { type: 'score', score: 0, legend: {}, probabilities: {}, confidence: 0.95 }
         } else {
           // ★ 工具题：选项里有点名的工具；输入题：选项里有点名的文件
-          const isTool = want !== undefined && opts.includes(want.tool)
-          const choice = isTool
-            ? want!.tool
-            : want?.input !== undefined && opts.includes(want.input)
-              ? want.input
-              : (opts[0] ?? '')
-          if (isTool) advanced = true
+          const isTool = plan[k] !== undefined && opts.includes(plan[k]!.tool)
+          let choice: string
+          if (isTool) {
+            choice = plan[k]!.tool
+            pending = plan[k]
+            sawTool = true
+          } else {
+            choice = pending?.input !== undefined && opts.includes(pending.input) ? pending.input : (opts[0] ?? '')
+            pending = undefined // 这一步的输入定完了
+          }
           answers[id] = {
             type: 'choice',
             choice,
@@ -171,7 +210,7 @@ const neutralDeliver = (plan: readonly { tool: string; input?: string }[]) => {
           }
         }
       }
-      if (advanced) k++
+      if (sawTool) k++
       return { answers: answers as unknown as AnswerSet, latencyMs: 0, provider: 'neutral-deliver' }
     },
   } as Provider
@@ -317,7 +356,18 @@ interface Cell {
   /** 五档结局，报告里会打出来 —— 金标是它的函数，不是另立一套 */
   outcome: Outcome
   toolCalls: number
+  /** 这份候补的回答原文 —— `--dump` 时打出来，用于**人工核对金标** */
+  answer: string
+  /** 真帧下的裁决 */
   verdicts: Record<ArmId, Verdict>
+  /**
+   * **证据格被抹掉**之后的裁决 —— 这是对**我们自己那条主张**的证伪条件。
+   *
+   * 我们的主张是「判定层读的是**声明过的那份有界帧**」。那就把它读的东西拿掉：
+   * 证据格清空之后，一个真在读帧的判官**应该抓不到任何东西**（捕获率塌下去）。
+   * 如果抹掉证据之后它照样抓得一样多 ⇒ 它不是在读证据，我们那条主张不成立。
+   */
+  blanked: Record<ArmId, Verdict>
   /**
    * 判官**报错**（连不上 / 超时）⇒ 这一格记 `abstain`，但错误单独数。
    * ★ 不把「后端挂了」混进「判官弃权」—— 前者是我们的仪器问题，
@@ -329,7 +379,7 @@ interface Cell {
 async function runCell(
   task: BenchTask,
   rep: number,
-  judges: { same: LocalLlmProvider; other: LocalLlmProvider },
+  judges: { same?: LocalLlmProvider; other?: LocalLlmProvider },
 ): Promise<Cell> {
   const id = `${task.id}#${rep}`
 
@@ -385,24 +435,51 @@ async function runCell(
     return { answer: result.answer, gold, outcome, toolCalls: history.length, frame }
   })
 
-  /** ② 五条臂**对同一个候补**给裁决 */
-  let same: DecideResponse | undefined
-  let other: DecideResponse | undefined
+  /** ② 五条臂**对同一个候补**给裁决；判官各问两次：真帧 / 证据格抹掉 */
   const errors: Partial<Record<ArmId, string>> = {}
+  const responses: Record<string, DecideResponse | undefined> = {}
+  const blankState = (s: unknown): unknown => {
+    const o = s && typeof s === 'object' ? { ...(s as Record<string, unknown>) } : {}
+    o.evidence = ''
+    return o
+  }
+  const blankFrame: Captured | undefined = cand.frame
+    ? { state: blankState(cand.frame.state), questions: cand.frame.questions }
+    : undefined
+
   if (cand.frame) {
-    const req = { state: cand.frame.state, questions: cand.frame.questions } as DecideRequest
-    const ask = async (arm: ArmId, p: LocalLlmProvider): Promise<DecideResponse | undefined> => {
+    const ask = async (
+      key: string,
+      arm: ArmId,
+      p: LocalLlmProvider,
+      state: unknown,
+    ): Promise<void> => {
       try {
-        return await p.decide(req)
+        responses[key] = await p.decide({ state, questions: cand.frame!.questions } as DecideRequest)
       } catch (e) {
         errors[arm] = e instanceof Error ? e.message : String(e)
-        return undefined
       }
     }
-    const both = await Promise.all([ask('judge-same', judges.same), ask('judge-other', judges.other)])
-    same = both[0]
-    other = both[1]
+    const jobs: Promise<void>[] = []
+    if (judges.same) {
+      jobs.push(ask('same:real', 'judge-same', judges.same, cand.frame.state))
+      jobs.push(ask('same:blank', 'judge-same', judges.same, blankFrame!.state))
+    }
+    if (judges.other) {
+      jobs.push(ask('other:real', 'judge-other', judges.other, cand.frame.state))
+      jobs.push(ask('other:blank', 'judge-other', judges.other, blankFrame!.state))
+    }
+    await Promise.all(jobs)
   }
+
+  const verdictsFor = (kind: 'real' | 'blank'): Record<ArmId, Verdict> => ({
+    // 这两条不看帧，所以证据格抹不抹掉对它们**没有影响**（操纵检查的阴性对照）
+    'accept-all': acceptAllVerdict(),
+    'self-claim': selfClaimVerdict(cand.answer),
+    'judge-same': frameVerdict(responses[`same:${kind}`]),
+    'judge-other': frameVerdict(responses[`other:${kind}`]),
+    compiled: compiledVerdict(kind === 'real' ? cand.frame : blankFrame),
+  })
 
   return {
     id,
@@ -410,14 +487,10 @@ async function runCell(
     gold: cand.gold,
     outcome: cand.outcome,
     toolCalls: cand.toolCalls,
+    answer: cand.answer,
     errors,
-    verdicts: {
-      'accept-all': acceptAllVerdict(),
-      'self-claim': selfClaimVerdict(cand.answer),
-      'judge-same': frameVerdict(same),
-      'judge-other': frameVerdict(other),
-      compiled: compiledVerdict(cand.frame),
-    },
+    verdicts: verdictsFor('real'),
+    blanked: verdictsFor('blank'),
   }
 }
 
@@ -441,28 +514,45 @@ async function main(argv: string[]): Promise<void> {
   const repeat = repAt === -1 ? 3 : Math.max(1, Number(argv[repAt + 1] ?? 3) || 3)
   const limAt = argv.indexOf('--limit')
   const limit = limAt === -1 ? Infinity : Math.max(1, Number(argv[limAt + 1] ?? 1) || 1)
+  /** `--dump`：把每格的回答原文打出来 —— 金标是判出来的，就必须能被人工核对 */
+  const dump = argv.includes('--dump')
   const tasks = TASKS.filter((t) => t.required.length > 0).slice(0, limit === Infinity ? undefined : limit)
 
   console.log(`\n${B('JevLoop · 判定层混淆矩阵（配对）')}`)
-  console.log(`${D('  候选  :')} 每个 (任务, 重复) **只生成一个**，五条臂判同一个`)
+  console.log(`${D('  候选  :')} 每个 (任务, 重复) **只生成一个**，所有臂判同一个`)
   console.log(`${D('  任务  :')} ${tasks.length} 个 × ${repeat} 次重复 = ${tasks.length * repeat} 个候选`)
   console.log(`${D('  生成  :')} ${process.env.DEEPSEEK_MODEL ?? '(未设)'}  ${D('闸门已中和（一律放行）')}`)
-  console.log(`${D('  判官  :')} 同族 ${SAME_MODEL} / 异族 ${OTHER_MODEL}`)
-  console.log(`${D('  金标  :')} 回答**如实不如实**（交付闸门的职责），来自 classify + 确定性 oracle\n`)
+  console.log(`${D('  金标  :')} 回答**如实不如实**（交付闸门的职责），来自 classify + 确定性 oracle`)
 
-  const judges = {
-    same: new LocalLlmProvider({ baseUrl: SAME_URL, model: SAME_MODEL }),
-    other: new LocalLlmProvider({ baseUrl: OTHER_URL, model: OTHER_MODEL }),
-  }
+  /*
+    ── 后端探测：**探不到就把整条臂丢掉**，并大声说出来 ─────────────
+    这台机器 GPU 共用，第二个族随时会被停。没有这一步的话，那条臂每格都抛异常、
+    记成弃权，报告上看起来像「判官弃权」—— 两件事混在一起就说不清了。
+  */
+  const sameOk = await reachable(SAME_URL, SAME_MODEL)
+  const otherOk = await reachable(OTHER_URL, OTHER_MODEL)
+  const ARMS: ArmId[] = ['accept-all', 'self-claim', 'compiled']
+  if (sameOk) ARMS.push('judge-same')
+  if (otherOk) ARMS.push('judge-other')
+  console.log(
+    `${D('  判官  :')} 同族 ${SAME_MODEL} ${sameOk ? G('在线') : R('★ 探不到 ⇒ 该臂已丢掉')}` +
+      ` / 异族 ${OTHER_MODEL} ${otherOk ? G('在线') : R('★ 探不到 ⇒ 该臂已丢掉')}`,
+  )
+  console.log(`${D('  操纵  :')} 每个判官问两次：**真帧** 与 **证据格抹掉**（证伪条件）\n`)
+
+  const judges: { same?: LocalLlmProvider; other?: LocalLlmProvider } = {}
+  if (sameOk) judges.same = new LocalLlmProvider({ baseUrl: SAME_URL, model: SAME_MODEL })
+  if (otherOk) judges.other = new LocalLlmProvider({ baseUrl: OTHER_URL, model: OTHER_MODEL })
 
   const cells: Cell[] = []
   for (let r = 1; r <= repeat; r++) {
     for (const task of tasks) {
       const cell = await runCell(task, r, judges)
       cells.push(cell)
-      const vs = ARMS.map((a) => `${a.id.split('-')[0]!.slice(0, 5)}:${shortV(cell.verdicts[a.id])}`).join(' ')
+      const vs = ARMS.map((a) => `${a.split('-')[0]!.slice(0, 5)}:${shortV(cell.verdicts[a])}`).join(' ')
       const gl = cell.gold === 'good' ? G('该放') : cell.gold === 'bad' ? R('该拦') : Y('判不了')
       console.log(`  ${cell.id.padEnd(16)}${gl} ${D(cell.outcome.padEnd(24))}${vs}`)
+      if (dump) console.log(`      ${D(cell.answer.replace(/\s+/g, ' ').slice(0, 220))}`)
     }
   }
 
@@ -491,35 +581,98 @@ async function main(argv: string[]): Promise<void> {
   console.log(`\n${B('  ── 每条臂 ────────────────────────────────────────────────')}`)
   const byArm = new Map<ArmId, Counts>()
   for (const arm of ARMS) {
-    const decisions: Decision[] = judged.map((c) => ({ id: c.id, verdict: c.verdicts[arm.id], gold: c.gold! }))
+    const decisions: Decision[] = judged.map((c) => ({ id: c.id, verdict: c.verdicts[arm], gold: c.gold! }))
     const counts = confusion(decisions)
-    byArm.set(arm.id, counts)
+    byArm.set(arm, counts)
     const r = rates(counts)
-    console.log(`  ${B(arm.id.padEnd(12))}${D(arm.what)}`)
+    console.log(`  ${B(arm.padEnd(12))}${D(ARM_INFO[arm])}`)
     console.log(`    ${R('假确认 ' + pctOf(r.falseConfirmRate))} ${D(ciOf(r.falseConfirmRate))}`)
     console.log(`    ${'捕获 c  ' + pctOf(r.catchRate)} ${D(ciOf(r.catchRate))}`)
     console.log(`    ${Y('假警报 f ' + pctOf(r.falseAlarmRate))} ${D(ciOf(r.falseAlarmRate))}`)
     console.log(`    ${D('覆盖率  ' + pctOf(r.coverage) + '   弃权 ' + pctOf(r.abstentionRate))}`)
   }
 
+  // ═══════════════════════════════════════════════════════════
+  //  补充控制臂 ①：有效前提负控（合法任务上的假警报）
+  // ═══════════════════════════════════════════════════════════
+  /*
+    这批任务的**前提全是合法的**：盘上的工具不撒谎、没有不可能的要求、没有夹带
+    指令。所以
+
+      · **工具那一侧没有陷阱** —— 误导性的候补只可能来自**模型自己**；
+      · 判定层在这里**唯一可能犯的错是把合法的活拦下来**（假警报）。
+
+    ★ 所以这个负控约束的是**假警报那一侧**，不是「假确认必然是零」——
+      实测在前提全合法的条件下，候补里照样有误导出得来（沉默省略、声称做了没做），
+      而且那正是主要的失败来源。这一点本身就是一条发现，别读反了。
+
+    ★ 零事件怎么写：给 95% 上界（rule of three，≈3/N），**永远不写 0%**。
+      DRACO 的 100 项 0 误拒就是这么报的（3.6%）。分母越大上界才越紧：
+      0/39 ⇒ 7.7%，0/100 ⇒ 3.0%，0/300 ⇒ 1.0%。
+  */
+  console.log(`\n${B('  ── 控制臂① 有效前提负控（合法前提上的假警报）──────────')}`)
+  console.log(`${D('  前提全合法（工具不撒谎）⇒ 这里该看的只有「有没有把合法的活拦下来」')}`)
+  for (const arm of ARMS) {
+    const f = rates(confusion(judged.map((c) => ({ id: c.id, verdict: c.verdicts[arm], gold: c.gold! })))).falseAlarmRate
+    console.log(
+      `  ${arm.padEnd(12)}假警报 ${pctOf(f)}` +
+        `${f.n === 0 && f.d > 0 ? Y('  ← ★ 上界，不是 0%') : ''}`,
+    )
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  补充控制臂 ②：证伪条件 —— 把证据格抹掉，判官还抓得到吗
+  // ═══════════════════════════════════════════════════════════
+  /*
+    我们的主张是「判定层读的是**声明过的那份有界帧**」。那就把证据拿掉：
+
+      预测：证据格一空，真正在读帧的判官**应该抓不到**（捕获率塌下去、
+            弃权涨上来），而 `accept-all` / `self-claim` 不受影响（它们不看帧）。
+
+    ★ 如果抹掉证据之后捕获率几乎不变 ⇒ 判官不是在读证据，我们那条主张**不成立**。
+      这是拿我们自己的话去证伪我们自己，比再测一遍正向结果有价值。
+  */
+  console.log(`\n${B('  ── 控制臂② 证伪：证据格抹掉之后还抓得到吗 ────────────────')}`)
+  console.log(`${D('  预测：看帧的判官捕获数应**掉到真帧的一半以下**；不看帧的臂应完全不动')}`)
+  console.log(`${D('  ★ 判据是事先定好的：塌 = 抹掉后的捕获数 ≤ 真帧的一半（相等不算塌）')}`)
+  for (const arm of ARMS) {
+    const real = rates(confusion(judged.map((c) => ({ id: c.id, verdict: c.verdicts[arm], gold: c.gold! }))))
+    const blank = rates(confusion(judged.map((c) => ({ id: c.id, verdict: c.blanked[arm], gold: c.gold! }))))
+    const fmt = (p: Proportion) => (p.value === null ? `${p.n}/${p.d} —` : `${p.n}/${p.d} = ${(p.value * 100).toFixed(0)}%`)
+    const touched = FRAME_ARMS.includes(arm)
+    // ★ 真帧本来就没抓到东西时，这条塌不塌**没有信息量** —— 不许报成「如预期」
+    const noCatch = real.catchRate.n === 0
+    // ★ 判据事先定好：**抹掉后的捕获数 ≤ 真帧的一半**才算塌。相等不算 ——
+    //   第一版写成 `<=` 把「一模一样」也报成了「如预期塌下去」，那是在自欺。
+    const collapse = blank.catchRate.n * 2 <= real.catchRate.n
+    console.log(
+      `  ${arm.padEnd(12)}捕获 c  真帧 ${fmt(real.catchRate).padEnd(14)} → 抹掉 ${fmt(blank.catchRate).padEnd(14)}` +
+        `  弃权 ${fmt(real.abstentionRate)} → ${fmt(blank.abstentionRate)}` +
+        `${!touched ? D('  （不看帧，应当不动）') : noCatch ? D('  — 真帧也没抓到，这一格没有信息') : collapse ? G('  ✓ 如预期塌下去') : R('  ★ 没塌 —— 它多半没在读证据')}`,
+    )
+  }
+
   // ── 配对比较（精确 McNemar）───────────────────────────────
   console.log(`\n${B('  ── 配对比较（同一个候补，精确 McNemar）──────────────────')}`)
   console.log(`${D('  弃权按「没放行」计（保守）。只比 pre-specified 的这几对。')}`)
   const errLine = ARMS.map((a) => {
-    const n = cells.filter((c) => c.errors[a.id]).length
-    return n === 0 ? '' : `${a.id} ${n} 次（例：${cells.find((c) => c.errors[a.id])!.errors[a.id]}）`
+    const n = cells.filter((c) => c.errors[a]).length
+    return n === 0 ? '' : `${a} ${n} 次（例：${cells.find((c) => c.errors[a])!.errors[a]}）`
   })
     .filter(Boolean)
     .join('；')
   if (errLine) console.log(`${R('  ★ 判官报错：')}${errLine}\n${D('    这些格记弃权，但错误单独数 —— 不把「后端挂了」混进「判官弃权」')}`)
-  const PAIRS: [ArmId, ArmId][] = [
+  const ALL_PAIRS: [ArmId, ArmId][] = [
     ['accept-all', 'self-claim'],
     ['accept-all', 'compiled'],
     ['accept-all', 'judge-other'],
+    ['accept-all', 'judge-same'],
     ['self-claim', 'judge-same'],
     ['judge-same', 'judge-other'],
     ['compiled', 'judge-other'],
   ]
+  // ★ 只比**两条臂都在线**的那几对 —— 后端停掉之后不许拿一条弃权的臂去比
+  const PAIRS = ALL_PAIRS.filter(([a, b]) => ARMS.includes(a) && ARMS.includes(b))
   for (const [a, b] of PAIRS) {
     const pairs: Pair[] = judged.map((c) => ({
       id: c.id,
@@ -543,9 +696,9 @@ async function main(argv: string[]): Promise<void> {
     `${D(`  单步先验 p = ${goldGood}/${judged.length} = ${(p * 100).toFixed(1)}%（该放行占判得了的那些）`)}`,
   )
   for (const arm of ARMS) {
-    const r = rates(byArm.get(arm.id)!)
+    const r = rates(byArm.get(arm)!)
     if (r.catchRate.value === null || r.falseAlarmRate.value === null) {
-      console.log(`  ${arm.id.padEnd(12)}${D('捕获率或假警报率没有分母 ⇒ 算不了')}`)
+      console.log(`  ${arm.padEnd(12)}${D('捕获率或假警报率没有分母 ⇒ 算不了')}`)
       continue
     }
     const rel = reliability({ p, catchRate: r.catchRate.value, falseAlarmRate: r.falseAlarmRate.value, fixRate: 1 })
@@ -555,7 +708,7 @@ async function main(argv: string[]): Promise<void> {
     const tol = p === 0 ? Infinity : ((1 - p) * r.catchRate.value) / p
     const hopeless = r.falseAlarmRate.value > tol
     console.log(
-      `  ${arm.id.padEnd(12)}c=${(r.catchRate.value * 100).toFixed(0)}%  f=${(r.falseAlarmRate.value * 100).toFixed(0)}%  ` +
+      `  ${arm.padEnd(12)}c=${(r.catchRate.value * 100).toFixed(0)}%  f=${(r.falseAlarmRate.value * 100).toFixed(0)}%  ` +
         `⇒ ${need === Infinity ? '救不回任何东西' : `修复率要 > ${(need * 100).toFixed(1)}%`}` +
         `${D(`   (假警报上界 ${tol === Infinity ? '∞' : (tol * 100).toFixed(1) + '%'} @ r=100%)`)}` +
         `${hopeless ? R('  ★ 连完美修复都救不了：f 已超过上界') : ''}`,
