@@ -164,10 +164,19 @@ to this document:
 
 What survives is narrower and specific: **a declared frame makes the drift check
 derivable**, so a cell added to the contract is covered automatically, while a hand-written
-gate covers exactly the cells its author remembered. That is the one claim this round did
-not falsify — and it is structural here, not yet measured. Measuring it (mutate the
-declaration; see which arm stays covered) is the next experiment this document should
-carry, not another format feature.
+gate covers exactly the cells its author remembered.
+
+That has now been tested too, and it survives — **thinly**
+([round 2](MEASUREMENT-gate-equivalence.md#round-2-is-the-drift-check-derivable), 8 more
+tests). The derivation is real: adding a declared cell or changing a declared bound moves the
+check with **zero edits to checking code**. But measured on the cells a gate actually
+*depends on*, a diligent hand-written gate is at 100% as well — it guards what it reads. The
+gap opens at exactly one moment, when the dependency set changes: **0 edits versus 1**, and
+that one is forgettable.
+
+So the honest form is a *consistency* property, not a competence one: the declaration and the
+check cannot fall out of sync because they are the same artifact. That is worth something and
+it is not worth much, and it should be stated at that size.
 
 ## What follows for priorities
 
@@ -175,12 +184,14 @@ carry, not another format feature.
 not next    another format feature. The checklist in §12 of TODO.md is empty of them.
 done        run the adapter inside a live Codex session. It found two silently-wrong reads
             (see the gaps above); both are fixed and the fixes are pinned by tests.
-done        the falsification test. It came out against us — see above. The contract does
-            not judge better, and the refusal is the adapter's, not the contract's.
-next        the claim that survived: is the drift check actually *derivable*? Mutate a
-            frame declaration and measure whether the contract stays covered while a
-            hand-written gate silently does not. That is the one advantage this round
-            could not falsify, and it is the honest form of "load-time refusal".
+done        the falsification test. It came out against us — the contract does not judge
+            better, and the refusal is the adapter's, not the contract's.
+done        the claim that survived. "Derivable" is real but thin: 0 edits vs 1 when a
+            dependency changes, i.e. a consistency property, not a competence one.
+next        a real judge, or a second consumer. Either measure whether a *declared frame*
+            changes what a model can see (needs a backend), or make the reference loop read
+            the frame signals it already computes — `unfilled` is derived, free, and read by
+            exactly one adapter today.
 ```
 
 The uncomfortable summary: **the specification is the more interesting artifact and the

@@ -23,6 +23,7 @@
     "compare": "node --experimental-strip-types bench/compare.ts",
     "latency": "node --experimental-strip-types bench/latency.ts",
     "gate-compare": "node --experimental-strip-types bench/gate-compare.ts",
+    "gate-derivable": "node --experimental-strip-types bench/gate-derivable-run.ts",
     "replay": "node --experimental-strip-types scripts/replay.ts"
   },
   "keywords": [

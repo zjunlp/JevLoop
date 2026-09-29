@@ -175,16 +175,111 @@ said nothing about it. A verdict can be unaffected while the frame is wrong.
   third party can audit the result — the two benefits the positioning document already
   identifies as conditional on a second consumer.
 
+## Round 2: is the drift check *derivable*?
+
+Round 1 falsified the accuracy claim and left exactly one survivor:
+
+> A declared frame makes the drift check **derivable** — a cell added to the contract is
+> covered automatically, while a hand-written gate covers exactly the cells its author
+> remembered.
+
+"Derivable" is an adjective, so the round-2 job was to turn it into things that can be run.
+Three probes, all reproducible via `bench/gate-derivable-run.ts` and pinned by 8 tests.
+
+**D1 — adding a declared cell extends the presence check.** `can_deliver` declares
+`task, answer, evidence`, and all three are covered by `unfilled` (3/3). Add one cell to the
+`frame:` block and coverage is 4/4, including the new cell — with **zero lines of checking
+code changed**, because `unfilled` is computed by iterating the declaration.
+
+A boundary case fell out of this probe and is worth keeping: the first attempt used an
+invented projection name and the **parser refused it at load time**
+(`投影 'cwdLength' 不在注册表里`). So load-time refusal is real — for a malformed
+declaration. It is the *drift* refusal that lives in the adapter, which is the distinction
+round 1 was missing.
+
+**D2 — changing a declared bound changes truncation.** Editing `+ answer 900` to
+`+ answer 50` in the markdown moves the applied budget from 897 characters to 47, again with
+no code change: `chars` and `listMax` are both derived from that one number.
+
+**D3 — the signals are produced; nothing consumes them.** Verified from source rather than
+from documentation: the only references to `.unfilled` / `.absent` / `.truncated` anywhere in
+`src/` are inside a **comment** in `frame.ts`. `decide.ts` and `agent.ts` reference none of
+them. A test asserts this, and fails if anyone starts consuming them — so the claim cannot
+rot silently.
+
+### The fairness correction that shrinks the claim
+
+The first draft of this measurement compared *declared* cells against *guarded* cells. That
+overstates the gap, and it is worth saying why: a hand-written gate only depends on the cells
+it reads, so a gate that never reads `task` has no reason to guard it. Measured on its own
+dependency set, the diligent hand-written gate from round 1 is at **100%** (2 of 2).
+
+So the difference is not capability, and it is not accuracy. It appears at exactly one
+moment: **when the dependency set changes.**
+
+| | after a new dependency is added |
+|---|---|
+| contract | 0 edits to the checking code — the check is recomputed from the declaration |
+| hand-written gate | 1 edit (the guard), and the gate is back to 100% |
+
+That is what survives: **a consistency property, not a competence one.** The declaration and
+the check cannot fall out of sync, because they are the same artifact. A diligent author
+closes the hand-written gap with a single line.
+
+### What this is worth, stated without inflation
+
+This round does **not** produce a rate. There is no sample of "how often does a frame grow",
+because in this repository it barely has: `git log` over `DECISION.md` shows
+`can_deliver`'s positive cells have been `task, answer, evidence` since the frames moved into
+the file, and the only change is `canDelete` joining the exclusions. The cell that
+`DECISION.md` documents as having been *added* to fix a misjudgement (`already_read`) was
+added during prototyping, before frames were declarative. So the mutation set here is
+synthetic by necessity, modelled on a real shape of change, and it measures **the cost of a
+change and the possibility of missing one** — not a frequency.
+
+Presenting a structural property as a measured probability is the second most common lie in
+this kind of write-up, after presenting a hand-labelled oracle as automatic.
+
+The genuinely actionable finding is D3: **the three signals exist and no one reads them.**
+That is not a flaw in the contract — producing them is the contract's job, and it does it
+from the declaration. It is an unfinished consumer, and it is the same shape as the two other
+unconsumed obligations this repository already tracks (`auto_audit`'s trace, and the
+list-valued untrusted channels). `unfilled` is the one that costs something today: it is what
+would have caught the missing `base_risk` in the live Codex run, and it is only read by one
+adapter.
+
+## Limits
+
+- **One node.** `can_deliver` for the gate comparison, `can_deliver` again for the
+  derivability probes. This is not a statement about all fourteen decisions.
+- **A proxy judge**, as above. Neither round speaks to whether a contract improves a
+  *model's* judgement; that is the LLM arm, which needs a real backend.
+- **Six scenarios and a hand-authored oracle.** Enough to exhibit the mechanism, not enough
+  for a rate with an error bar. The tables are counts over a curated set, not estimates.
+- **Mutating the frame in memory.** D1/D2 rewrite a copy of `DECISION.md` as a string and
+  re-parse it, rather than editing the repository's contract. That keeps the owner's file
+  untouched, but it means the experiment demonstrates the mechanism on a *copy*; the parse
+  path is the real one, so the derivation is real, but no committed frame was changed.
+- **The reference frame compiler is used** (`buildDecisions().canDeliver.frameArtifact`,
+  `frameSpecFromBlock`). `jevloop/contract` exports no generic frame compiler, so the
+  portable path would need one; that asymmetry is itself worth noting.
+- **A negative result about the verdict is not a negative result about everything.** Round 1
+  says the contract does not *judge* better. Neither round tests legibility, or whether a
+  third party can audit the result — the two benefits the positioning document already
+  identifies as conditional on a second consumer.
+
 ## What follows
 
-The contract's remaining defensible claim is narrower than "better decisions" and more
-specific than "a nicer way to write the gate": **a declared frame makes the drift check
-derivable, so it cannot be forgotten one cell at a time.** In this experiment that claim is
-not yet measured — it is structural. The contract computes `unfilled` *from the `frame:`
-declarations*, so a cell added to the contract is covered automatically; a hand-written gate
-covers exactly the cells its author remembered. `ifelse-best` matched `contract-strict`
-because a human wrote one guard for one cell in a six-line gate.
+Both rounds point at the same place, and it is not a format feature.
 
-That is testable — mutate the frame declaration and measure which arm stays covered — and
-it is the version of the claim worth running next, because it is the only one this round did
-not falsify.
+1. **The measurement needs a real judge.** The proxy judge is what keeps round 1 from
+   answering "does the contract improve a model's judgement" — the one question where a
+   declarative frame plausibly does something a hand-written prompt cannot, because the frame
+   decides what the judge is *allowed to see*. That is the LLM arm, and it needs a backend.
+2. **`unfilled` should have a second consumer.** It is derived, it is free, and exactly one
+   adapter reads it. Making the reference loop read its own frame signals turns round 2's D3
+   from a gap into a feature — and it would be the first time the contract's own runtime
+   acted on the drift it already detects.
+3. **The claim to stop making.** "Refusal at load time" must not be used, unqualified, as a
+   contract advantage. Load-time refusal is real for malformed declarations; drift refusal is
+   the adapter's and the author's.
