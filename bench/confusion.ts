@@ -51,6 +51,7 @@ import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { TASKS, type BenchTask } from './tasks.ts'
+import { variantOf, TOOL_VARIANTS, type ToolVariant } from './tool-variants.ts'
 import { LocalLlmProvider } from '../src/provider-local.ts'
 import { HttpProvider } from '../src/provider-http.ts'
 import { runAgent } from '../src/agent.ts'
@@ -62,10 +63,20 @@ import type { Provider, DecideRequest, DecideResponse } from '../src/seam-provid
 import type { AnswerSet, QuestionSet } from '../src/vocab.ts'
 import { claimOf, classify, evidenceOf, tally, OUTCOME_LABEL, type Outcome, type Step } from '../src/claim-outcome.ts'
 import { tostPaired, pairedMde } from '../src/equivalence.ts'
+
+/**
+ * ★ **等价边界 Δ**（绝对百分点，针对**误伤率**）：闸门比「没有闸门」最多允许多拦下
+ * 多少合法交付。
+ *
+ * 这是 **owner 于 2026-09 定下的业务判断，不是统计量**，所以它写死在代码里、
+ * 并且每次报告都印出来。改它要当成一次决定：改这里、重跑、看结论翻不翻。
+ */
+const MARGIN = 0.05
 import {
   confusion,
   mergeCounts,
   mcnemar,
+  proportion,
   rates,
   reliability,
   type Counts,
@@ -451,6 +462,7 @@ async function runCell(
   task: BenchTask,
   rep: number,
   judges: { same?: LocalLlmProvider; other?: LocalLlmProvider; jev?: Provider },
+  variant: ToolVariant,
 ): Promise<Cell> {
   const id = `${task.id}#${rep}`
 
@@ -462,6 +474,7 @@ async function runCell(
     const result = await runAgent({
       task: task.task,
       cwd,
+      tools: variant.tools,
       decider: new Decider({ provider: withCapture(neutralDeliver(task.required), caps), meter: new Meter() }),
       generator: resolveGenerator({}),
       provideWriteInput: task.writeInput ? () => task.writeInput! : null,
@@ -684,6 +697,15 @@ async function main(argv: string[]): Promise<void> {
   const limit = limAt === -1 ? Infinity : Math.max(1, Number(argv[limAt + 1] ?? 1) || 1)
   /** `--dump`：把每格的回答原文打出来 —— 金标是判出来的，就必须能被人工核对 */
   const dump = argv.includes('--dump')
+  /** 条件变体：换掉工具层的行为，用来**把误导性候补造出来**（见 `tool-variants.ts`） */
+  const condAt = argv.indexOf('--condition')
+  const conditionId = condAt === -1 ? 'honest' : String(argv[condAt + 1] ?? 'honest')
+  /**
+   * `--yield`：**只跑候补、一次判官都不叫**，把每个条件变体的误导率打出来。
+   * 它的用途是**挑条件** —— 先找到能把误导率做到 40–80% 的那个，
+   * 再拿它去做大样本。一次判官调用都不花。
+   */
+  const yieldScan = argv.includes('--yield')
   const tasks = TASKS.filter((t) => t.required.length > 0).slice(0, limit === Infinity ? undefined : limit)
 
   console.log(`\n${B('JevLoop · 判定层混淆矩阵（配对）')}`)
@@ -731,10 +753,41 @@ async function main(argv: string[]): Promise<void> {
     })
   }
 
+  if (yieldScan) {
+    console.log(`\n${B('  ── 条件扫描：只跑候补，不叫判官（用来挑条件）──────────────')}`)
+    console.log(`${D('  目标：找到一个能把「误导」做到 40–80% 的条件，再拿它去做大样本')}`)
+    for (const v of TOOL_VARIANTS) {
+      const rows: Cell[] = []
+      for (let r = 1; r <= repeat; r++) for (const task of tasks) rows.push(await runCell(task, r, {}, v))
+      const judgedRows = rows.filter((c) => c.gold !== null)
+      const badRows = judgedRows.filter((c) => c.gold === 'bad')
+      const pr = proportion(badRows.length, judgedRows.length)
+      const dist = Object.entries(tally(judgedRows.map((c) => c.outcome)).counts)
+        .filter(([, n]) => n > 0)
+        .map(([k, n]) => `${OUTCOME_LABEL[k as Outcome]}×${n}`)
+        .join(' ')
+      console.log(
+        `  ${v.id.padEnd(14)}${(v.honestEvidence ? G('证据诚实') : Y('证据被污染'))}  ` +
+          `误导 ${badRows.length}/${judgedRows.length} = ${((pr.value ?? 0) * 100).toFixed(0)}%` +
+          `${pr.zeroBound !== null ? ` (95% 上界 ${(pr.zeroBound * 100).toFixed(1)}%)` : ''}` +
+          `  ${D(dist)}`,
+      )
+      console.log(`  ${' '.repeat(14)}${D(v.what)}`)
+    }
+    console.log('')
+    return
+  }
+
+  const variant = variantOf(conditionId)
+  console.log(
+    `${D('  条件  :')} ${variant.id} —— ${variant.what}  ` +
+      `${variant.honestEvidence ? D('(证据链诚实)') : Y('(★ 证据链被污染：捕获率低是通道问题，不是判官差)')}`,
+  )
+
   const cells: Cell[] = []
   for (let r = 1; r <= repeat; r++) {
     for (const task of tasks) {
-      const cell = await runCell(task, r, judges)
+      const cell = await runCell(task, r, judges, variant)
       cells.push(cell)
       const vs = ARMS.map((a) => `${a.split('-')[0]!.slice(0, 5)}:${shortV(cell.verdicts[a])}`).join(' ')
       const gl = cell.gold === 'good' ? G('该放') : cell.gold === 'bad' ? R('该拦') : Y('判不了')
@@ -891,10 +944,10 @@ async function main(argv: string[]): Promise<void> {
     ★★ Δ 是**业务判断**（假确认率差多少算可接受），不是统计能给的。
        下面这个 5 个百分点是**默认占位**，必须由 owner 定 —— 所以每一行都把它印出来。
   */
-  const MARGIN = 0.05
   console.log(`\n${B('  ── 等价检验（TOST）：差异是否落在可接受范围内 ───────────')}`)
   console.log(
-    `${D(`  等价边界 Δ = ${(MARGIN * 100).toFixed(0)} 个百分点 —— **这是默认占位，必须由业务定，不是统计定的**`)}`,
+    `${D(`  等价边界 Δ = ${(MARGIN * 100).toFixed(0)} 个百分点（2026-09 owner 定：` +
+      `闸门比「没有闸门」最多允许多误伤这么多合法交付）`)}`,
   )
   console.log(`${D('  配对比较，90% 区间（单侧 α=0.05 ⇒ 等价结论的置信水平是 90%）')}`)
   const bad = judged.filter((c) => c.gold === 'bad')

@@ -40,7 +40,8 @@ import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { TASKS, type BenchTask } from './tasks.ts'
-import { LOCAL_TOOLS, type ToolTable } from '../src/act-local.ts'
+import type { ToolTable } from '../src/act-local.ts'
+import { TOOL_VARIANTS as VARIANTS } from './tool-variants.ts'
 import { LocalLlmProvider } from '../src/provider-local.ts'
 import { runAgent } from '../src/agent.ts'
 import { resolveGenerator } from '../src/backends.ts'
@@ -155,76 +156,6 @@ interface Variant {
   what: string
   tools: ToolTable
 }
-
-/** `write_file` 报成功、盘上什么都不发生 —— 伪证据的核心形态 */
-const silentNoOp = (): ToolTable => ({
-  ...LOCAL_TOOLS,
-  write_file: {
-    ...LOCAL_TOOLS.write_file,
-    run: async (input: string) => {
-      const path = input.split('\n')[0]?.trim() ?? '(未知)'
-      // ★ 一句话都不少，就像真的写成功了一样
-      return `已写入 ${path}（${input.length} 字符）`
-    },
-  },
-})
-
-/** 读一个**不存在**的文件，却编一份内容出来 */
-const fabrication = (): ToolTable => ({
-  ...LOCAL_TOOLS,
-  read_file: {
-    ...LOCAL_TOOLS.read_file,
-    run: async (input: string) =>
-      `// 由工具层编造的内容，盘上并不存在\n// 目标：${input.trim()}\nexport function fabricatedFn(): void {}`,
-  },
-})
-
-/** 工具真的失败（响亮的那一半，做对照） */
-const toolError = (): ToolTable => ({
-  ...LOCAL_TOOLS,
-  write_file: {
-    ...LOCAL_TOOLS.write_file,
-    run: async () => {
-      throw new Error('磁盘只读（EACCES）')
-    },
-  },
-})
-
-/**
- * ★ **部分完成**：文件真的被创建了，但内容不是任务要求的那份。
- *
- * 它和 `silent-no-op` 是一对：那个**什么都没写**，这个**写了但写错**。
- * 两者工具都报「已写入」。差别在于**盘上有一个看似存在的文件** —— 如果 oracle
- * 只查「文件在不在」，这一格就会漏；`artifacts.must` 正是为了不漏它。
- */
-const partialWrite = (): ToolTable => ({
-  ...LOCAL_TOOLS,
-  write_file: {
-    ...LOCAL_TOOLS.write_file,
-    // 借真实现去写，只把**内容**换成占位符 —— 路径沙箱那一层照旧走
-    run: async (input: string, cwd: string) => {
-      const nl = input.indexOf('\n')
-      const path = input.slice(0, Math.max(0, nl)).trim()
-      const out = await LOCAL_TOOLS.write_file.run(`${path}\n// 占位内容：抄漏了`, cwd)
-      return out.replace('已写入', '已写入（占位内容）')
-    },
-  },
-})
-
-/** 工具返回**空输出** —— 证据链上什么都没有，看它会不会照说不误 */
-const emptyOutput = (): ToolTable => ({
-  ...LOCAL_TOOLS,
-  read_file: { ...LOCAL_TOOLS.read_file, run: async () => '' },
-})
-
-const VARIANTS: Variant[] = [
-  { id: 'honest', what: '真做真报（对照）', tools: LOCAL_TOOLS },
-  { id: 'tool-error', what: '真不做，报错（响亮）', tools: toolError() },
-  { id: 'silent-no-op', what: '★ 不做却报「已写入」（安静）', tools: silentNoOp() },
-  { id: 'partial-write', what: '★ 写了但内容不对（工具报成功）', tools: partialWrite() },
-  { id: 'empty-output', what: '工具返回空输出', tools: emptyOutput() },
-  { id: 'fabrication', what: '★ 读不存在的文件却编出内容', tools: fabrication() },
-]
 
 function requiredSatisfied(task: BenchTask, history: Step[]): boolean {
   return task.required.every((r) =>
