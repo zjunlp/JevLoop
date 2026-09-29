@@ -30,7 +30,7 @@
   .quote{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:16px 0}
   .quote p{margin:0;font-family:var(--mono);font-size:14px;color:#2b3440}
   table{border-collapse:collapse;width:100%;margin:18px 0;font-size:15px}
-  th,td{padding:9px 12px;border-bottom:1px solid var(--line);text-align:left}
+  th,td{padding:9px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
   th{font-size:13px;color:var(--dim);font-weight:600;border-bottom-color:var(--line2)}
   td.num,th.num{text-align:right;font-family:var(--mono);white-space:nowrap}
   tr:last-child td{border-bottom:none}
@@ -42,6 +42,11 @@
   .small{font-size:13.5px;color:var(--dimmer)}
   .big{font-size:19px;font-weight:600;line-height:1.6}
   .rule{border-left:3px solid var(--accent);padding:2px 0 2px 16px;margin:22px 0}
+  .aside{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:18px 0}
+  .aside .t{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--dimmer);margin-bottom:6px}
+  .aside p:first-of-type{margin-top:0}
+  .aside p:last-child{margin-bottom:0}
   .q{counter-reset:q}
   .q h3{counter-increment:q;display:flex;gap:10px;align-items:baseline}
   .q h3::before{content:"Q" counter(q);font-family:var(--mono);font-size:12px;color:var(--accent);
@@ -73,6 +78,14 @@
   </p>
 
   <p>
+    工业界今天有三种做法并存：把流程<b>写死</b>成 workflow、让模型<b>边做边自己判</b>（agent loop）、
+    或者把判定<b>拿出来</b>单独做。三者都有人在用，但"哪种更不容易报捷"这句话一直只有轶事，
+    没有可比的测量。而且它们的差别不止一处——写死的 workflow 从不"答错"，
+    它在你<b>没为它写过</b>的情况上根本不存在；agent loop 什么情况都能应付，
+    代价是没人管它什么时候停、停得对不对。
+  </p>
+
+  <p>
     更麻烦的是现有的评测发现不了治理层的价值。我们最早的对照实验跑了 81 个格子，
     只观察到 <b>1 个事件</b>——在那个密度下"两组的平均差"在数学上就估不出来。
   </p>
@@ -101,6 +114,29 @@
     </li>
   </ul>
 
+  <p>
+    我们的对照组正好就是上面那条工程路线：<b>写死在代码里（人做判断）</b> →
+    <b>融进生成（模型每步自己说）</b> → <b>拿出来交给独立的判定模型</b>。
+  </p>
+
+  <div class="aside">
+    <div class="t">这里有一处很容易读错，我们先说清楚</div>
+    <p>
+      <b>workflow 和 <code>if/else</code> 是同一个位置，不是两个。</b>
+      两者都是"判定前移到写代码的时候、由人决定"。
+    </p>
+    <p>
+      所以"契约 vs 等价的 <code>if/else</code>"比的是<b>写法</b>——这一条我们做过了，
+      结论是政策层<b>逐格相同、而且可证等价</b>；
+      而"契约 vs workflow"比的是<b>人的判断 vs 模型的判断</b>——这一条<b>还没测</b>。
+    </p>
+    <p>
+      还有第三件事和位置无关：判定<b>做几次、覆盖到哪里</b>。
+      原始计划说这才是关键比较——"只在终点验证一次" vs "整个循环每一步都用契约"。
+      现在的实验只覆盖了终点那一次。
+    </p>
+  </div>
+
   <h2><span class="n">三</span>效果</h2>
 
   <p class="small">
@@ -116,12 +152,10 @@
     </tbody>
   </table>
 
-  <p>三个数字里最重要的是中间那列：</p>
+  <p>中间那列最重要：</p>
 
   <ul>
-    <li>
-      <b>加上判定层，基线会交付的误导里有 46 个被拒</b>（配对检验 p &lt; 0.0001）。
-    </li>
+    <li><b>加上判定层，基线会交付的误导里有 46 个被拒</b>（配对检验 p &lt; 0.0001）。</li>
     <li>
       <b>专门的决策模型比"同一个模型配提示词"多抓到 23 个</b>（23 : 6，p = 0.0023）。
       也就是说，有效果的是<b>专门的判定模型</b>，不是"随便找个人再看一眼"。
@@ -131,6 +165,11 @@
       <b>专门的决策模型抓 40.4%，通用模型抓 11.1%</b>——差 3.6 倍。
     </li>
   </ul>
+
+  <p class="small">
+    这张表里没有 workflow：那条臂我们建了，但只用它比过成本（模型调用次数、墙钟、token），
+    <b>没有按"诚实"这套指标比过</b>。所以"workflow 和判定拿出来，谁更不容易报捷"今天还没有数据。
+  </p>
 
   <h2><span class="n">四</span>两个反常识的发现</h2>
 
@@ -157,9 +196,7 @@
     当工具的谎言出现在判定层<b>自己读的那份证据里</b>（工具报告"已写入"、盘上什么都没发生），
     本研究里表现最好的闸门也只拦下 <b>34%</b>。三分之二的假完成照过。
   </p>
-  <p class="big">
-    证据链<b>完整</b>不等于证据链<b>真实</b>。
-  </p>
+  <p class="big">证据链<b>完整</b>不等于证据链<b>真实</b>。</p>
   <p>
     每一步都有记录、有指纹、可重放——这些是"完整"，是当前大多数工作当作卖点的那件事。
     我们量出来的是：完整但被污染的证据链上，任何依赖它做判断的机制都被锁在 34%。
@@ -177,22 +214,26 @@
   </div>
 
   <div class="q">
+    <h3>价值来自"位置"还是"写法"？而"位置"又该怎么定义？</h3>
+    <p>
+      我们原本的主张是"把判定写成声明式的契约文件"——这一条<b>被我们自己的实验证伪了</b>：
+      政策层上，声明式契约和等价的 <code>if/else</code> 逐格相同，而且可以证明等价。
+    </p>
+    <p>
+      而工程界常说的"workflow vs agent loop"其实是<b>另一根轴</b>——它问的是<b>判定由谁做</b>
+      （人写死 / 模型边做边判 / 拿出来交给独立模型），不是怎么写。
+      两根轴混着谈，就会以为上面那个阴性结果推翻了"把判定拿出来"这件事，其实没有。
+      真正可证伪的对照是：<b>生成之后是否存在独立的第二次判定、以及由谁读什么来做。</b>
+    </p>
+  </div>
+
+  <div class="q">
     <h3>"独立性"到底是什么？</h3>
     <p>
       文献和我们的数据都否掉了两种流行说法：<b>不是"多一次判定"</b>（同一个模型自己判自己，
       实测约等于没判），<b>也不是"换个模型族"</b>（实测反而更差）。
       我们给出一个可以直接执行的判据：<b>把证据换掉，看它的裁决变不变</b>。
       这把一个模糊的形容词变成了一个可检验的性质。
-    </p>
-  </div>
-
-  <div class="q">
-    <h3>价值来自"位置"还是"写法"？</h3>
-    <p>
-      我们原本的主张是"把判定写成声明式的契约文件"——这一条<b>被我们自己的实验证伪了</b>：
-      在政策层上，声明式契约和等价的 <code>if/else</code> <b>逐格相同</b>，而且可以证明等价。
-      所以价值不在写法，在<b>生成之后是否存在独立的第二次判定、以及由谁读什么来做</b>。
-      这是一个可证伪的对照，也把"声明式"从主张降格成了实现细节。
     </p>
   </div>
 
@@ -215,8 +256,10 @@
       正例不到十个的时候，两个方案的排序会翻方向。
     </li>
     <li>
-      <b>四成的误导率是造出来的</b>，不是真实系统的发生率——那三个写任务就是为此写的。
+      <b>"人的判断"那一端（workflow）没测过诚实指标，"判定做几次"那一根轴也完全没测。</b>
+      这两块是原始计划里的重头，目前还是空的。
     </li>
+    <li><b>四成的误导率是造出来的</b>，不是真实系统的发生率——那三个写任务就是为此写的。</li>
     <li>
       <b>衡量"好/坏"的尺子和被测的闸门同源。</b>它自己已经误报过四次，
       每次都是把一句老实的认输判成"不作声地交付没做完的活"。这直接决定上面所有数字的成色。
