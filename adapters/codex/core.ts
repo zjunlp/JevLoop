@@ -471,13 +471,32 @@ export async function runDecision(
   event: CodexHookEvent,
   opts: RunOptions,
 ): Promise<{ verdict: CodexVerdict; outcome: AdapterOutcome; json: unknown }> {
+  /*
+    ★★ 拒绝也必须**按这个 hook 的形状**出去。
+
+    第一版把几条早退路径的 JSON 写死成 `{ decision: 'block', … }` —— 那是
+    **Stop / PostToolUse** 的形状。于是 `PreToolUse` 缺一格时，codex 收到的不是
+    「拒绝这次工具调用」，而是一份它在这个事件上不认得的裁决 ⇒ **工具照跑**。
+    实测就是这么发现的：没有 transcript 的那次自检打印了 `{"decision":"block"}`。
+
+    所以拒绝统一走 `verdictToJson(event, …)` —— 形状由事件决定，不由调用点决定。
+  */
+  const refuse = (reason: string, loss: string, notes: string[] = []) => {
+    const verdict: CodexVerdict = { kind: 'deny', reason, loss }
+    return {
+      verdict,
+      outcome: { record: null, notes: notes.length ? notes : [reason] },
+      json: verdictToJson(event, verdict),
+    }
+  }
+
   const doc: DecisionDoc = parseDecisionDoc(opts.md)
   if (doc.problems.length > 0) {
-    return {
-      verdict: { kind: 'deny', reason: `DECISION.md 有 ${doc.problems.length} 处解析问题`, loss: 'contract malformed' },
-      outcome: { record: null, notes: doc.problems.map((p) => `L${p.line} ${p.message}`) },
-      json: { decision: 'block', reason: 'DECISION.md 解析失败' },
-    }
+    return refuse(
+      `DECISION.md 有 ${doc.problems.length} 处解析问题`,
+      'contract malformed',
+      doc.problems.map((p) => `L${p.line} ${p.message}`),
+    )
   }
 
   const blockId = blockIdFor(event)
@@ -491,62 +510,30 @@ export async function runDecision(
   }
 
   const block = doc.blocks.find((b) => b.id === blockId)
-  if (!block) {
-    return {
-      verdict: { kind: 'deny', reason: `契约里没有块 '${blockId}'`, loss: 'missing block' },
-      outcome: { record: null, notes: [`missing block '${blockId}'`] },
-      json: { decision: 'block', reason: `契约里没有块 '${blockId}'` },
-    }
-  }
+  if (!block) return refuse(`契约里没有块 '${blockId}'`, 'missing block')
 
   const questions = compileQuestions(block)
-  if (!questions) {
-    return {
-      verdict: { kind: 'deny', reason: `块 '${blockId}' 编不出问题集`, loss: 'no questions' },
-      outcome: { record: null, notes: [`block '${blockId}' compiled to no questions`] },
-      json: { decision: 'block', reason: `块 '${blockId}' 编不出问题集` },
-    }
-  }
+  if (!questions) return refuse(`块 '${blockId}' 编不出问题集`, 'no questions')
 
   const policy = compilePolicy(block)
   if (!policy?.ok) {
     // 编译不了的谓词会退化成永不命中的规则 ⇒ 一道不存在的闸门。**拒绝**，不猜
-    return {
-      verdict: {
-        kind: 'deny',
-        reason: `块 '${blockId}' 的策略编译失败：${policy?.problems.join('; ') ?? '没有策略'}`,
-        loss: 'policy did not compile',
-      },
-      outcome: { record: null, notes: policy?.problems ?? [] },
-      json: { decision: 'block', reason: `块 '${blockId}' 的策略编译失败` },
-    }
+    return refuse(
+      `块 '${blockId}' 的策略编译失败：${policy?.problems.join('; ') ?? '没有策略'}`,
+      'policy did not compile',
+      policy?.problems ?? [],
+    )
   }
 
   const { state, untrusted, unfilled, absent, badProjections } = compileHostFrame(block, opts.state)
   const notes: string[] = []
   if (badProjections.length > 0) {
     // 投影认不出 ⇒ **拒绝**。静默少一栏会让判定看到一份它不该看到的帧
-    return {
-      verdict: {
-        kind: 'deny',
-        reason: `适配器有认不出的投影：${badProjections.join(', ')}`,
-        loss: 'unknown projection',
-      },
-      outcome: { record: null, notes: [`unknown projection: ${badProjections.join(', ')}`] },
-      json: { decision: 'block', reason: '适配器有认不出的投影' },
-    }
+    return refuse(`适配器有认不出的投影：${badProjections.join(', ')}`, 'unknown projection')
   }
   if (unfilled.length > 0) {
     // 「宿主没有这一格」是适配器错误 —— 空串会改变策略判定，所以拒绝而不是继续
-    return {
-      verdict: {
-        kind: 'deny',
-        reason: `适配器缺 state 格：${unfilled.join(', ')}`,
-        loss: 'missing state cells',
-      },
-      outcome: { record: null, notes: [`missing state cells: ${unfilled.join(', ')}`] },
-      json: { decision: 'block', reason: '适配器缺 state 格' },
-    }
+    return refuse(`适配器缺 state 格：${unfilled.join(', ')}`, 'missing state cells')
   }
 
   const answers = await opts.backend({ state, questions })

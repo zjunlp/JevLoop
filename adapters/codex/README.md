@@ -107,13 +107,45 @@ not own** verify under **our** verifier. Run against this adapter it reports
 `3 verified · 0 mismatch · 0 unverifiable` — the digests exist only because the adapter
 computes them, since Codex will never write them.
 
+## Reading the transcript
+
+`task`, `history`, `lastResult` and `readFiles` come from the `transcript_path` Codex
+puts in every hook event — an adapter cannot ask Codex for them, because Codex does not
+keep them.
+
+Two things about that are worth knowing before you rely on it:
+
+- **It is an internal format.** Codex's own `RolloutLine` says readers "must use
+  codex_rollout's canonical parser", which lives inside Codex. So the reader here is
+  defensive by design: unknown line types are skipped silently (formats grow), malformed
+  lines are skipped **and counted, and reported**, and anything it cannot find stays
+  `undefined` so the decision is **refused** rather than made on a half-empty frame.
+  Format drift makes this adapter louder, not quieter.
+- **A transcript has no size bound**, so the reader takes two windows — 64 KB from the head
+  for the first user message, 256 KB from the tail for recent steps — and says so in its
+  notes when it does. Reading a whole session into memory to answer one question is the
+  unbounded operation this project keeps finding elsewhere.
+
+`files` and `readFiles` are **approximations**: they are recognised from the path
+arguments of read-style tool calls. A guessed `readFiles` would make `is_done`'s
+`already_read` column lie, and that column is the criterion for "were the two files the
+task named actually read" — so the reader recognises instead of guessing, and labels the
+result as approximate.
+
+## The self-check stub is deliberately conservative
+
+`JEVLOOP_STUB=1` is not a judgement, and it **cannot allow a destructive call**: it reports
+high risk for `shell` / `apply_patch` / `write_file` and friends, which routes through
+`ask_human` and therefore to `deny`. Reads pass. An earlier version answered "everything
+is fine" to every question, which meant the stub would happily allow `rm -rf /` — a stub
+left in the environment would have quietly removed the gate it was demonstrating.
+
 ## Roadmap, in the order that matters
 
-1. **Read the transcript** so `task` and `history` are real, with the declared bounds
-   applied by the adapter. Until then the frames are thin and most tool calls will be
-   refused for missing cells.
-2. **Persist `files` / `readFiles`.** Codex does not track them; the reference loop does.
-   This is the clearest example of a job that moves to the host when the host is foreign.
+1. ~~Read the transcript~~ — **done** (see above).
+2. **Persist `files` / `readFiles` across hook invocations** instead of re-deriving them
+   from the tail window. The current values are approximations and they get thinner the
+   further back the reads are.
 3. **Write the audit line** for `auto_audit`. The verdict already carries the flag; nothing
    consumes it yet.
 4. **A `PreToolUse`-driven `pick_input`.** Codex accepts `updatedInput` alongside

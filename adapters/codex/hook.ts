@@ -37,6 +37,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { checkCapabilities, runDecision, type Backend } from './core.ts'
+import { readTranscript } from './transcript.ts'
 import type { CodexHookEvent, HostState } from './types.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -52,53 +53,88 @@ async function readStdin(): Promise<string> {
 /**
  * 事件 → 宿主状态。
  *
- * ★ 这里体现了外部宿主的四项额外义务（见 `docs/ADAPTER-CODEX-SCOPE.md`）：
+ * ★ `task` 与 `history` 从 **transcript** 来（codex 只给一个路径，见
+ *   `transcript.ts`），而它**读不到时留 `undefined`**，不留空串 ——
+ *   空串会让帧看起来是完整的，而策略判定就基于一个空任务做出。
+ *   留 `undefined` 的后果是上层**拒绝**，那才是安全的那一半。
  *
- *    1. `task` / `history`：codex 不给你，只给一个 `transcript_path`。
- *       这里**不读那个文件** —— 读它就要处理无界输入和裁剪策略，而这个入口
- *       故意保持薄。缺的部分如实留空，`compileHostFrame` 会把它当 unfilled
- *       并**拒绝**，而不是编一个空串。
- *    2. `files` / `readFiles`：codex 不维护。真要用得持久化到自己的状态文件。
- *    3. `canWrite`：`permission_mode` 是最近的信号；这里只认最保守的那一种。
- *    4. 审计与指纹：由 `core.ts` 与下面的记录负责。
- *
- * ⚠️ 所以这个入口**今天只在一件事上是完整的**：把 codex 的裁决点接到契约上。
- *    要让它有完整的帧，需要补 transcript 读取（并裁剪）—— 见 README 的 Roadmap。
- *    **未完成的部分会变成 deny，不会变成放行。**
+ * ★ `files` / `readFiles` 由适配器自己从 transcript 里认（**近似值**，
+ *   已在那边的 notes 里声明）。这是「宿主不维护的状态」落到适配器头上的那一项。
  */
-function stateOf(event: CodexHookEvent): HostState {
+function stateOf(event: CodexHookEvent): { state: HostState; notes: string[] } {
   const toolInput = event.tool_input
+  const notes: string[] = []
+  let task: string | undefined
+  let historyText: string | undefined
+  let lastResult: string | undefined
+  let files: string[] = []
+  let readFiles: string[] = []
+  let earlier = ''
+
+  const path = event.transcript_path
+  if (typeof path === 'string' && path) {
+    const t = readTranscript(path)
+    task = t.task
+    historyText = t.historyText
+    lastResult = t.lastResult
+    files = t.files
+    readFiles = t.readFiles
+    notes.push(...t.notes)
+  } else {
+    // 没有 transcript 路径 ⇒ task 确定不了 ⇒ 上层拒绝
+    notes.push('hook 事件里没有 transcript_path ⇒ task/history 无法确定（会拒绝，不是放行）')
+  }
+
   return {
-    // 任务与历史来自 transcript，这个入口暂不读它（见上）
-    task: '',
-    cwd: event.cwd ?? process.cwd(),
-    tool: event.tool_name,
-    input: typeof toolInput === 'string' ? toolInput : JSON.stringify(toolInput ?? ''),
-    historyText: undefined,
-    lastResult: undefined,
-    files: [],
-    readFiles: [],
-    // 只在明确的只读模式下为 true —— 保守的一边
-    canWrite: undefined,
-    earlier: '',
+    state: {
+      task: task as string,
+      cwd: event.cwd ?? process.cwd(),
+      tool: event.tool_name,
+      input: typeof toolInput === 'string' ? toolInput : JSON.stringify(toolInput ?? ''),
+      historyText,
+      lastResult,
+      files,
+      readFiles,
+      // 只在明确的只读模式下为 true —— 保守的一边（`permission_mode` 是最近的信号）
+      canWrite: undefined,
+      earlier,
+    },
+    notes,
   }
 }
 
 /** 按环境变量选后端。**没配就抛** —— 调用方会把它变成 deny */
 function backendFromEnv(): Backend {
   if (process.env.JEVLOOP_STUB === '1') {
-    // 确定性桩：risk=0 / done=0.95 ⇒ 放行。**只用于自检**，不要拿它当判定
+    /*
+      ★ 自检用的确定性桩。它**不是判定**，而且它**故意保守**：
+
+      第一版对一切都答「没问题」，于是它给 `shell(rm -rf /)` 判了 `risk=0 → auto`
+      —— **放行**。那种桩如果被人留在环境变量里，就等于把闸门拆了还看起来在工作。
+
+      所以这个桩只对「看起来只读」的工具放行，其余一律报高危 ⇒ 走到 `ask_human`
+      ⇒ 本适配器 fail closed 成 deny。这样自检同时演示了放行与拒绝两条路，
+      而且**它永远不能放行一个有破坏性的调用**。
+
+      要真正的判定，配 `JEVLOOP_JEV_URL`。
+    */
+    const DESTRUCTIVE = new Set(['shell', 'bash', 'exec', 'delete_file', 'rm', 'apply_patch', 'write_file'])
+    process.stderr.write('JevLoop codex adapter: ⚠ JEVLOOP_STUB=1 —— 这是自检桩，不是判定。破坏性工具一律报高危\n')
     return async (req) => {
+      const tool = String((req.state as { tool?: unknown }).tool ?? '')
+      const risky = DESTRUCTIVE.has(tool)
       const answers: Record<string, unknown> = {}
       for (const [id, q] of Object.entries(req.questions)) {
         const t = (q as { type: string }).type
         if (t === 'noul') {
-          // `needs_auth` / `unsupported` 答「否」，其余答「是」⇒ 一切正常、放行
-          const no = ['needs_auth', 'unsupported'].includes(id)
+          // `needs_auth` 跟着风险走：破坏性的答「需要授权」
+          const no = id === 'needs_auth' ? !risky : ['unsupported'].includes(id)
           answers[id] = { type: 'noul', noul: no ? 0.05 : 0.95 }
+        } else if (t === 'score') {
+          answers[id] = { type: 'score', score: risky ? 3 : 0, legend: {}, probabilities: {}, confidence: 0.9 }
+        } else {
+          answers[id] = { type: 'choice', choice: '', probabilities: {}, confidence: 0.9 }
         }
-        else if (t === 'score') answers[id] = { type: 'score', score: 0, legend: {}, probabilities: {}, confidence: 0.9 }
-        else answers[id] = { type: 'choice', choice: '', probabilities: {}, confidence: 0.9 }
       }
       return answers as never
     }
@@ -169,7 +205,9 @@ async function main(): Promise<void> {
     return
   }
 
-  const result = await runDecision(event, { md, state: stateOf(event), backend })
+  const { state, notes: stateNotes } = stateOf(event)
+  const result = await runDecision(event, { md, state, backend })
+  for (const n of stateNotes) process.stderr.write(`  · ${n}\n`)
 
   for (const n of result.outcome.notes) process.stderr.write(`  · ${n}\n`)
 

@@ -11,9 +11,10 @@
 > so you can check it.
 >
 > **The adapter itself now exists:** [`adapters/codex/`](../adapters/codex/README.md).
-> It wires the three reachable hooks, and its records verify under our own verifier
-> (`npm run replay` reports `3 verified · 0 mismatch · 0 unverifiable`). The frames are
-> thin until it reads the transcript — see that README's roadmap.
+> It wires the three reachable hooks, reads Codex's transcript for `task` / `history` /
+> `readFiles`, and its records verify under our own verifier (`npm run replay` reports
+> `verified`, no mismatches). What it still approximates — `files` / `readFiles` are
+> recognised from tool arguments rather than tracked — is stated in that README.
 
 ## The seam: Codex hooks, not a fork
 
