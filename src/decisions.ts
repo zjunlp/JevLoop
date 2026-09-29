@@ -60,7 +60,7 @@ import type {
 import type { PolicyRule } from './vocab-decision.ts'
 import { clip } from './budget.ts'
 import { isToolName } from './act.ts'
-import { LOCAL_TOOLS } from './act-local.ts'
+import { LOCAL_TOOLS, type ToolTable } from './act-local.ts'
 import { parseDecisionDoc, type DecisionDoc, type DocBlock } from './decisiondoc.ts'
 import { hasThreshold, predicateQuestion } from './decision-compile.ts'
 import { parseGates, splitGates, type GateOverrides } from './gates.ts'
@@ -174,22 +174,42 @@ const PROJECTION_IMPL: Record<ProjectionName, (ctx: AgentCtx) => unknown> = {
    * 工具的静态风险基线。认不出的工具名**不放这一栏** ——
    * 0 分的意思是「只读」，不能用它冒充「未知」（`absent` 与 `unfilled` 必须分开）。
    */
-  localToolRisk: (ctx) => {
+  localToolRisk: localToolRiskOf(LOCAL_TOOLS),
+}
+
+/** 「这一调多危险」的基线 —— 从**传进来的那张工具表**取，认不出就不给数 */
+function localToolRiskOf(tools: ToolTable): (ctx: AgentCtx) => number | undefined {
+  return (ctx) => {
     const t = ctx.lastTool
-    return t && isToolName(LOCAL_TOOLS, t) ? LOCAL_TOOLS[t].baseRisk : undefined
-  },
+    return t && isToolName(tools, t) ? tools[t].baseRisk : undefined
+  }
 }
 
 /** 实现 + 声明里的 `from`，合成 `frameSpecFromBlock` 要的那张表 */
-const FRAME_PROJECTIONS: Record<ProjectionName, { from: keyof AgentCtx; fn: (ctx: AgentCtx) => unknown }> =
-  Object.fromEntries(
+/**
+ * 帧投影表 —— **它是工具表的函数**，因为其中一个投影要看工具表。
+ *
+ * ★ `localToolRisk` 是唯一一个：风险的静态基线由**工具自己**声明
+ *   （`baseRisk`），所以「这一调多危险」这件事天然依赖「用的是哪张工具表」。
+ *   把工具表注入进来之后，换一个提供者（沙箱、远程 FS、测试桩）风险基线
+ *   跟着换 —— 而不是继续读本地实现的那一份。
+ *
+ * 默认参数让 `LOCAL_TOOLS` 成为**缺省**而不是唯一可能：不传代码路径一行不改，
+ * 传了就整套跟着走。
+ */
+function frameProjections(
+  tools: ToolTable,
+): Record<ProjectionName, { from: keyof AgentCtx; fn: (ctx: AgentCtx) => unknown }> {
+  const impl = { ...PROJECTION_IMPL, localToolRisk: localToolRiskOf(tools) }
+  return Object.fromEntries(
     // `from` 在声明里是 `string`（那一层够不到 `keyof AgentCtx`，见那个文件头的说明）；
     // 每个名字都真的是 ctx 的格名，由 `tests/frame-projections.test.ts` 断言
     PROJECTION_NAMES.map((name) => [
       name,
-      { from: PROJECTIONS[name].from as keyof AgentCtx, fn: PROJECTION_IMPL[name] },
+      { from: PROJECTIONS[name].from as keyof AgentCtx, fn: impl[name] },
     ]),
   ) as Record<ProjectionName, { from: keyof AgentCtx; fn: (ctx: AgentCtx) => unknown }>
+}
 
 /**
  * 把**一个块**的 `frame:` 声明编成 `FrameSpec`。没写 `frame:` 就返回 `null`，
@@ -202,7 +222,11 @@ const FRAME_PROJECTIONS: Record<ProjectionName, { from: keyof AgentCtx; fn: (ctx
  *   `AgentCtx` 的格又没给投影。不抛的话，那一栏会永远取到 `undefined` ——
  *   判定静默地少看一栏，而「少看一栏」正是这份文件要防的那件事。
  */
-export function frameSpecFromBlock(b: DocBlock, node: string): FrameSpec | null {
+export function frameSpecFromBlock(
+  b: DocBlock,
+  node: string,
+  tools: ToolTable = LOCAL_TOOLS,
+): FrameSpec | null {
   const f = b.frame
   if (!f) return null
   const where = `DECISION.md 的 '${b.id}'`
@@ -210,11 +234,11 @@ export function frameSpecFromBlock(b: DocBlock, node: string): FrameSpec | null 
     node,
     fields: f.fields.map((x) => {
       // 文件是手写的 ⇒ 投影名是不可信输入，查表前先过 `isProjectionName`
-      const p = x.project && isProjectionName(x.project) ? FRAME_PROJECTIONS[x.project] : undefined
+      const p = x.project && isProjectionName(x.project) ? frameProjections(tools)[x.project] : undefined
       if (x.project && !p) {
         throw new Error(
           `${where} 里，frame 投影 '${x.project}' 不在注册表里 —— ` +
-            `可选：${Object.keys(FRAME_PROJECTIONS).join(' / ')}`,
+            `可选：${Object.keys(frameProjections(tools)).join(' / ')}`,
         )
       }
       // 不写投影 ⇒ 格名就是格（`task` 读 `task`）。写错要当场报，不能静默当成原样取
@@ -247,15 +271,17 @@ export function frameSpecFromBlock(b: DocBlock, node: string): FrameSpec | null 
 }
 
 /** 磁盘上那份 `DECISION.md` 里某个块的帧声明。消费方（`framed`）走这条 */
-function frameFromDoc(blockId: string, node: string): FrameSpec | null {
-  return frameSpecFromBlock(block(blockId), node)
+function frameFromDoc(blockId: string, node: string, tools: ToolTable = LOCAL_TOOLS): FrameSpec | null {
+  // ★ 工具表必须**传下去** —— 漏了它，注入的提供者会在这一层被悄悄丢掉，
+  //   而表现是「什么都没变」（第一版实测就是这样：`base_risk` 死活跟着本地表走）
+  return frameSpecFromBlock(block(blockId), node, tools)
 }
 
 /** 把声明编成 `state` —— 节点不再手拼 dict，帧的形状由声明决定 */
-function framed(spec: FrameSpec, blockId: string) {
+function framed(spec: FrameSpec, blockId: string, tools: ToolTable = LOCAL_TOOLS) {
   // ★ **文件里写了 `frame:` 就以文件为准**，否则回退到代码里那份。
   //   于是迁移是逐节点可做的，而且「文件赢了」这件事有单测钉住。
-  const use = frameFromDoc(blockId, spec.node) ?? spec
+  const use = frameFromDoc(blockId, spec.node, tools) ?? spec
   const compile = (ctx: AgentCtx) => compileFrame(use, ctx)
   return {
     state: (ctx: AgentCtx) => compile(ctx).state,
@@ -417,7 +443,8 @@ const FRAME_PICK_INPUT: FrameSpec = {
 }
 
 /** 4 · 这次调用多危险 */
-const FRAME_GRADE_RISK: FrameSpec = {
+function frameGradeRisk(tools: ToolTable): FrameSpec {
+  return {
   node: 'loop.gradeRisk',
   fields: [
     {
@@ -431,10 +458,7 @@ const FRAME_GRADE_RISK: FrameSpec = {
       key: 'base_risk',
       from: 'lastTool',
       chars: 12,
-      project: (ctx) => {
-        const t = ctx.lastTool
-        return t && isToolName(LOCAL_TOOLS, t) ? LOCAL_TOOLS[t].baseRisk : undefined
-      },
+      project: localToolRiskOf(tools),
       why:
         '工具的静态风险基线（`act-local.ts` 的 `baseRisk`）。' +
         '★ 认不出的工具名**不放这一栏** —— 0 分的意思是「只读」，不能用它冒充「未知」。' +
@@ -461,7 +485,8 @@ const FRAME_GRADE_RISK: FrameSpec = {
       '★ 上一步的**输出内容**绝不能进这一栏：它是不可信文本，而这一栏的输出会驱动授权闸门 —— 让它读工具输出，等于让工具输出有机会推动风险分',
     ],
     ['draft', '还没到生成那一步'],
-  ],
+    ],
+  }
 }
 
 /** 5 · 这一步成功了吗 */
@@ -628,7 +653,7 @@ export const FRAME_SPECS: Readonly<Record<string, FrameSpec>> = {
   'loop.needsTool': FRAME_NEEDS_TOOL,
   'loop.pickTool': FRAME_PICK_TOOL,
   'loop.pickInput': FRAME_PICK_INPUT,
-  'loop.gradeRisk': FRAME_GRADE_RISK,
+  'loop.gradeRisk': frameGradeRisk(LOCAL_TOOLS),
   'loop.stepOk': FRAME_STEP_OK,
   'loop.isDone': FRAME_IS_DONE,
   'loop.canDeliver': FRAME_CAN_DELIVER,
@@ -1075,7 +1100,7 @@ export const gradeRisk = defineDecision({
   id: 'loop.gradeRisk',
   describe: '给这次工具调用打风险分，驱动分级审批',
 
-  ...framed(FRAME_GRADE_RISK, 'grade_risk'),
+  ...framed(frameGradeRisk(LOCAL_TOOLS), 'grade_risk'),
 
   // 问题与策略都来自 DECISION.md 的 grade_risk 块。
   // 那条硬闸门（risk 够高就必须授权）现在写在文件里 —— 见那个块的 policy。
@@ -1188,7 +1213,31 @@ export interface DecisionSet {
  *
  * @throws 任何一种写错法
  */
-export function buildDecisions(gates: GateOverrides = {}): DecisionSet {
+export function buildDecisions(gates: GateOverrides = {}, tools: ToolTable = LOCAL_TOOLS): DecisionSet {
+  /*
+    ★ **本套决策的帧，用传进来的那张工具表重编一遍。**
+
+    只有 `grade_risk` 的 `base_risk` 真的依赖工具表（风险基线由**工具自己**声明），
+    而它恰恰是硬闸门的输入 —— 换一个提供者时风险基线必须跟着换，否则闸门会拿
+    **本地实现**的档位去判一个**别的后端**的调用。
+
+    ★ 这里对**全部七**个节点重编，而不是只特判 `grade_risk`：特判会在下次有人
+      加一个依赖工具表的投影时**静默漏掉**，而漏掉的后果就是上面那句话。
+      重编是确定性的，默认路径下结果与模块级单例逐字相同（有测试钉着）。
+  */
+  const specOfNode: Record<string, FrameSpec> = {
+    'loop.needsTool': FRAME_NEEDS_TOOL,
+    'loop.pickTool': FRAME_PICK_TOOL,
+    'loop.pickInput': FRAME_PICK_INPUT,
+    'loop.gradeRisk': frameGradeRisk(tools),
+    'loop.stepOk': FRAME_STEP_OK,
+    'loop.isDone': FRAME_IS_DONE,
+    'loop.canDeliver': FRAME_CAN_DELIVER,
+  }
+  const reframed = new Map<string, ReturnType<typeof framed>>(
+    SPEC_BLOCKS.map(([blockId, specId]) => [specId, framed(specOfNode[specId]!, blockId, tools)]),
+  )
+
   const { byBlock, unused } = splitGates(gates)
   const problems: string[] = []
   /**
@@ -1275,7 +1324,8 @@ export function buildDecisions(gates: GateOverrides = {}): DecisionSet {
 
   const withPolicy = <T extends { id: string }>(spec: T): T => {
     const p = patched.get(spec.id)
-    return p ? ({ ...spec, policy: p } as T) : spec
+    // ★ 帧来自**重编**那一份（工具表跟着走）；策略来自覆盖那一份
+    return { ...spec, ...(reframed.get(spec.id) ?? {}), ...(p ? { policy: p } : {}) } as T
   }
 
   return {

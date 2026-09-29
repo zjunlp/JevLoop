@@ -42,7 +42,7 @@ import { buildDecisions, GENERATOR_INSTRUCTION, type DecisionSet } from './decis
 import type { GateOverrides } from './gates.ts'
 import { hasFileOptions, type AgentCtx, type StepRecord } from './frame.ts'
 import { callTool, isToolName } from './act.ts'
-import { LOCAL_TOOLS, type ToolName } from './act-local.ts'
+import { LOCAL_TOOLS, type ToolName, type ToolTable } from './act-local.ts'
 import { assertNever } from './util.ts'
 import {
   foldEvidence,
@@ -104,6 +104,23 @@ export interface AgentOptions {
    *   时**默认拒绝**，于是 loop 停在授权那一步，而不是把文件删掉。
    */
   allowDelete?: boolean
+  /**
+   * **这一次运行用哪张工具表。** 默认 `LOCAL_TOOLS`（本地文件系统）。
+   *
+   * 缝的另一半（TODO §1）：工具的实现可以整体换掉 —— 沙箱、远程 FS、一个
+   * 纯字符串的测试桩 —— 而内核一行都不用改。
+   *
+   * ★ **名字不能换，只有实现能换。** 内核只对这六个名字有输入解析规则
+   *   （`resolveInput` 的穷尽 switch）；换一个名字，它会**响亮地拒绝**
+   *   （`assertNever` 抛「未处理的联合成员」），而不是猜一个输入 ——
+   *   猜出来的输入会被真的执行。类型 `ToolTable` 要求六个名字齐全，
+   *   所以「注入一半」是编译错误。
+   *
+   * ★ 它不只决定谁来执行：`grade_risk` 的 `base_risk` 是**工具自己声明的**，
+   *   所以风险闸门的输入也来自这张表。两处用不同的表，闸门就会拿一张表的风险档
+   *   去判另一张表的调用 —— 这是把 `tools` 一路传到 `buildDecisions` 的原因。
+   */
+  tools?: ToolTable
   /**
    * 一次运行的**硬上限**（TODO §9）。三个都可以单独给，越线就**停机**。
    *
@@ -251,7 +268,17 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
    * （问题 + 策略），构建很便宜，但**一次运行必须是同一份**：中途换门限会
    * 让日志里的「为什么这么判」前后对不上。
    */
-  const specs = buildDecisions(opts.gates ?? {})
+  /*
+    ★ **这一次运行用哪张工具表。** 和 `specs` 并排、也建一次，理由一样：
+      一次运行必须是同一份，而且它不只决定「谁来执行」——`base_risk` 是工具自己
+      声明的，所以**风险闸门的输入也来自这里**。两处用不同的表，闸门就会拿一张
+      表的风险档去判另一张表的调用。
+
+      默认 `LOCAL_TOOLS`：不传的调用方行为一字不变。传了就把整个内核指过去 ——
+      「换一个提供者」不再需要改这个文件。
+  */
+  const tools: ToolTable = opts.tools ?? LOCAL_TOOLS
+  const specs = buildDecisions(opts.gates ?? {}, tools)
 
   /**
    * 把**步号**注进增量再交出去。
@@ -507,7 +534,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     // 模型返回的工具名是**不可信输入**，调用前必须过这一道（docs/CODE-STYLE.md §6 允许的真实边界）。
     // 不过会怎样：`callTool` 返回「错误：没有这个工具」，而这个字符串会被当成
     // 普通工具输出喂给 `stepOk` —— 判定模型分不清「工具跑出来的结果」和「工具不存在」。
-    if (!isToolName(LOCAL_TOOLS, picked)) {
+    if (!isToolName(tools, picked)) {
       halt = 'unknown_tool'
       trace(`  model returned a tool that does not exist: '${picked}' → stopping (never fed to the next decision as a result)`)
       break
@@ -571,7 +598,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     // ── 唯一有真实副作用的地方 ──
     emit({ type: 'tool:call', step, tool, input })
     const toolT0 = Date.now()
-    const result = await callTool(LOCAL_TOOLS, tool, input, ctx.cwd)
+    const result = await callTool(tools, tool, input, ctx.cwd)
     emit({ type: 'tool:result', step, tool, output: result, ms: Date.now() - toolT0 })
     pending.result = result
     ctx.lastResult = result

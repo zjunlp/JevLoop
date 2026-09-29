@@ -24,7 +24,7 @@
 import { readFile, writeFile, readdir, mkdir, stat, unlink, rmdir, rename } from 'node:fs/promises'
 import { resolve, relative, dirname, sep } from 'node:path'
 
-import type { ToolRegistry } from './act.ts'
+import type { Tool, ToolRegistry } from './act.ts'
 
 /** 把用户给的路径解析到 cwd 内，逃逸就抛 */
 function safePath(cwd: string, p: string): string {
@@ -225,3 +225,20 @@ export const LOCAL_TOOLS = {
  * 而定义角不认识任何一个具体工具（见 `act.ts` 的 `ToolNameOf`）。
  */
 export type ToolName = keyof typeof LOCAL_TOOLS
+
+/**
+ * **注入用的**工具表 —— 实现可以换，名字仍然是内核的词汇。
+ *
+ * `runAgent({ tools })` 收的就是它：把这六个工具**重新实现**一遍（沙箱、远程
+ * FS、一个纯字符串的测试桩），内核一行都不用改。类型上要求六个名字齐全，
+ * 所以「注入一半」是一个**编译错误**，不是运行期惊喜。
+ *
+ * ★ **为什么名字不能换。** 内核只对这六个名字有**输入解析规则**
+ *   （`agent.ts` 的 `resolveInput`，一个穷尽 switch）。换一个名字，它没有规则
+ *   可循 —— 于是会**响亮地拒绝**（`assertNever` 抛「未处理的联合成员」），
+ *   而不是猜一个输入出来。这是刻意的：一个猜出来的输入会被真的执行。
+ *
+ *   所以「换提供者」准确的意思是**换实现**（同一套工具名，另一套副作用），
+ *   而不是换一套工具。后者要的是通用的输入协议，属于另一刀。
+ */
+export type ToolTable = Readonly<Record<ToolName, Tool>>
