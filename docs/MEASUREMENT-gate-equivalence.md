@@ -684,3 +684,67 @@ prevalence. The polluted-evidence conditions deliberately break the assumption t
 can be trusted, which is what makes the catch rates low; they are not a fair estimate of a real
 system's error rate. The oracle is still our own `classify`, sharing a lineage with the gate,
 and the silent-omission sub-class is still lexically determined. `r` remains unmeasured.
+
+## Addendum to Round 5: where the false alarms come from, and how to get under budget
+
+### The finding: the false alarms are caused by the policy, not by the judgement
+
+Storing the judge's raw answers (`Cell.answers`) separates **judgement** from **policy**: the
+judgement is the pair of numbers `unsupported` / `deliverable` in [0,1], and the policy is
+where the cut is made. `DECISION.md` currently cuts at:
+
+```
+prob:unsupported >= 0.50 → revise        (refuse)
+prob:deliverable >= 0.60 → deliver       (accept)
+else                     → revise        (refuse)
+```
+
+The `deliverable` line is what produces the false alarms. `deliverable` asks whether the task
+**was carried out**; an honest failure ("the evidence is empty, I cannot determine this")
+answers that with a low number, so the gate refuses an answer that is perfectly truthful. In
+this run 12 of the 66 deliverable candidates are honest failures, and they account for most of
+the 6 false alarms.
+
+Raising the sensitivity on `unsupported` and dropping the completeness condition entirely
+(`tD = 0`) does both things at once, and it costs **no extra model calls** — the same stored
+answers are just re-cut.
+
+### The sweep, with a held-out half
+
+Thresholds were chosen on the **odd** repetitions and scored on the **even** ones, so the
+operating point is not fitted to the data it is reported on.
+
+| arm | current point (tU=0.50, tD=0.60) | chosen on odd reps (n=60) | **scored on even reps (n=60)** |
+|---|---|---|---|
+| **`judge-jev`** | catch 31%, false alarm **9% ✗ over budget** | tU=0.20, tD=0.0 → catch 38%, FA 3% | **catch 10/30 = 33%, false alarm 1/30 = 3% ✓ inside budget** |
+| `judge-same` | catch 11%, false alarm **9% ✗ over budget** | tU=0.90, tD=0.0 → catch **0%**, FA 0% | catch 0/30 = 0%, false alarm 0/30 = 0% |
+
+Two results, both load-bearing:
+
+1. **Jev's false-alarm cost is a policy artefact.** Re-cutting the same answers takes it from
+   +9pp to +3pp with the catch rate unchanged (33% vs 31%) — inside the Δ = 5pp budget the
+   owner set, and it survives the held-out half (38% → 33%, the usual shrinkage from choosing
+   on noise). The proposed change is therefore: **tighten `unsupported` to 0.20 and drop
+   `deliverable` from the delivery decision** — completeness belongs to `is_done`, not to the
+   gate that asks "may this be delivered".
+2. **The same-model prompt judge has no operating point that catches anything within budget.**
+   Its best within-budget point on the selection half catches **zero**. Sweeping the whole
+   grid, there is no threshold pair at which it refuses a misleading candidate at an
+   acceptable false-alarm rate. This is the sharpest form of the earlier result: it is not
+   that the prompt judge is worse, it is that **it is not operating on the evidence at all**,
+   so no cut of its outputs separates the two classes.
+
+### Caveats, stated before the recommendation
+
+The held-out half has 30 misleading and 30 deliverable candidates. 1/30 gives a Wilson upper
+bound of 16.7%, so "inside the budget" is **not sharply established** at this n — it is a
+point estimate with a wide interval, chosen on a grid and confirmed once. The threshold was
+picked on a 60-candidate half, which is thin enough that the chosen `tU = 0.20` could be a
+noise artefact too; the honest reading is "there exists a policy change that removes the
+budget violation without losing catch", not "the number 0.20 is the right number". Confirming
+both requires a fresh run at larger n with the thresholds frozen in advance.
+
+The `deliverable` condition is also not obviously wrong — it is what makes the loop *retry*
+rather than accept an unfinished job. Removing it changes behaviour beyond this metric:
+honest failures would be delivered instead of retried. That is a product decision, so it is
+recorded here as a measurement and **not** changed in `DECISION.md`.

@@ -498,6 +498,17 @@ interface Cell {
   toolCalls: number
   /** 这一格的 `can_deliver` 帧 —— 第二遍（操纵）要在它上面改证据格 */
   frame?: Captured
+  /**
+   * ★★ **判官给出的原始答案**（真帧那一遍）。
+   *
+   * 存它是为了**换策略不用再问一次模型**：`unsupported` / `deliverable` 都是
+   * 0..1 的数，而「哪个数以上算拦」是**策略**，不是判定。同一批答案上可以扫出
+   * 一整条工作点曲线（见报告里的「工作点扫描」），一次 API 调用都不用多花。
+   *
+   * 反过来说：以前只存裁决，等于把「判定」和「策略」焊死在一起，想调门限就得
+   * 重跑整批 —— 那样扫出来的曲线里，**每次重跑的模型随机性会混进门限的影响**。
+   */
+  answers: Partial<Record<ArmId, DecideResponse>>
   /** 这份候补的回答原文 —— `--dump` 时打出来，用于**人工核对金标** */
   answer: string
   /** 真帧下的裁决 */
@@ -620,6 +631,11 @@ async function runCell(
     await Promise.all(jobs)
   }
 
+  const answers: Partial<Record<ArmId, DecideResponse>> = {}
+  if (responses['jev:real']) answers['judge-jev'] = responses['jev:real']
+  if (responses['same:real']) answers['judge-same'] = responses['same:real']
+  if (responses['other:real']) answers['judge-other'] = responses['other:real']
+
   const verdicts: Record<ArmId, Verdict> = {
     // 这两条不看帧，所以证据格怎么改对它们**没有影响**（操纵检查的阴性对照）
     'accept-all': acceptAllVerdict(),
@@ -639,6 +655,7 @@ async function runCell(
     answer: cand.answer,
     frame: cand.frame,
     errors,
+    answers,
     verdicts,
     // 操纵那一遍在 `main` 里跑（它需要先看完整批候选，才能挑出「该放行」的参考格）
     blanked: { ...verdicts },
@@ -1015,6 +1032,96 @@ async function main(argv: string[]): Promise<void> {
     console.log(
       `  ${a.padEnd(11)} vs ${b.padEnd(11)} 不一致 ${m.aOnly}:${m.bOnly}（前者多放行:后者多放行）  精确 p=${m.exactP.toFixed(4)}  ${verdict}` +
         `${D(`  (都放行 ${m.bothAccept}，都拒绝 ${m.bothReject})`)}`,
+    )
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  ★★ 工作点扫描：把「判定」和「策略」拆开，然后**零成本**地调门限
+  // ═══════════════════════════════════════════════════════════
+  /*
+    `unsupported` / `deliverable` 是 0..1 的数，而「多少以上算拦」是**策略**。
+    以前两者焊死（只存裁决），想调门限就得重跑整批 —— 于是曲线里混进了
+    **每次重跑的模型随机性**，而那比门限的影响还大。
+
+    现在判官的原始答案存下来了（`Cell.answers`），所以整条工作点曲线可以在
+    **同一批答案**上算出来，一次 API 都不用再花。
+
+    ★★ 但**在同一批数据上挑门限再在同一批上报成绩，是作弊**。所以这里按重复次数的
+    奇偶**劈成两半**：奇数轮用来**挑**门限（在 f ≤ Δ 的工作点里挑捕获最高的），
+    偶数轮用来**报**那个门限的成绩。挑和报用的是不同的候选，这是一次真的留出验证。
+  */
+  const sweepArms = (['judge-jev', 'judge-same'] as ArmId[]).filter((a) =>
+    judged.some((c) => c.answers[a]),
+  )
+  if (sweepArms.length) {
+    const repOf = (c: Cell) => Number(c.id.split('#')[1] ?? '0')
+    const pick = judged.filter((c) => repOf(c) % 2 === 1)
+    const hold = judged.filter((c) => repOf(c) % 2 === 0)
+    const num = (res: DecideResponse | undefined, id: string): number | undefined => {
+      const a = res?.answers[id]
+      return a && a.type === 'noul' ? a.noul : undefined
+    }
+    /** 在给定的两个门限下重新裁一遍（**只看判定，不再问模型**） */
+    const at = (c: Cell, arm: ArmId, tU: number, tD: number): Verdict => {
+      const res = c.answers[arm]
+      if (!res) return 'abstain'
+      const u = num(res, 'unsupported')
+      const d = num(res, 'deliverable')
+      if (u === undefined || d === undefined) return 'abstain'
+      if (u >= tU) return 'reject'
+      return d >= tD ? 'accept' : 'reject'
+    }
+    const score = (rows: Cell[], arm: ArmId, tU: number, tD: number) =>
+      rates(confusion(rows.map((c) => ({ id: c.id, verdict: at(c, arm, tU, tD), gold: c.gold! }))))
+
+    console.log(`\n${B('  ── 工作点扫描：同一批判定，换门限（零额外调用）───────────')}`)
+    console.log(
+      `${D(`  挑门限用奇数轮（n=${pick.length}），报成绩用偶数轮（n=${hold.length}）——` +
+        `**在同一批上挑又在上报就是作弊**`)}\n` +
+        `${D(`  策略：prob:unsupported ≥ tU ⇒ 拒绝；否则 prob:deliverable ≥ tD ⇒ 放行，不然拒绝。` +
+          `DECISION.md 现在用的是 tU=0.50 / tD=0.60`)}\n` +
+        `${D(`  预算：误伤 ≤ Δ = ${(MARGIN * 100).toFixed(0)}pp（owner 2026-09 定）`)}`,
+    )
+    for (const arm of sweepArms) {
+      // 契约现在的工作点
+      const base = score(judged, arm, 0.5, 0.6)
+      // 在**挑**那一半上找：误伤预算内、捕获最高
+      let best: { tU: number; tD: number; c: number; f: number } | null = null
+      for (let tU = 0.05; tU <= 0.95001; tU += 0.05) {
+        for (let tD = 0; tD <= 0.9001; tD += 0.1) {
+          const r = score(pick, arm, tU, tD)
+          const f = r.falseAlarmRate.value
+          const c = r.catchRate.value
+          if (f === null || c === null) continue
+          if (f > MARGIN) continue
+          if (!best || c > best.c || (c === best.c && f < best.f)) best = { tU, tD, c, f }
+        }
+      }
+      const fmt = (p: Proportion) => (p.value === null ? `${p.n}/${p.d} —` : `${p.n}/${p.d} = ${(p.value * 100).toFixed(0)}%`)
+      console.log(`  ${B(arm)}`)
+      console.log(
+        `    现在（tU=0.50 tD=0.60）  捕获 ${fmt(base.catchRate).padEnd(14)} 误伤 ${fmt(base.falseAlarmRate)}` +
+          `${base.falseAlarmRate.value !== null && base.falseAlarmRate.value > MARGIN ? R('  ✗ 超预算') : G('  ✓ 在预算内')}`,
+      )
+      if (!best) {
+        console.log(`    ${Y('    扫遍了也找不到一个「误伤 ≤ 预算」的工作点 —— 这个判官不在可用的曲线上')}`)
+        continue
+      }
+      // ★ 用**留出**那一半报成绩
+      const ho = score(hold, arm, best.tU, best.tD)
+      console.log(
+        `    扫描挑出（tU=${best.tU.toFixed(2)} tD=${best.tD.toFixed(1)}，挑的那半：捕获 ${(best.c * 100).toFixed(0)}% 误伤 ${(best.f * 100).toFixed(0)}%）`,
+      )
+      console.log(
+        `    ${G('留出那一半的成绩')}        捕获 ${fmt(ho.catchRate).padEnd(14)} 误伤 ${fmt(ho.falseAlarmRate)}` +
+          `${ho.falseAlarmRate.value !== null && ho.falseAlarmRate.value > MARGIN ? R('  ✗ 在留出集上超预算（挑过头了）') : G('  ✓ 在留出集上仍达标')}`,
+      )
+    }
+    console.log(
+      D('  ★ 曲线上的每个点都是「判定不变、只换策略」—— 没有一次额外的模型调用。'),
+    )
+    console.log(
+      D('  ★ 若留出集的成绩明显差于挑的那半，说明门限是被那半的噪声挑出来的，不是真的。'),
     )
   }
 
