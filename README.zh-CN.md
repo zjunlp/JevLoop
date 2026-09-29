@@ -138,6 +138,7 @@ npm run adapter-report    # 能力报告必须和宿主的代码对得上
 npm run replay -- <会话>   # 真实会话的判定记录必须仍然自洽
 npm run trace -- <会话>    # ……并把每一条渲染成一个可读的 decisions/*.md
 npm run trace -- --verify <目录>  # 只从那批 .md 本身重算指纹（改了正文也会报）
+npm run metrics -- <会话>   # 判定 / 调用 / token，导出成 Prometheus 文本（离线）
 ```
 
 > **关于 npm 状态。** `jevloop` 已经在 npm 上，但最新已发布版本（`0.2.0`）声明的仓库是 `github.com/Xubqpanda/JevLoop`，而本仓库是 `zjunlp/JevLoop`，`package.json` 还停在 `0.1.0`。所以那个已发布的 tarball **不是**这个 revision。要拿这一份，从 git 装 —— `npm install github:zjunlp/JevLoop` —— 或者直接 clone。`npx jevloop …` 只是上面那些 CLI 命令的简写。

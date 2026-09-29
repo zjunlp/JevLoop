@@ -53,6 +53,7 @@ import { runAgent } from './agent.ts'
 import { parseDecisionDoc, summarize, headline, isGate } from './decisiondoc.ts'
 import { compilePolicy, compilePredicate } from './decision-compile.ts'
 import type { AgentEvent, GenerateDelta } from './events.ts'
+import { metricsFrom, renderPrometheus } from './metrics.ts'
 import { SessionStore, assertSessionId } from './session-store.ts'
 import { migrateLegacyLayout } from './session-migrate.ts'
 import { createDir, listDirs } from './dir-browse.ts'
@@ -666,6 +667,25 @@ async function handleSession(req: IncomingMessage, res: ServerResponse, url: URL
  * `DELETE` 删一个会话。删是**看得见**的动作：界面上有列表，所以删掉
  * 什么用户是知道的（对比以前那个悄悄丢最老会话的 LRU）。
  */
+/**
+ * 指标出口。`prom = true` 出 Prometheus 文本，否则出 JSON 快照。
+ *
+ * 数据来自**已经落盘的会话日志** —— 不另存一份计数，因为两份必然会分叉。
+ */
+async function handleMetrics(res: ServerResponse, prom: boolean): Promise<void> {
+  const events: unknown[] = []
+  for (const summary of await store.list()) {
+    for (const run of await store.load(summary.id)) events.push(...run.events)
+  }
+  const snap = metricsFrom(events)
+  if (!prom) {
+    sendJson(res, 200, snap)
+    return
+  }
+  res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' })
+  res.end(renderPrometheus(snap))
+}
+
 async function handleSessions(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   if (req.method === 'DELETE') {
     const id = resolveSessionId(url.searchParams.get('id'))
@@ -929,6 +949,23 @@ const server = createServer(async (req, res) => {
     }
     if (url.pathname === '/api/workspaces') {
       await handleWorkspaces(req, res, url)
+      return
+    }
+    /*
+      TODO §11：把账目**导出给监视器**。
+
+        `/metrics`        Prometheus 文本（聚合计数，可加、基数固定）
+        `/api/metrics`    JSON 快照（含逐任务明细）
+
+      ★ 两个出口而不是一个，是因为两边要的形状不同：任务名是自由文本，把它做成
+        Prometheus 标签会让时间序列基数无界增长 —— 那是把监视器打垮的经典方式。
+        理由写在 `src/metrics.ts` 的文件头。
+
+      ★ 聚合**所有**会话：这是给一个进程内、本地文件的部署用的（§11 的另一半），
+        所以「全部」就是这个部署的全部。跨进程共享会话不在这一版里。
+    */
+    if (url.pathname === '/metrics' || url.pathname === '/api/metrics') {
+      await handleMetrics(res, url.pathname === '/metrics')
       return
     }
     await serveStatic(res, url.pathname)
