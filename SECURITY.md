@@ -72,6 +72,7 @@ docker run --rm \
   -v "$PWD":/src:ro \
   -v "$WORK":/work:rw \
   -e HOME=/tmp -w /work \
+  -e JEVLOOP_ISOLATED=1 \
   node:22-slim \
   node --experimental-strip-types /src/examples/demo.ts --rule
 ```
@@ -161,19 +162,50 @@ destructive calls stop asking. The override is recorded in `run:start` and in
 every affected rule's reason, but it is your decision and it is not reversible
 after the fact.
 
-## Shell and git are deliberately absent
+## Process-spawning tools: gated, not promised
 
 A tool that starts a process would widen a boundary that is known not to be
-hardened. [`TODO.md`](TODO.md) §1 records this as a condition rather than a
-checkbox that is merely unchecked.
+hardened. [`TODO.md`](TODO.md) §1 recorded that as a condition rather than a
+checkbox that was merely unchecked, and §8 owned the condition. It is now closed —
+**by making the deployment answer a machine question, not by writing a promise.**
 
-**That condition is now half met, and the half that is missing is the default.**
-Resource limits and isolation exist — *in the container above*. A plain
-`npm run serve` still has no ceiling on CPU, memory or disk, and nothing stops a
-spawned process from doing whatever the user can. So the condition is met only when
-the operator opts in, and a shipped shell tool cannot assume that. Two ways to close
-it: make the container the only supported deployment, or give the tools their own
-limits. Until one of those lands, shell and git stay out.
+The harness can bound exactly three things, and only for one call: input size,
+output size, wall clock. It **cannot** bound CPU, memory, disk or network — those
+need a kernel, a cgroup or a network namespace, and that belongs to the
+deployment rather than to this loop. A process-spawning tool can therefore
+legitimately exhaust memory, fill the disk, or talk to the network, and no amount
+of care inside the loop changes that.
+
+So a tool now declares it: `Tool.requiresIsolation`. When a tool declares it,
+`callTool` refuses **before `run()`** unless the run was explicitly told it is
+isolated:
+
+```text
+错误：<tool> 需要在**隔离环境**里运行，而这一次运行没有确认隔离 —— 这一调**没有执行**。
+```
+
+The acknowledgement is `AgentOptions.assumeIsolated`, and the application layer
+sets it from `JEVLOOP_ISOLATED=1` — the same variable the container recipe above
+uses. **The kernel does not read the environment**; only the application knows
+what the deployment looks like, and a hidden env read inside the loop would make
+"who is responsible for CPU and memory" unanswerable.
+
+Two consequences worth stating plainly:
+
+- **The container is the supported deployment for these tools.** That is the
+  choice §8 existed to make. Elsewhere, an isolation-requiring tool is not
+  "discouraged" — it does not execute, and the refusal says why and points here.
+- **`--network none` is what makes the isolation claim real, and it also rules
+  out a hosted decision backend.** That trade-off was recorded when the recipe
+  was tested, and it still holds. If you need a hosted backend and a shell tool
+  at the same time, you need a narrower network policy than `none`, and you
+  should write down which one you chose.
+
+What this gate is **not**: it is not a sandbox. It does not create namespaces, it
+does not limit a process after it starts, and it cannot detect an isolated-looking
+environment that is not actually isolated. It converts one specific silence — "a
+process tool ran somewhere without the bounds it assumes" — into a refusal. The
+rest is the container's job, and the container section above is the recipe.
 
 ## Reporting
 

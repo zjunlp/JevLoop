@@ -471,6 +471,8 @@ async function handleRun(req: IncomingMessage, res: ServerResponse, url: URL): P
       task,
       cwd,
       history,
+      // ★ 同 cli：隔离确认从环境来，内核不读 env
+      assumeIsolated: process.env.JEVLOOP_ISOLATED === '1',
       decider: new Decider({
         provider,
         meter,

@@ -170,6 +170,9 @@ async function runTask(task: string, options: Map<string, string>): Promise<numb
     maxSteps: Number(options.get('max-steps') ?? 8),
     onTrace: (line) => console.log(dim(line)),
     gates,
+    // ★ 隔离确认来自环境：容器配方里设 `JEVLOOP_ISOLATED=1`（见 SECURITY.md）。
+    //   **内核不读 env** —— 只有应用层知道这次部署长什么样（`Tool.requiresIsolation`）。
+    assumeIsolated: process.env.JEVLOOP_ISOLATED === '1',
   })
 
   const s = meter.stats

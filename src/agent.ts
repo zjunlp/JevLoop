@@ -122,6 +122,17 @@ export interface AgentOptions {
    */
   tools?: ToolTable
   /**
+   * **这次运行确认在隔离环境里跑**（容器 / cgroup / 网络命名空间）。
+   *
+   * ★ 默认 `false`。它是「谁为 CPU / 内存 / 磁盘 / 网络负责」这个问题的答案，
+   *   而猜错的方向是把没有界的运行当成有界的 —— 所以它必须显式给。
+   *
+   * 唯一会看它的是**声明了 `requiresIsolation` 的工具**（`Tool.requiresIsolation`）：
+   * 没有确认时 `callTool` 连跑都不跑。应用层从 `JEVLOOP_ISOLATED=1` 读它 ——
+   * 那个变量正是容器配方里设的（见 `SECURITY.md`）。
+   */
+  assumeIsolated?: boolean
+  /**
    * 一次运行的**硬上限**（TODO §9）。三个都可以单独给，越线就**停机**。
    *
    * ★ 单位是墙钟毫秒 / 模型调用数 / token —— **不是钱**。仓库里没有价格表，
@@ -602,7 +613,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     // ── 唯一有真实副作用的地方 ──
     emit({ type: 'tool:call', step, tool, input })
     const toolT0 = Date.now()
-    const result = await callTool(tools, tool, input, ctx.cwd)
+    const result = await callTool(tools, tool, input, ctx.cwd, { isolated: opts.assumeIsolated === true })
     emit({ type: 'tool:result', step, tool, output: result, ms: Date.now() - toolT0 })
     pending.result = result
     ctx.lastResult = result

@@ -219,3 +219,60 @@ test('★★ 注入的工具表**替换**了 locals：默认那份一条都不�
   })
   assert.ok(log.some((l) => l.startsWith('list_dir')), '这张表必须被调到')
 })
+
+// ═══════════════════════════════════════════════════════════
+// ⑥ TODO §8：需要隔离的工具，没有确认就**连跑都不跑**
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 一个**声明了自己需要隔离**的工具。
+ *
+ * ★ 它在本仓库里还没有真实消费者（进程类工具是 TODO §1 的下一项），所以这里
+ *   用一个测试夹具来验证**闸门本身**。闸门是 §8 那一项要的东西：
+ *   「harness 封不住 CPU / 内存 / 磁盘 / 网络」这件事，从一句话变成一道检查。
+ */
+const NEEDS_ISOLATION = {
+  process_spawner: {
+    name: 'process_spawner',
+    description: '起一个进程（夹具）',
+    baseRisk: 3,
+    requiresIsolation: true,
+    timeoutMs: 1000,
+    /** 记录它**真的跑过**。闸门必须在 `run()` 之前拦住，所以这个计数必须是 0 */
+    async run(): Promise<string> {
+      ran++
+      return '起了个进程'
+    },
+  },
+} satisfies ToolRegistry
+let ran = 0
+
+test('★★★ 需要隔离的工具：默认**拒绝**，而且拒绝发生在 `run()` 之前', async () => {
+  ran = 0
+  const out = await callTool(NEEDS_ISOLATION, 'process_spawner', '', '/w')
+  assert.match(out, /^错误：/, `必须拒绝，实际：${out}`)
+  assert.match(out, /隔离/, '要说清是因为没有确认隔离')
+  assert.match(out, /SECURITY\.md/, '要把人指到那份文档')
+  assert.equal(ran, 0, '★ `run()` 一次都不许被调到 —— 副作用发生在闸门之前才是最坏的')
+})
+
+test('★★ 明确确认隔离之后才放行', async () => {
+  ran = 0
+  const out = await callTool(NEEDS_ISOLATION, 'process_spawner', '', '/w', { isolated: true })
+  assert.equal(out, '起了个进程', `确认隔离后应当执行，实际：${out}`)
+  assert.equal(ran, 1, '确认之后才真的跑')
+})
+
+test('★ `isolated` 必须是**显式 true** —— `undefined` / `false` 都不算确认', async () => {
+  for (const limits of [{}, { isolated: false }, { maxOutputChars: 100 }]) {
+    ran = 0
+    const out = await callTool(NEEDS_ISOLATION, 'process_spawner', '', '/w', limits)
+    assert.match(out, /^错误：/, `${JSON.stringify(limits)} 不该算确认`)
+    assert.equal(ran, 0, '不许因为「没传就是没限制」而放行')
+  }
+})
+
+test('★ 不声明 `requiresIsolation` 的工具**不受影响** —— 闸门不是全局的', async () => {
+  assert.equal(await callTool(FAKE, 'echo', 'hi', '/w'), 'hi', '普通工具照常')
+  assert.equal(await callTool(FAKE, 'echo', 'hi', '/w', {}), 'hi')
+})

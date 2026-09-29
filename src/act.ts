@@ -56,8 +56,35 @@ export interface Tool {
    *   **不声明**它，`callTool` 也就不会去 race 一个会留下副作用的调用。
    *
    * 一句话：超时是**观测**上的放弃，不是**执行**上的取消。
+   *
+   * ★ 例外：**进程类工具能真的取消**（`kill`）。所以它既可以声明超时，
+   *   又必须实现 `AbortSignal` —— 否则一个跑飞的进程会活过它的超时。
    */
   timeoutMs?: number
+  /**
+   * 这个工具**假定**运行环境是有界的，而**harness 自己给不了那层界**。
+   *
+   * ═══════════════════════════════════════════════════════════
+   * TODO §8 的那句话，落成代码而不是承诺
+   * ═══════════════════════════════════════════════════════════
+   *
+   * harness 能封的只有**这一调**的三样：输入、输出、墙钟。它封不了
+   * **CPU、内存、磁盘、网络** —— 那需要内核 / cgroup / 网络命名空间，
+   * 属于**部署**，不属于这个循环。一个起进程的工具可以合法地：
+   *
+   *     · 把内存吃光          · 把磁盘写满
+   *     · 连外网把东西传出去   · 起一堆子进程把 CPU 占满
+   *
+   * 所以进程类工具**不能**假定这些界存在。声明 `requiresIsolation: true`
+   * 之后，`callTool` 在没有隔离确认时**连跑都不跑**（拒绝发生在 `run()` 之前）
+   * —— 把「你自己记得在容器里跑」从一句话变成一道机器检查。
+   *
+   * ★ 确认从哪来：调用方显式给（`ToolLimits.isolated`）。**不是环境变量的
+   *   隐式魔法** —— 内核里读 env 会让「到底谁负责」这件事变得没人说得清。
+   *   应用层（`server.ts` / `cli.ts`）读 `JEVLOOP_ISOLATED=1` 再传下来，
+   *   而那个变量正是容器配方里写的（见 `SECURITY.md`）。
+   */
+  requiresIsolation?: boolean
 }
 
 /**
@@ -116,6 +143,14 @@ export const DEFAULT_MAX_OUTPUT_CHARS = 8000
 export interface ToolLimits {
   /** 输出超过它就**截断并标注**（不静默截）。默认 `DEFAULT_MAX_OUTPUT_CHARS` */
   maxOutputChars?: number
+  /**
+   * **这个部署提供了隔离**（容器 / cgroup / 网络命名空间）。
+   *
+   * ★ 默认 `false`，而且必须是**显式**传进来的：它是「谁为 CPU / 内存 /
+   *   磁盘 / 网络负责」这个问题的答案，猜错的方向是把没有界的运行当成有界
+   *   （见 `Tool.requiresIsolation`）。
+   */
+  isolated?: boolean
 }
 
 /**
@@ -142,6 +177,17 @@ export async function callTool<T extends ToolRegistry>(
 ): Promise<string> {
   const tool = tools[name]
 
+  // ⓪ 隔离闸门 —— **在一切之前**。见 `Tool.requiresIsolation`：
+  //    harness 封不住 CPU / 内存 / 磁盘 / 网络，所以声明了这件事的工具
+  //    在没有隔离确认时**连跑都不跑**。把「记得在容器里跑」变成机器检查。
+  if (tool.requiresIsolation && limits.isolated !== true) {
+    return (
+      `错误：${tool.name} 需要在**隔离环境**里运行，而这一次运行没有确认隔离 —— ` +
+      `这一调**没有执行**。harness 自己封不住 CPU / 内存 / 磁盘 / 网络，` +
+      `那四样只有容器能封（见 SECURITY.md）。`
+    )
+  }
+
   // ① 输入上限 —— **在产生副作用之前**
   const maxIn = tool.maxInputChars
   if (maxIn !== undefined && input.length > maxIn) {
@@ -155,7 +201,9 @@ export async function callTool<T extends ToolRegistry>(
       : text
 
   try {
-    // ② 超时 —— 只对**声明了**的工具 race，见 `Tool.timeoutMs` 的说明
+    // ② 超时 —— 只对**声明了**的工具 race，见 `Tool.timeoutMs` 的说明。
+    //    ★ 对进程类工具这是**近似的**：真正杀掉那个进程是工具自己的责任
+    //      （它拿得到 `signal`），这里只负责不再等。
     const raw =
       tool.timeoutMs === undefined
         ? await tool.run(input, cwd)
