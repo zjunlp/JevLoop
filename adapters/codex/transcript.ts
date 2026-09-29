@@ -24,11 +24,20 @@
  *
  * transcript 的长度**没有上界**（它是一次会话的全部经过）。而这里只要两样东西：
  *
- *     第一次用户消息   → 在**头部**
+ *     第一条真用户消息 → 在**头部**（跳过 codex 合成的环境块，见下）
  *     最近几次工具调用 → 在**尾部**
  *
  * 所以文件很大时只读这两段窗口，而不是整个读进内存。这是适配器替宿主承担的
  * 「读取并裁剪」义务（见 `docs/ADAPTER-CODEX-SCOPE.md`）里最硬的一条。
+ *
+ * ── ★ 但「第一次用户消息」不是用户的消息 ──────────────────────
+ *
+ * 实测（codex 0.158.0）：真正的用户消息**之前**还有一条 codex 自己生成的合成消息，
+ * 把 cwd / shell / 日期 / 沙箱档位告诉模型，长相是 `<environment_context>…`。
+ *
+ * 所以「取第一条 role=user」读到的**不是**任务。而它的后果不是「读不到」——
+ * 是**读到一个错的**：帧的每一栏都拿 `task` 当判据，于是会产生一份看起来完整、
+ * 实际答非所问的判定。安静的那种错。见 `isSyntheticUserText`。
  *
  * @module JevLoop/adapters/codex/transcript
  */
@@ -36,7 +45,7 @@
 import { openSync, closeSync, fstatSync, readSync } from 'node:fs'
 
 /**
- * 头部读多少字节去找「第一次用户消息」。
+ * 头部读多少字节去找「第一条**真正的**用户消息」（合成的环境块不算）。
  *
  * 64KB：一条用户消息 + session_meta 远不到这个量级，而留够余量是为了容忍
  * 前面出现大段的 reasoning/工具输出。
@@ -62,7 +71,10 @@ const STEP_RESULT_CHARS = 300
 const MAX_HISTORY_CHARS = 4000
 
 export interface TranscriptFacts {
-  /** 第一次用户消息。**读不到就是 `undefined` ⇒ 上层拒绝**，不是空串 */
+  /**
+   * 第一条**真正的**用户消息（codex 合成的环境块不算，见 `isSyntheticUserText`）。
+   * **读不到就是 `undefined` ⇒ 上层拒绝**，不是空串
+   */
   task: string | undefined
   /** `工具(输入) → 结果` 的最近几步，已按聚合上界裁剪。读不到就是 `undefined` */
   historyText: string | undefined
@@ -252,8 +264,34 @@ function callsIn(lines: string[], skipped: { n: number }): Call[] {
   return calls
 }
 
-/** 第一次用户消息 —— 只在头部窗口里找 */
-function taskOf(lines: string[]): string | undefined {
+/**
+ * codex 自己生成的用户消息 —— 它的**开头标签**。
+ *
+ * ★ 判据是「以这个标签开头」，不是「整条正好是这个标签」。理由是格式没有兼容承诺：
+ *   将来它在闭合标签后面再接一段，`startsWith` 仍然认得出，而 `===` 会突然失灵
+ *   —— 失灵的后果是**静默读错**，那正是这里要防的。
+ *
+ * ⚠️ 代价说清楚：用户如果**自己**把 `<environment_context>` 当作消息的开头，这条
+ *   消息会被跳过。这个方向是安全的（可能变成 `undefined` ⇒ 上层拒绝并说明原因），
+ *   而反方向（把环境块当任务）会让每一栏判据都建立在错的东西上。
+ */
+const SYNTHETIC_USER_TAGS = ['environment_context']
+
+/** 这条用户消息是不是 codex 生成的合成消息（不是用户打的字） */
+function isSyntheticUserText(text: string): boolean {
+  const t = text.trimStart()
+  return SYNTHETIC_USER_TAGS.some((tag) => t.startsWith(`<${tag}>`) || t.startsWith(`<${tag} `))
+}
+
+/** `taskOf` 的结果：任务 + 跳过了几条合成消息（跳了多少要**说出来**） */
+interface TaskLookup {
+  task: string | undefined
+  syntheticSkipped: number
+}
+
+/** 第一条**真正的**用户消息 —— 只在头部窗口里找 */
+function taskOf(lines: string[]): TaskLookup {
+  let syntheticSkipped = 0
   for (const line of lines) {
     let row: Record<string, unknown>
     try {
@@ -268,9 +306,15 @@ function taskOf(lines: string[]): string | undefined {
     if (!isShape(item, 'message')) continue
     if (item.role !== 'user') continue
     const text = textOfContent(item.content).trim()
-    if (text) return text
+    if (!text) continue
+    // ★ codex 的合成环境块排在真任务前面 —— 跳过它，否则 task 是一份错的
+    if (isSyntheticUserText(text)) {
+      syntheticSkipped++
+      continue
+    }
+    return { task: text, syntheticSkipped }
   }
-  return undefined
+  return { task: undefined, syntheticSkipped }
 }
 
 /** `session_meta` 里有什么就取什么（认不出就跳过，不猜） */
@@ -342,10 +386,16 @@ export function readTranscript(path: string): TranscriptFacts {
       )
     }
 
-    facts.task = taskOf(headLines)
+    const lookup = taskOf(headLines)
+    facts.task = lookup.task
+    if (lookup.syntheticSkipped > 0) {
+      facts.notes.push(
+        `跳过了 ${lookup.syntheticSkipped} 条 codex 生成的合成用户消息（<${SYNTHETIC_USER_TAGS.join('>/<')}>）—— 它不是用户的任务`,
+      )
+    }
     facts.skippedLines = skipped.n
     if (skipped.n > 0) facts.notes.push(`跳过了 ${skipped.n} 行（坏行或认不出的形状）`)
-    if (facts.task === undefined) facts.notes.push('transcript 里找不到第一次用户消息 ⇒ task 无法确定')
+    if (facts.task === undefined) facts.notes.push('transcript 里找不到真正的用户消息 ⇒ task 无法确定')
 
     // ── 历史：只保留最近几步 ──
     const recent = calls.slice(-MAX_STEPS_KEPT)

@@ -130,6 +130,81 @@ test('工具参数是 JSON 字符串 —— 取路径类字段而不是整段 JS
 // ② 防御：坏行、漂移、读不到
 // ═══════════════════════════════════════════════════════════
 
+/*
+  ★★ 这一组测的是一个**只有真跑才发现的** bug（0.158.0 实测，见
+     `docs/ADAPTER-CODEX-SCOPE.md`）：codex 会在真正的用户消息**前面**塞一条自己
+     生成的 `<environment_context>`，里面是 cwd / shell / 日期 / 沙箱档位。
+
+     于是「取第一条 role=user」读到的不是任务 —— 而后果不是「读不到」，是
+     **读到一个错的**。帧的每一栏都拿 task 当判据，所以那会变成一份看起来完整、
+     实际答非所问的判定。安静的那种错，最难发现。
+
+     所以这里要给**三**个方向：
+       ① 合成块在前、真任务在后 ⇒ 取到真任务
+       ② 只有合成块         ⇒ `undefined` ⇒ 上层**拒绝**（吵的那一半）
+       ③ 只是**提到**这个标签 ⇒ **不能**被当成合成块（否则会吃掉真消息）
+*/
+
+/** 实测形状：整条就是一个 `<environment_context>` 包起来的块 */
+const environmentContext = () =>
+  userMsg(
+    '<environment_context>\n  <cwd>/tmp/work</cwd>\n  <shell>bash</shell>\n' +
+      '  <current_date>2026-09-29</current_date>\n  <timezone>Asia/Shanghai</timezone>\n' +
+      '  <filesystem><workspace_roots><root>/tmp/work</root></workspace_roots></filesystem>\n' +
+      '</environment_context>',
+  )
+
+test('★★ codex 的合成环境块不是任务 —— 取它后面的真用户消息', () => {
+  const md = [meta('/tmp/work', 's1'), environmentContext(), userMsg('list the files in this directory')].join('\n')
+  withFile(md, (path) => {
+    const t = readTranscript(path)
+    assert.equal(t.task, 'list the files in this directory', '★ 取的是真任务，不是环境块')
+    assert.doesNotMatch(t.task ?? '', /cwd|environment_context/, '环境块一个字都不该进 task')
+    assert.ok(
+      t.notes.some((n) => /合成用户消息/.test(n)),
+      '跳过要说出来 —— 静默跳过会让「为什么读到的不是第一条」变成一个谜',
+    )
+  })
+})
+
+test('★★ 只有合成块 ⇒ task 是 `undefined`，适配器**拒绝**（不是拿环境块去判定）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jevloop-transcript-envonly-'))
+  try {
+    const path = join(dir, 'r.jsonl')
+    writeFileSync(path, `${meta('/tmp/work', 's1')}\n${environmentContext()}\n`)
+
+    const t = readTranscript(path)
+    assert.equal(t.task, undefined, '★ 合成块不能顶替任务')
+
+    const state: HostState = {
+      task: t.task as string, // undefined —— 正是这里要测的
+      cwd: '/tmp/work',
+      tool: 'shell',
+      input: 'rm -rf /',
+      historyText: t.historyText,
+      files: t.files,
+      readFiles: t.readFiles,
+    }
+    const backend = async (): Promise<AnswerSet> => ({}) // 不该被调用
+    const r = await runDecision(
+      { hook_event_name: 'PreToolUse', tool_name: 'shell', transcript_path: path },
+      { md: MD, state, backend },
+    )
+    assert.equal(r.verdict.kind, 'deny', '★ 任务读不到就必须拒绝 —— 而这里正是它以前会「读到」的情形')
+    assert.match(r.verdict.reason, /task/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('★ 只是**提到** `<environment_context>` 的消息不能被当成合成块吃掉', () => {
+  const asked = '为什么我的 transcript 里会有 <environment_context> 这一段？'
+  withFile([userMsg(asked)].join('\n'), (path) => {
+    const t = readTranscript(path)
+    assert.equal(t.task, asked, '★ 判据是「以标签开头」，不是「包含标签」')
+  })
+})
+
 test('★★ 坏行跳过并计数 —— 追加式格式允许撕裂尾行', () => {
   const md = [
     userMsg('t'),
@@ -181,7 +256,7 @@ test('★★ 读不到 task ⇒ `undefined`，绝不填空串', () => {
   withFile([assistantMsg('只有助手消息，没有用户消息')].join('\n'), (path) => {
     const t = readTranscript(path)
     assert.equal(t.task, undefined, '★ 空串会让帧看起来完整，而策略基于一个空任务做判定')
-    assert.ok(t.notes.some((n) => /找不到第一次用户消息/.test(n)), '要说清为什么')
+    assert.ok(t.notes.some((n) => /找不到真正的用户消息/.test(n)), '要说清为什么')
   })
 })
 

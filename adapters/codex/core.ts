@@ -249,12 +249,40 @@ const PROJECTIONS_OF: Record<ProjectionName, (s: HostState) => unknown> = {
  *   ⇒ 那一栏整个不进帧（记进 absent），**绝不用 0 冒充「只读」**。
  */
 const CODEX_TOOL_RISK: Record<string, number> = {
+  /*
+    ★★ 这些是 **hook 面**的名字，不是模型面的名字 —— 而两者**不一样**。
+
+    实测（读 `codex-rs/core/src/tools/hook_names.rs`）：模型发出的工具调用叫
+    `shell` / `exec_command`，而 hook stdin 里收到的 canonical `tool_name` 是
+    **`Bash`**。第一版这张表用的是模型面的名字，于是真跑时 `Bash` 会**查不到**
+    ⇒ `base_risk` 记进 `absent` ⇒ 风险判定拿不到基线。名字对不上不报错，它只是
+    静默地少一栏 —— 正是这一路一直在修的那种失败。
+
+    所以：**以宿主 hook 面的名字为准**，模型面的名字留作别名（同一个工具换一条
+    路径进来时也认得）。
+  */
+  // hook 面（canonical，实测）
+  Bash: 2, // 起进程：不可逆
+  apply_patch: 1, // 可逆写入（能被 git 找回）
+  spawn_agent: 1, // 派子 agent：会花钱、会动东西
+  // 模型面别名（同一个工具的另一条路径）
+  shell: 2,
+  exec_command: 2,
   read_file: 0,
   list_dir: 0,
-  shell: 2, // 起进程：不可逆
-  apply_patch: 1, // 可逆写入（能被 git 找回）
   write_file: 1,
 }
+
+/** 这个适配器的桩后端认为**有破坏性**的工具 —— 一律报高危，于是 fail closed */
+export const DESTRUCTIVE_TOOLS: ReadonlySet<string> = new Set([
+  'Bash',
+  'apply_patch',
+  'spawn_agent',
+  'shell',
+  'exec_command',
+  'write_file',
+  'delete_file',
+])
 
 // ═══════════════════════════════════════════════════════════
 // 能力对照：我声称支持什么，契约要什么

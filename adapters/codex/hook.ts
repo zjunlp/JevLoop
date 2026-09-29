@@ -36,7 +36,7 @@ import { appendFileSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { checkCapabilities, runDecision, type Backend } from './core.ts'
+import { DESTRUCTIVE_TOOLS, checkCapabilities, runDecision, type Backend } from './core.ts'
 import { readTranscript } from './transcript.ts'
 import type { CodexHookEvent, HostState } from './types.ts'
 
@@ -118,7 +118,7 @@ function backendFromEnv(): Backend {
 
       要真正的判定，配 `JEVLOOP_JEV_URL`。
     */
-    const DESTRUCTIVE = new Set(['shell', 'bash', 'exec', 'delete_file', 'rm', 'apply_patch', 'write_file'])
+    const DESTRUCTIVE = DESTRUCTIVE_TOOLS
     process.stderr.write('JevLoop codex adapter: ⚠ JEVLOOP_STUB=1 —— 这是自检桩，不是判定。破坏性工具一律报高危\n')
     return async (req) => {
       const tool = String((req.state as { tool?: unknown }).tool ?? '')

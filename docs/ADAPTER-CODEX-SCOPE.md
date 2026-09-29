@@ -96,7 +96,7 @@ Which covers, in `DECISION.md` terms:
 | `target` / `input` | `tool_input` | **given** |
 | `cwd` | `cwd` | **given**, and it is the sandbox root |
 | `history`, `lastResult` | read `transcript_path` | **derivable** — one file read per decision, and it must be bounded |
-| `task` | first user message in the transcript, or cached from `UserPromptSubmit` | **derivable** |
+| `task` | first **non-synthetic** user message in the transcript, or cached from `UserPromptSubmit` | **derivable, but not the first user message** — see below |
 | `files`, `readFiles` | the adapter's own bookkeeping | **the adapter's** — Codex does not track "which files were read" |
 | `canWrite`, `canDelete` | `permission_mode` is the nearest signal | **mapped, with a caveat**: Codex's modes are not the same axis as "may this run mutate" |
 
@@ -109,6 +109,15 @@ Two consequences the Skill does not currently mention:
 - **Every frame is rebuilt from a file read.** The transcript is unbounded by
   construction; the adapter must apply the declared bounds itself, or the frame silently
   grows past what the decision model was measured on.
+
+And a third, which only a real session produced: **"the first user message" is not the
+user's message.** Codex injects a synthetic `<environment_context>` user turn (cwd, shell,
+date, sandbox profile) *ahead* of the real prompt. Reading the first `role: "user"` row
+therefore does not fail — it returns a **wrong** `task`. Every frame in `DECISION.md`
+judges against `task`, so the result is a complete-looking, confidently-off-topic verdict.
+The table above said "derivable"; the honest word for a field whose naive read is
+plausible-and-wrong is **derivable only with the host's conventions**, which is exactly
+what a foreign host does not document. See "What the built adapter confirmed".
 
 ## Step 6 for a host you do not own: records are *derived*
 
@@ -123,7 +132,7 @@ Skill's Step 8 asks for a "replay status" field, and for this host the honest va
 
 ## What the built adapter confirmed
 
-Writing it turned the analysis above into three concrete results, and one of them
+Writing it turned the analysis above into four concrete results, and two of them
 contradicted the document you are reading:
 
 - **`PostToolUse` → `step_ok` works too**, so the reachable set was three blocks, not two.
@@ -141,6 +150,21 @@ contradicted the document you are reading:
   arrays (`TODO.md` §7). This adapter has no such consumer — the decision model is the only
   reader — so it joins and marks them. That localises the gap: it comes from an in-process
   consumer, not from the contract.
+- **The first real session found a silently-wrong read, not a missing one.** Codex puts a
+  synthetic `<environment_context>` turn before the prompt, so `task` came out as
+  `<cwd>/tmp/... </cwd>`-shaped text while the run otherwise looked perfect: the hook fired,
+  the block fired, and four records replayed `verified`. Nothing in the pipeline could
+  object, because a wrong `task` is still a *non-empty string* — the missing-cell refusal
+  that protects every other field cannot see it. The adapter now skips synthetic turns and
+  says so in `notes`; the offline test asserts both directions (a real prompt after an
+  environment block is found; a message that merely *mentions* the tag is not eaten).
+
+  This is the sharpest version of the project's own thesis, and it is worth stating
+  plainly: the contract's guarantee is about *what the frame can contain*, not about
+  whether the adapter filled it from the right place. `verifyRecord()` re-derives the
+  digests and passed all four records — it cannot catch this either, by design, because it
+  verifies self-consistency against the *stored* state. A bounded, digest-verified,
+  replayable record of a decision made on the wrong task is entirely possible.
 
 ## Verdict on the exercise
 

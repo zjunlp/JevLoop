@@ -30,10 +30,11 @@ pass through unchecked.
   **closed** and says so in the verdict, because silently proceeding is the failure this
   whole project is about. If you want fail-open instead, that is a deliberate edit, not a
   configuration flag.
-- **Frames are thin today.** `task` and `history` come from Codex's `transcript_path`, and
-  this entry deliberately does not read it yet (see Roadmap). Missing cells make the
-  adapter **deny**, not proceed. So the out-of-the-box behaviour is "refuse", which is the
-  safe half of incomplete.
+- **Frames are thin today.** `task` and `history` come from Codex's `transcript_path` (see
+  "Reading the transcript"). What Codex does not give — `files` / `readFiles` persistence,
+  the audit line, and a `PreToolUse`-driven `pick_input` — is listed under Roadmap. Missing
+  cells make the adapter **deny**, not proceed. So the out-of-the-box behaviour is
+  "refuse", which is the safe half of incomplete.
 
 ## Install
 
@@ -77,6 +78,30 @@ Omit the `matcher` field entirely to run on every tool. Codex may ask you to tru
 the first time it runs. To roll back, delete the three groups whose `command` ends in
 `adapters/codex/hook.ts`.
 
+**Install it in exactly one place.** Codex loads hooks from *both* `~/.codex/hooks.json`
+and `~/.codex/config.toml`, and only warns:
+
+```text
+warning: loading hooks from both ~/.codex/hooks.json and ~/.codex/config.toml;
+prefer a single representation for this layer
+```
+
+If both describe this adapter, every hook runs **twice per event**: two decisions, two
+records, and two bills against a paid decision backend. Replaying that log shows a clean
+run of twice as many decisions as actually happened, so the duplicate is invisible where
+you would look for it. Either use the JSON above, or the equivalent in `config.toml`:
+
+```toml
+[[hooks.PreToolUse]]
+  [[hooks.PreToolUse.hooks]]
+  type = "command"
+  command = "node --experimental-strip-types /path/to/JevLoop/adapters/codex/hook.ts"
+  timeout = 10
+```
+
+and skip the JSON. A real session (Codex 0.158.0) fired each hook once per event once the
+second source was removed.
+
 ### Environment
 
 ```text
@@ -92,20 +117,40 @@ wired up is worse than no gate, because you believe it is there.
 
 ### Self-check, and verifying the records
 
+A hook event carries no task, so the event needs a transcript to read one from — the same
+file Codex passes in `transcript_path`. Two lines are enough:
+
 ```bash
+# a minimal transcript: the reader needs a real user message (see below)
+printf '%s\n' \
+  '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"read a.ts"}]}}' \
+  > /tmp/rollout.jsonl
+
 # one event in, one verdict out — no backend, no network
-echo '{"hook_event_name":"PreToolUse","tool_name":"read_file","tool_input":{"path":"a.ts"}}' \
+echo '{"hook_event_name":"PreToolUse","tool_name":"read_file","tool_input":{"path":"a.ts"},"transcript_path":"/tmp/rollout.jsonl"}' \
   | JEVLOOP_STUB=1 JEVLOOP_RECORDS=/tmp/rec.jsonl \
     node --experimental-strip-types adapters/codex/hook.ts
+# → {}
 
 # then verify what it recorded, with the reference verifier
 npm run replay -- /tmp/rec.jsonl
+# → 1 条判定 · 1 verified · 0 partial · 0 unverifiable · 0 mismatch
 ```
 
-That second command is the point of the record format: decisions taken by **a host we do
-not own** verify under **our** verifier. Run against this adapter it reports
-`3 verified · 0 mismatch · 0 unverifiable` — the digests exist only because the adapter
+`{}` is the "no objection" verdict — the stub rates a read as low risk, so nothing is
+denied. That second command is the point of the record format: decisions taken by **a host
+we do not own** verify under **our** verifier. The digests exist only because the adapter
 computes them, since Codex will never write them.
+
+Drop the `transcript_path` and the same command **denies** instead:
+
+```text
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
+ "permissionDecisionReason":"适配器缺 state 格：task（来源 'task'）"}}
+```
+
+That is the fail-closed half working, not a broken example: a frame missing the cell every
+criterion is judged against is refused rather than filled in with something plausible.
 
 ## Reading the transcript
 
@@ -113,8 +158,14 @@ computes them, since Codex will never write them.
 puts in every hook event — an adapter cannot ask Codex for them, because Codex does not
 keep them.
 
-Two things about that are worth knowing before you rely on it:
+Three things about that are worth knowing before you rely on it:
 
+- **The first user message is not the user's message.** Codex injects a synthetic
+  `<environment_context>` turn (cwd, shell, date, sandbox profile) ahead of the real prompt.
+  Reading the first `role: "user"` row does not fail — it returns a **wrong** `task`, and
+  every frame in `DECISION.md` judges against `task`. The reader skips codex's synthetic
+  turns (`isSyntheticUserText`) and reports the skip in its notes. This was found by running
+  a real session; offline fixtures alone had it looking correct.
 - **It is an internal format.** Codex's own `RolloutLine` says readers "must use
   codex_rollout's canonical parser", which lives inside Codex. So the reader here is
   defensive by design: unknown line types are skipped silently (formats grow), malformed
@@ -122,7 +173,7 @@ Two things about that are worth knowing before you rely on it:
   `undefined` so the decision is **refused** rather than made on a half-empty frame.
   Format drift makes this adapter louder, not quieter.
 - **A transcript has no size bound**, so the reader takes two windows — 64 KB from the head
-  for the first user message, 256 KB from the tail for recent steps — and says so in its
+  for the first real user message, 256 KB from the tail for recent steps — and says so in its
   notes when it does. Reading a whole session into memory to answer one question is the
   unbounded operation this project keeps finding elsewhere.
 
