@@ -316,6 +316,9 @@ const LAYER: Record<string, number> = {
   'claim-lexicon': 0,
   // 确定性覆盖核对：零 import 的纯函数（只吃  与一份文件表）
   'claim-coverage': 0,
+  // 判定层的混淆矩阵 + 区间 + 复合可靠性：零 import、纯函数（只吃一串裁决与金标）。
+  // 和 `claim-outcome` 同层同理 —— 谁都能依赖它，它不依赖谁。
+  'verifier-matrix': 0,
   // `frame-merge` 同它：`mergeConflicts` 跨 L2/L3 共用（决定合并是否合法，
   // L2 的 `decide.ts` 必须查得了），而它对领域一无所知 ——
   // 只收「看了什么 / 故意不看什么」，出「能不能合」。零 import、纯函数。

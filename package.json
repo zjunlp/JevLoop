@@ -27,6 +27,7 @@
     "claim-suite": "node --experimental-strip-types bench/claim-suite.ts",
     "claim-variants": "node --experimental-strip-types bench/claim-variants.ts",
     "claim-placement": "node --experimental-strip-types bench/claim-placement.ts",
+    "claim-confusion": "node --experimental-strip-types bench/confusion.ts",
     "replay": "node --experimental-strip-types scripts/replay.ts",
     "trace": "node --experimental-strip-types scripts/trace.ts",
     "metrics": "node --experimental-strip-types scripts/metrics.ts",
