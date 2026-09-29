@@ -47,6 +47,9 @@ import { LOCAL_TOOLS } from '../src/act-local.ts'
 export interface ReactCall {
   tool: string
   input: string
+  /** 工具回传的原话。**可选**：老调用方不填也不受影响（`bench/compare.ts` 就不看它）。
+   *  加它是为了让「声称 vs 证据」那一层能读到**失败**（结果以「错误：」开头）。 */
+  result?: string
 }
 
 export interface ReactRun {
@@ -190,6 +193,8 @@ export async function runReact(opts: {
       calls.push({ tool: act.action, input: act.input })
       const toolAt = performance.now()
       const observation = await callTool(LOCAL_TOOLS, act.action, act.input, opts.cwd)
+      // ★ 记下工具说了什么 —— 不记的话，ReAct 那一臂的「证据」就是瞎的
+      calls[calls.length - 1]!.result = observation
       toolMs += performance.now() - toolAt
       transcript.push(`Action: ${act.action}(${act.input.split('\n')[0]})\nObservation: ${observation}`)
     }
