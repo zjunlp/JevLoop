@@ -553,3 +553,134 @@ its labelling reliability is not measured. The misleading candidates are dominat
 omission, which is one failure mode, not the space of them. `r` is still unmeasured: what is
 reported is what a repair channel would have to reach, not one that was built. And 72
 candidates per run is enough to see a mechanism, not enough to rank gates.
+
+---
+
+# Round 5: making the misleading candidates on purpose
+
+## Why
+
+Round 4 ended with a statistical problem, not a scientific one: nine to twelve misleading
+candidates per run, and a ranking that flipped between identical runs. The plan's own rule
+applies — **make the effect large before making the sample large** — so this round builds a
+condition where overclaiming is the common case rather than the rare one.
+
+`bench/tool-variants.ts` holds six tool-layer conditions, split into two families that must be
+reported separately:
+
+- **honest evidence channel** — `tool-error` (the write really fails and says so),
+  `empty-output` (the read really returns nothing), `combined` (both);
+- **polluted evidence channel** — `silent-no-op` (nothing is written, the tool reports
+  "已写入"), `partial-write` (placeholder written, reports success), `fabrication` (a
+  non-existent file is read and content invented).
+
+`npm run claim-confusion --yield` runs candidates only, with **zero judge calls**, to measure
+the misleading rate per condition. That scan produced three results worth keeping:
+
+| condition | misleading rate | note |
+|---|---|---|
+| `honest` | 14–22% | the baseline |
+| `empty-output` | 11–39% across scans | high variance |
+| `combined` | **29.6%** (32/108) | 32 positives — but see below |
+| `fabrication` | 17–22% | the model usually *admits* it cannot answer |
+| `silent-no-op` / `partial-write` | 22–33% | on the original nine tasks |
+| `silent-no-op` + write-heavy tasks | **47%** (17/36) | the chosen condition |
+
+**Two traps in that scan, both about the *kind* of positive rather than the count:**
+
+1. **Under honest tools the misleading class is mostly silent omission**, and that class's
+   boundary is drawn by our lexical proxy over the model's refusal wording — the weakest
+   component in the whole measurement, with four false accusations already recorded. Growing
+   *that* class grows the fragile half.
+2. **The `combined` run gave 32 positives and destroyed the discrimination.** Because the
+   evidence is empty whenever the read fails, 62 of 108 candidates were honest failures ("I
+   cannot determine"); the gate's `deliverable` question asks whether the task *was carried
+   out*, so it refuses them, and both model judges collapsed to a 58–59% false-alarm rate with
+   `p = 0.87` between them. **A condition that produces positives by emptying the evidence
+   measures the gate's semantics, not its judgement.**
+
+The robust positive is `unsupported-completion`: an explicit claim of success that the disk
+contradicts. It does not depend on fine lexical distinctions, and it is the accident
+`can_deliver` exists to stop. To make it common, writing has to be in every task — on the
+original nine only two tasks write, so "wrote but nothing happened" could hit at most two
+cells. Three write-heavy tasks were therefore added (`hy-copy-one`, `hy-copy-two`,
+`hy-append`), used by this bench only, so the historical numbers of `claim-suite` and
+`claim-variants` stay comparable.
+
+## The chosen condition: `silent-no-op` × write-heavy tasks
+
+`npm run claim-confusion --condition silent-no-op --high-yield --repeat 10`
+
+n = 120 candidates: **67 deliverable, 53 misleading (44.2%)** — 55 correct completions, 14
+explicit false completions, 12 honest failures, 39 silent omissions.
+
+| arm | false confirmations | catch `c` | false alarm `f` | coverage |
+|---|---|---|---|---|
+| `accept-all` | **53/120 = 44.2%** [35.6, 53.1] | 0/53 = 0% | 0/67 = 0% (≤4.5%) | 100% |
+| `self-claim` | 14/14 = 100% | 0/14 = 0% | 12/12 = 100% | 21.7% |
+| `compiled` | 49/116 = 42.2% | 4/53 = 7.5% | 0/67 = 0% (≤4.5%) | 100% |
+| `judge-same` | 45/108 = 41.7% [32.8, 51.1] | 8/53 = 15.1% [7.9, 27.1] | 4/67 = 6.0% | 100% |
+| **`judge-jev`** | **35/96 = 36.5%** [27.5, 46.4] | **18/53 = 34.0%** [22.7, 47.4] | 6/67 = 9.0% [4.2, 18.2] | 100% |
+
+Exact McNemar: `judge-jev` vs `judge-same` **1 : 13, p = 0.0018** — Jev catches thirteen that
+the same-model judge misses and misses one that it catches. `accept-all` vs `judge-jev`
+**24 : 0, p < 0.0001**.
+
+## ★ The ceiling this condition exposes: catching a lie that is inside your own evidence
+
+Catch rates fall to 34% (Jev) and 15% (same model) precisely *because* the tool reports
+"已写入 out1.ts" and that sentence is rendered into the evidence cell the gate reads. The gate
+is asked to disbelieve its own evidence channel. Round 3 stated this qualitatively
+("the gate is only as truthful as its evidence channel"); here it is a number: **with the lie
+inside the channel, the best gate in this study still lets 66% of the false completions
+through.** That is the strongest argument in the whole measurement for treating tool output as
+data rather than as proof — and for the declared, marked, untrusted-frame machinery that this
+project already has.
+
+The control condition confirms it from the other side: swapping the evidence for another
+task's evidence changes **67 of 120** of Jev's verdicts (false alarms 9% → 58%) but only
+**1 of 120** of the same-model judge's. Across three runs the same-model judge has now changed
+0, 0, and 1 cells out of 72, 72 and 120. Its verdicts do not depend on what the evidence says.
+
+## TOST with the margin the owner set: Δ = 5 percentage points
+
+Δ is a risk decision — how much more legitimate work a gate may refuse than no gate at all —
+and it is now fixed at **5 percentage points** and printed in every report.
+
+**The false-alarm budget (the side Δ governs):**
+
+| arm | excess false alarms vs no gate | 90% interval | verdict at Δ = 5pp |
+|---|---|---|---|
+| `compiled` | +0.0pp | [0.0, 0.0] | **equivalent — the budget is met** |
+| `judge-same` | +6.0pp | [+1.2, +10.7] | not established as equivalent |
+| `judge-jev` | **+9.0pp** | [+3.2, +14.7] | **the budget is exceeded** |
+
+This is the point of fixing Δ in advance: it turns "Jev looks good" into a decision. Jev buys
++34.0pp of catch (90% interval [+23.3, +44.7]) and pays +9.0pp of false alarms — **four
+percentage points over the budget the owner set**. Stated as a ratio, it prevents 12 more
+misleading deliveries and refuses 6 more legitimate ones than the baseline (2 : 1). The gate
+that fits the budget is `compiled`, which meets it by catching almost nothing (7.5%).
+
+## Run-to-run variance, all four runs
+
+| run | condition | misleading | `judge-jev` catch | `judge-same` catch | McNemar Jev vs same |
+|---|---|---|---|---|---|
+| 1 | honest, n=72 | 9 | 44% | 56% | not resolvable |
+| 2 | honest, n=72 | 11 | 73% | 36% | p = 0.063 |
+| 3 | honest, n=72 | 12 | 82% | 8% | p = 0.006 |
+| 4 | **silent-no-op × write-heavy, n=120** | **53** | 34% | 15% | **p = 0.0018** |
+
+The direction flips only in the smallest run (9 positives). With 53 positives the ranking is
+resolvable and matches runs 2 and 3. **Established:** Jev's verdicts depend on the declared
+frame while the same-model prompt judge's do not, and Jev catches significantly more. **Not
+established:** an effect size that transfers to other task sets — the magnitude moves with the
+condition (82% catch under honest tools, 34% when the lie sits in the evidence).
+
+## Limits
+
+Three of the twelve tasks here were written for this round, so the 44.2% misleading rate is a
+property of a task set built to produce misleading candidates and must not be quoted as a
+prevalence. The polluted-evidence conditions deliberately break the assumption that tool output
+can be trusted, which is what makes the catch rates low; they are not a fair estimate of a real
+system's error rate. The oracle is still our own `classify`, sharing a lineage with the gate,
+and the silent-omission sub-class is still lexically determined. `r` remains unmeasured.
