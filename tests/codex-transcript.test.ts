@@ -177,7 +177,7 @@ test('★★ 只有合成块 ⇒ task 是 `undefined`，适配器**拒绝**（�
     assert.equal(t.task, undefined, '★ 合成块不能顶替任务')
 
     const state: HostState = {
-      task: t.task as string, // undefined —— 正是这里要测的
+      task: t.task as unknown as string, // undefined —— 正是这里要测的
       cwd: '/tmp/work',
       tool: 'shell',
       input: 'rm -rf /',

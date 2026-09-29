@@ -155,7 +155,7 @@ export const HAND_GATE_DILIGENT: HandGate = {
  */
 export function dependencyCoverage(
   gate: HandGate,
-  coverage: Coverage,
+  _coverage: Coverage,
 ): { covered: string[]; uncovered: string[]; ratio: string } {
   const covered = gate.dependsOn.filter((c) => gate.guards.includes(c))
   const uncovered = gate.dependsOn.filter((c) => !gate.guards.includes(c))

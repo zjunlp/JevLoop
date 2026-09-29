@@ -40,13 +40,13 @@ import { tmpdir } from 'node:os'
 
 import { TASKS, type BenchTask } from './tasks.ts'
 import { runReact } from './react.ts'
-import { LOCAL_TOOLS } from '../src/act-local.ts'
 import { LocalLlmProvider } from '../src/provider-local.ts'
 import { runAgent } from '../src/agent.ts'
 import { resolveGenerator } from '../src/backends.ts'
 import { Decider } from '../src/decide.ts'
 import { Meter } from '../src/meter.ts'
-import { claimOf, classify, evidenceOf, tally, OUTCOME_LABEL, type Outcome, type Step } from '../src/claim-outcome.ts'
+import { claimOf, classify, evidenceOf, tally, type Outcome, type Step } from '../src/claim-outcome.ts'
+import type { DecideRequest } from '../src/seam-provider.ts'
 
 const B = (s: string) => `\x1b[1m${s}\x1b[0m`
 const D = (s: string) => `\x1b[2m${s}\x1b[0m`
@@ -98,7 +98,7 @@ const mkCompiled = () => {
   const noul = (v: number) => ({ type: 'noul' as const, noul: v })
   return {
     name: 'compiled',
-    decide: async (req: { questions: Record<string, { type: string; criteria?: Record<string, string> }> }) => {
+    decide: async (req: DecideRequest) => {
       const answers: Record<string, unknown> = {}
       let sawDone = false
       for (const [id, q] of Object.entries(req.questions)) {

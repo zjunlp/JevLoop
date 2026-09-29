@@ -46,7 +46,10 @@ import { runAgent } from '../src/agent.ts'
 import { resolveGenerator } from '../src/backends.ts'
 import { Decider } from '../src/decide.ts'
 import { Meter } from '../src/meter.ts'
-import { claimOf, classify, evidenceOf, tally, OUTCOME_LABEL, type Outcome, type Step } from '../src/claim-outcome.ts'
+import { claimOf, classify, evidenceOf, tally, type Outcome, type Step } from '../src/claim-outcome.ts'
+import type { DecideRequest } from '../src/seam-provider.ts'
+import type { Provider } from '../src/seam-provider.ts'
+import type { AnswerSet } from '../src/vocab.ts'
 
 const B = (s: string) => `\x1b[1m${s}\x1b[0m`
 const D = (s: string) => `\x1b[2m${s}\x1b[0m`
@@ -84,7 +87,7 @@ const noul = (v: number) => ({ type: 'noul' as const, noul: v })
  * 所以把 `can_deliver`（问题里有 `deliverable` / `unsupported`）单独路由给模型，
  * 其余判定维持脚本化 —— 于是**唯一变的就是那道闸门**。
  */
-const mkMixed = () => {
+const mkMixed = (): Provider => {
   const local = new LocalLlmProvider()
   const scripted = mkForceAction()
   return {
@@ -98,7 +101,7 @@ const mkMixed = () => {
 
 /** ★ 必须**每个格子造一个** —— 第一版建在模块级，步数计数器被 8 个格子共用，
  *  于是第一个格子跑完之后，其余格子第一步就收工，变体全都没被触发。 */
-const mkForceAction = () => {
+const mkForceAction = (): Provider => {
   /**
    * `is_done` 被问过几次。
    *
@@ -110,8 +113,8 @@ const mkForceAction = () => {
   let rounds = 0
   return {
   name: 'force-action',
-  decide: async (req: { questions: Record<string, { type: string; criteria?: Record<string, string> }> }) => {
-    const answers: Record<string, unknown> = {}
+  decide: async (req: DecideRequest) => {
+    const answers: AnswerSet = {}
     let sawDone = false
     for (const [id, q] of Object.entries(req.questions)) {
       if (id === 'needs_auth') answers[id] = noul(0.1)

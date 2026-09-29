@@ -38,6 +38,7 @@ import { runAgent } from '../src/agent.ts'
 import { Decider } from '../src/decide.ts'
 import { Meter } from '../src/meter.ts'
 import type { Answer, AnswerSet } from '../src/vocab.ts'
+import type { DecideRequest } from '../src/seam-provider.ts'
 
 /**
  * 一张**不碰文件系统**的表：只有纯字符串运算。
@@ -130,7 +131,7 @@ test('★★★ 内核可以换掉整个工具表：给一个不存在的 cwd，
   let step = 0
   const provider = {
     name: 'scripted',
-    decide: async (req: { questions: Record<string, { type: string; criteria?: Record<string, string> }> }) => {
+    decide: async (req: DecideRequest) => {
       const answers: AnswerSet = {}
       for (const [id, q] of Object.entries(req.questions)) {
         if (q.type === 'noul') answers[id] = { type: 'noul', noul: id === 'needs_auth' ? 0.1 : 0.95 } as Answer
@@ -187,7 +188,7 @@ test('★★ 注入的工具表**替换**了 locals：默认那份一条都不�
     decider: new Decider({
       provider: {
         name: 'only-list',
-        decide: async (req: { questions: Record<string, { type: string; criteria?: Record<string, string> }> }) => {
+        decide: async (req: DecideRequest) => {
           const answers: AnswerSet = {}
           for (const [id, q] of Object.entries(req.questions)) {
             if (q.type === 'noul') answers[id] = { type: 'noul', noul: id === 'needs_auth' ? 0.1 : 0.95 } as Answer

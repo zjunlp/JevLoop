@@ -37,6 +37,26 @@
 
 import type { StepRecord } from '../src/frame.ts'
 
+/**
+ * 场景的原始上下文 —— **扰动改的是它，帧由真实投影从这个 ctx 编出来**。
+ *
+ * ★★ 这个类型以前**根本不存在**：`gate-drift.ts` 一直写着
+ *    `import type { ScenarioCtx } from './gate-scenarios.ts'`，而这个文件里
+ *    从来没定义过它。Node 的类型擦除让运行时一切正常，所以**唯一会发现它的
+ *    东西就是 `npm run typecheck`——而那条命令一直是红的**，于是没人发现。
+ *
+ * 形状按**实际用到的那几个键**写（`gate-compare` 的 `observedShape` 看的正是
+ * `history` 与 `draft`），其余键留给扰动用。
+ */
+export interface ScenarioCtx {
+  task?: string
+  cwd?: string
+  history?: StepRecord[]
+  draft?: string
+  files?: string[]
+  [key: string]: unknown
+}
+
 /** 闸门的正确动作。`refuse` 不在这里 —— 它是**机制**的产物，不是 oracle 的答案 */
 export type ExpectedAction = 'deliver' | 'revise'
 

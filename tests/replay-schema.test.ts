@@ -35,12 +35,13 @@ import { Meter } from '../src/meter.ts'
 import { frameDigest, requestDigest } from '../src/frame-digest.ts'
 import type { AgentEvent } from '../src/events.ts'
 import type { Answer, AnswerSet } from '../src/vocab.ts'
+import type { DecideRequest } from '../src/seam-provider.ts'
 
 /** 一个让 loop 正常往下走的判定后端 */
 function scripted() {
   return {
     name: 'scripted',
-    decide: async (req: { questions: Record<string, { type: string; criteria?: unknown }> }) => {
+    decide: async (req: DecideRequest) => {
       const answers: AnswerSet = {}
       for (const [id, q] of Object.entries(req.questions)) {
         const no = ['needs_auth', 'unsupported', 'done'].includes(id)

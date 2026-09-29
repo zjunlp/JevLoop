@@ -38,6 +38,7 @@ import { runAgent } from '../src/agent.ts'
 import { Decider } from '../src/decide.ts'
 import { Meter } from '../src/meter.ts'
 import type { Answer, AnswerSet } from '../src/vocab.ts'
+import type { DecideRequest } from '../src/seam-provider.ts'
 
 // ═══════════════════════════════════════════════════════════
 // ① 完整性
@@ -121,7 +122,7 @@ test('只有 deliver 声明「之后没有模型调用」', () => {
 function scripted(over: Record<string, number | string> = {}) {
   return {
     name: 'scripted',
-    decide: async (req: { questions: Record<string, { type: string; criteria?: unknown }> }) => {
+    decide: async (req: DecideRequest) => {
       const pick = (id: string): number | string | undefined => over[id]
       const answers: AnswerSet = {}
       for (const [id, q] of Object.entries(req.questions)) {
@@ -233,7 +234,7 @@ test('★ escalate：判不出来就停 —— 而且停的是工具循环，生
     const decider = new Decider({
       provider: {
         name: 'low-confidence',
-        decide: async (req: { questions: Record<string, { type: string; criteria?: unknown }> }) => {
+        decide: async (req: DecideRequest) => {
           const answers: AnswerSet = {}
           for (const [id, q] of Object.entries(req.questions)) {
             if (q.type === 'noul') {

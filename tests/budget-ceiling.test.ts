@@ -26,6 +26,7 @@ import { runAgent } from '../src/agent.ts'
 import { Decider } from '../src/decide.ts'
 import { Meter } from '../src/meter.ts'
 import type { Answer, AnswerSet } from '../src/vocab.ts'
+import type { DecideRequest } from '../src/seam-provider.ts'
 
 async function withTmp<T>(fn: (cwd: string) => Promise<T>): Promise<T> {
   const cwd = await mkdtemp(join(tmpdir(), 'jevloop-budget-'))
@@ -40,7 +41,7 @@ async function withTmp<T>(fn: (cwd: string) => Promise<T>): Promise<T> {
 function keepsGoing(): { name: string; decide: (req: any) => Promise<any> } {
   return {
     name: 'keeps-going',
-    decide: async (req: { questions: Record<string, { type: string; criteria?: unknown }> }) => {
+    decide: async (req: DecideRequest) => {
       const answers: AnswerSet = {}
       for (const [id, q] of Object.entries(req.questions)) {
         if (q.type === 'noul') {

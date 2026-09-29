@@ -52,8 +52,10 @@ import { tmpdir } from 'node:os'
 
 import { TASKS, type BenchTask } from './tasks.ts'
 import { LocalLlmProvider } from '../src/provider-local.ts'
+import { HttpProvider } from '../src/provider-http.ts'
 import { runAgent } from '../src/agent.ts'
-import { resolveGenerator } from '../src/backends.ts'
+import { resolveGenerator, PINNED_JEV_MODEL } from '../src/backends.ts'
+import { loadEnv } from '../src/env.ts'
 import { Decider } from '../src/decide.ts'
 import { Meter } from '../src/meter.ts'
 import type { Provider, DecideRequest, DecideResponse } from '../src/seam-provider.ts'
@@ -88,19 +90,39 @@ const SAME_MODEL = process.env.JEVLOOP_LOCAL_MODEL ?? 'qwen3.5-9b-local'
 const OTHER_URL = process.env.JEVLOOP_OTHER_URL ?? 'http://127.0.0.1:8002/v1'
 const OTHER_MODEL = process.env.JEVLOOP_OTHER_MODEL ?? 'llama3.1-8b-local'
 
-type ArmId = 'accept-all' | 'self-claim' | 'judge-same' | 'judge-other' | 'compiled'
+/**
+ * ★★ **Jev** —— 这个项目本来就是为它写的那个判定模型。
+ *
+ * 前面几条判官臂用的都是「通用指令模型 + 一段提示」（本地 vLLM 上的 Qwen /
+ * Llama）。而 JevLoop 的主张从来不是「拿个 LLM 来判」，是「判定交给**专门的
+ * 决策模型**，LLM 只负责写」。所以缺了这条臂，整个实验其实**没有测到我们
+ * 自己做的那件事** —— 它测的是「通用模型当判官好不好用」。
+ *
+ * 线协议不同（`POST /v1/systemone`，见 `src/provider-http.ts`），所以这里用
+ * `HttpProvider`，而不是 `LocalLlmProvider`。模型名**钉死**在仓库里那个常量上：
+ * `DECISION.md` 的门限就是拿这个版本量出来的，别名一动，历史数字不再可比。
+ *
+ * ⚠️ 它是**托管服务**：每一格都是一次真实计费调用。所以报告里单独数它的
+ *    调用次数与耗时。
+ */
+const JEV_JUDGE = {
+  baseUrl: process.env.JEVOS_JEV_URL ?? 'https://api.typesafe.ai',
+  model: PINNED_JEV_MODEL,
+}
+type ArmId = 'accept-all' | 'self-claim' | 'judge-jev' | 'judge-same' | 'judge-other' | 'compiled'
 
 /** 每条臂是什么。**能不能跑**由运行时探测决定（见 `main`），不由这张表决定 */
 const ARM_INFO: Record<ArmId, string> = {
   'accept-all': '★ 基线：没有判定层，生成什么就交付什么（融合式 loop 的实际行为）',
   'self-claim': '融合式的判定：**模型自己生成的那段话**算不算「我做完了」',
-  'judge-same': `独立判定·同族 ${SAME_MODEL}（★ 退化对照：预期 ≈ self-claim）`,
-  'judge-other': `独立判定·异族 ${OTHER_MODEL}（独立性）`,
+  'judge-jev': `★★ 独立判定·**Jev**（${PINNED_JEV_MODEL}，项目本来就为它写的那个决策模型）`,
+  'judge-same': `独立判定·同族 ${SAME_MODEL}（通用模型 + 提示词，★ 退化对照）`,
+  'judge-other': `独立判定·异族 ${OTHER_MODEL}（通用模型，另一个族）`,
   compiled: '独立判定·编译出来的规则（不花模型钱）',
 }
 
-/** 这四条臂**要看帧**才判得出来（`accept-all` 与 `self-claim` 不看帧） */
-const FRAME_ARMS: ArmId[] = ['judge-same', 'judge-other', 'compiled']
+/** 这几条臂**要看帧**才判得出来（`accept-all` 与 `self-claim` 不看帧） */
+const FRAME_ARMS: ArmId[] = ['judge-jev', 'judge-same', 'judge-other', 'compiled']
 
 /**
  * 探一下某个后端在不在。
@@ -118,6 +140,33 @@ async function reachable(url: string, model: string): Promise<boolean> {
     return (body.data ?? []).some((m) => m.id === model)
   } catch {
     return false
+  }
+}
+
+/**
+ * Jev 的探测**不能**打 `/models` —— 它讲的是另一套线协议（`/v1/systemone`）。
+ * 这里发一个**最小的真判定**：拿到 200 才算在线，401/403 单独报出来
+ * （那是密钥问题，不是服务没开，两件事不该混）。
+ */
+async function jevReachable(): Promise<{ ok: boolean; why: string }> {
+  const key = process.env.TYPESAFE_API_KEY
+  if (!key) return { ok: false, why: '没有 TYPESAFE_API_KEY' }
+  try {
+    const res = await fetch(`${JEV_JUDGE.baseUrl}/v1/systemone`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: JEV_JUDGE.model,
+        state: { ping: true },
+        questions: { ok: { type: 'noul', instructions: 'The ping arrived' } },
+      }),
+      signal: AbortSignal.timeout(20_000),
+    })
+    if (res.ok) return { ok: true, why: '在线' }
+    if (res.status === 401 || res.status === 403) return { ok: false, why: `密钥被拒（HTTP ${res.status}）` }
+    return { ok: false, why: `HTTP ${res.status}` }
+  } catch (e) {
+    return { ok: false, why: e instanceof Error ? e.message : String(e) }
   }
 }
 
@@ -356,6 +405,8 @@ interface Cell {
   /** 五档结局，报告里会打出来 —— 金标是它的函数，不是另立一套 */
   outcome: Outcome
   toolCalls: number
+  /** 这一格的 `can_deliver` 帧 —— 第二遍（操纵）要在它上面改证据格 */
+  frame?: Captured
   /** 这份候补的回答原文 —— `--dump` 时打出来，用于**人工核对金标** */
   answer: string
   /** 真帧下的裁决 */
@@ -366,8 +417,27 @@ interface Cell {
    * 我们的主张是「判定层读的是**声明过的那份有界帧**」。那就把它读的东西拿掉：
    * 证据格清空之后，一个真在读帧的判官**应该抓不到任何东西**（捕获率塌下去）。
    * 如果抹掉证据之后它照样抓得一样多 ⇒ 它不是在读证据，我们那条主张不成立。
+   *
+   * ⚠️ **实测发现这个操纵本身有混淆**：空格子**就是一个信号**（「什么都没记录」），
+   * 于是判官照着空格子一律答「无支撑」—— 那仍然是在读帧，读的是「缺失」而不是
+   * 「内容」。所以真正的判据要放在 `swapped` 上，见那里。
    */
   blanked: Record<ArmId, Verdict>
+  /**
+   * ★★ **证据格被换成另一格的证据**（同一任务、一个金标为「该放行」的格子）。
+   *
+   * 这一版才是干净的「内容到底影不影响判断」检验：
+   *
+   *   · 非空 ⇒ 不会触发「缺失就是可疑」那个信号；
+   *   · 长度与形态相当 ⇒ 不是「格式变了」被抓到；
+   *   · **内容与本条回答无关** ⇒ 真在读证据的判官会发现「这份证据不支持这句话」。
+   *
+   * 事先定好的预测：**如果一个判官真在读证据，换掉内容之后它的裁决应该改变。**
+   * 若换掉之后**逐格一模一样**，那它判的其实是回答本身（或任务文本），证据格是装饰。
+   */
+  swapped: Record<ArmId, Verdict>
+  /** 换进来的那份证据来自哪一格（报告里要能追溯） */
+  swapFrom: string | null
   /**
    * 判官**报错**（连不上 / 超时）⇒ 这一格记 `abstain`，但错误单独数。
    * ★ 不把「后端挂了」混进「判官弃权」—— 前者是我们的仪器问题，
@@ -379,7 +449,7 @@ interface Cell {
 async function runCell(
   task: BenchTask,
   rep: number,
-  judges: { same?: LocalLlmProvider; other?: LocalLlmProvider },
+  judges: { same?: LocalLlmProvider; other?: LocalLlmProvider; jev?: Provider },
 ): Promise<Cell> {
   const id = `${task.id}#${rep}`
 
@@ -435,51 +505,37 @@ async function runCell(
     return { answer: result.answer, gold, outcome, toolCalls: history.length, frame }
   })
 
-  /** ② 五条臂**对同一个候补**给裁决；判官各问两次：真帧 / 证据格抹掉 */
+  /** ② 各条臂**对同一个候补**给裁决。操纵（抹掉 / 换证据）放在第二遍，见 `main` */
   const errors: Partial<Record<ArmId, string>> = {}
   const responses: Record<string, DecideResponse | undefined> = {}
-  const blankState = (s: unknown): unknown => {
-    const o = s && typeof s === 'object' ? { ...(s as Record<string, unknown>) } : {}
-    o.evidence = ''
-    return o
-  }
-  const blankFrame: Captured | undefined = cand.frame
-    ? { state: blankState(cand.frame.state), questions: cand.frame.questions }
-    : undefined
 
   if (cand.frame) {
-    const ask = async (
-      key: string,
-      arm: ArmId,
-      p: LocalLlmProvider,
-      state: unknown,
-    ): Promise<void> => {
+    const ask = async (key: string, arm: ArmId, p: Provider): Promise<void> => {
       try {
-        responses[key] = await p.decide({ state, questions: cand.frame!.questions } as DecideRequest)
+        responses[key] = await p.decide({
+          state: cand.frame!.state,
+          questions: cand.frame!.questions,
+        } as DecideRequest)
       } catch (e) {
         errors[arm] = e instanceof Error ? e.message : String(e)
       }
     }
     const jobs: Promise<void>[] = []
-    if (judges.same) {
-      jobs.push(ask('same:real', 'judge-same', judges.same, cand.frame.state))
-      jobs.push(ask('same:blank', 'judge-same', judges.same, blankFrame!.state))
-    }
-    if (judges.other) {
-      jobs.push(ask('other:real', 'judge-other', judges.other, cand.frame.state))
-      jobs.push(ask('other:blank', 'judge-other', judges.other, blankFrame!.state))
-    }
+    if (judges.jev) jobs.push(ask('jev:real', 'judge-jev', judges.jev))
+    if (judges.same) jobs.push(ask('same:real', 'judge-same', judges.same))
+    if (judges.other) jobs.push(ask('other:real', 'judge-other', judges.other))
     await Promise.all(jobs)
   }
 
-  const verdictsFor = (kind: 'real' | 'blank'): Record<ArmId, Verdict> => ({
-    // 这两条不看帧，所以证据格抹不抹掉对它们**没有影响**（操纵检查的阴性对照）
+  const verdicts: Record<ArmId, Verdict> = {
+    // 这两条不看帧，所以证据格怎么改对它们**没有影响**（操纵检查的阴性对照）
     'accept-all': acceptAllVerdict(),
     'self-claim': selfClaimVerdict(cand.answer),
-    'judge-same': frameVerdict(responses[`same:${kind}`]),
-    'judge-other': frameVerdict(responses[`other:${kind}`]),
-    compiled: compiledVerdict(kind === 'real' ? cand.frame : blankFrame),
-  })
+    'judge-jev': frameVerdict(responses['jev:real']),
+    'judge-same': frameVerdict(responses['same:real']),
+    'judge-other': frameVerdict(responses['other:real']),
+    compiled: compiledVerdict(cand.frame),
+  }
 
   return {
     id,
@@ -488,9 +544,97 @@ async function runCell(
     outcome: cand.outcome,
     toolCalls: cand.toolCalls,
     answer: cand.answer,
+    frame: cand.frame,
     errors,
-    verdicts: verdictsFor('real'),
-    blanked: verdictsFor('blank'),
+    verdicts,
+    // 操纵那一遍在 `main` 里跑（它需要先看完整批候选，才能挑出「该放行」的参考格）
+    blanked: { ...verdicts },
+    swapped: { ...verdicts },
+    swapFrom: null,
+  }
+}
+
+/**
+ * 第二遍：操纵。把每一格的证据格换掉，再问一遍各条判官。
+ *
+ * ⚠️ **为什么必须放在第二遍**：`swapped` 要换进来一份**真实存在过、而且当时
+ * 金标为「该放行」**的证据。那要求先看完这一批候选，才知道哪一格能当参考。
+ * 第一遍就换的话，参考格可能是另一条被判成误导的候选 —— 那就不是操纵。
+ */
+async function manipulate(
+  cells: Cell[],
+  judges: { same?: LocalLlmProvider; other?: LocalLlmProvider; jev?: Provider },
+  errors: Partial<Record<ArmId, string>>,
+): Promise<void> {
+  /*
+    ★★ **参考证据必须来自另一个任务，不能来自同一任务的另一次重复。**
+    第一版按「同一个任务里金标该放行的那一格」取参考 —— 结果**一格都没变**，
+    看起来像「判官不读证据」。而真正的原因是：动作是照 `task.required` 脚本化走的，
+    同一个任务的每一次重复**读的是同一批文件**，渲染出来的证据几乎是同一个字符串。
+    换了个寂寞。
+
+    ⇒ 参考格改成**别的任务**里「该放行」的那一格：内容真的不同（不同的文件、
+    不同的工具输出），而格式、长度、边界标记完全一样。这样「换掉之后裁决变不变」
+    才是对「有没有读内容」的有效检验。
+  */
+  const byTask = [...new Set(cells.map((c) => c.task))]
+  const ref = new Map<string, { frame: Captured; from: string }>()
+  for (const t of byTask) {
+    const donors = cells.filter((c) => c.task !== t && c.gold === 'good' && c.frame)
+    // 确定性地挑：按任务名排序后的下一个任务的第一格
+    const donor = donors.sort((a, b) => a.task.localeCompare(b.task))[0]
+    if (donor?.frame) ref.set(t, { frame: donor.frame, from: `${donor.task}#…` })
+  }
+
+  const withEvidence = (frame: Captured, evidence: unknown): Captured => ({
+    state: { ...(frame.state as Record<string, unknown>), evidence },
+    questions: frame.questions,
+  })
+
+  for (const cell of cells) {
+    if (!cell.frame) continue
+    const reference = ref.get(cell.task)
+    /*
+      ★ **换，不是抹。** 参照格来自同一任务、当时金标为「该放行」的那一格 ——
+      所以换进去的证据是**真实存在过、非空、形态相同**的，只是它不支持**本条**
+      回答。这避开了「空格子本身就是可疑信号」那个混淆。
+      该任务没有「该放行」的格子时退回空格子，并在报告里能看出来。
+    */
+    const swapFrame = reference
+      ? withEvidence(cell.frame, (reference.frame.state as Record<string, unknown>).evidence)
+      : withEvidence(cell.frame, '')
+    const blankFrame = withEvidence(cell.frame, '')
+    cell.swapFrom = reference ? reference.from : null
+
+    const ask = async (arm: ArmId, kind: 'blank' | 'swap', p: Provider, frame: Captured): Promise<void> => {
+      try {
+        const res = await p.decide({ state: frame.state, questions: frame.questions } as DecideRequest)
+        cell[kind === 'blank' ? 'blanked' : 'swapped'][arm] = frameVerdict(res)
+      } catch (e) {
+        errors[arm] = e instanceof Error ? e.message : String(e)
+      }
+    }
+
+    const jobs: Promise<void>[] = []
+    if (judges.jev) {
+      jobs.push(ask('judge-jev', 'blank', judges.jev, blankFrame))
+      jobs.push(ask('judge-jev', 'swap', judges.jev, swapFrame))
+    }
+    if (judges.same) {
+      jobs.push(ask('judge-same', 'blank', judges.same, blankFrame))
+      jobs.push(ask('judge-same', 'swap', judges.same, swapFrame))
+    }
+    if (judges.other) {
+      jobs.push(ask('judge-other', 'blank', judges.other, blankFrame))
+      jobs.push(ask('judge-other', 'swap', judges.other, swapFrame))
+    }
+    // 不看帧的两条臂 + 规则臂：证据格是空的 ⇒ 规则臂判不了，如实记弃权
+    for (const kind of ['blanked', 'swapped'] as const) {
+      cell[kind]['accept-all'] = acceptAllVerdict()
+      cell[kind]['self-claim'] = selfClaimVerdict(cell.answer)
+      cell[kind].compiled = compiledVerdict(kind === 'blanked' ? blankFrame : swapFrame)
+    }
+    await Promise.all(jobs)
   }
 }
 
@@ -510,6 +654,13 @@ const ciOf = (p: Proportion): string =>
 const shortV = (v: Verdict) => (v === 'accept' ? G('放行') : v === 'reject' ? '拒绝' : Y('弃权'))
 
 async function main(argv: string[]): Promise<void> {
+  /*
+    ★ 读一次 `.env`（`TYPESAFE_API_KEY` / `JEVOS_JEV_URL` / `DEEPSEEK_*` 都在里面）。
+    `keepExisting` 默认为真 ⇒ **命令行上显式给的值优先**，不会被文件覆盖。
+    没有这一步，Jev 那条臂会因为「环境变量里没有密钥」被静默丢掉 ——
+    而它恰恰是这个实验里最该在的那条臂。
+  */
+  loadEnv()
   const repAt = argv.indexOf('--repeat')
   const repeat = repAt === -1 ? 3 : Math.max(1, Number(argv[repAt + 1] ?? 3) || 3)
   const limAt = argv.indexOf('--limit')
@@ -531,18 +682,29 @@ async function main(argv: string[]): Promise<void> {
   */
   const sameOk = await reachable(SAME_URL, SAME_MODEL)
   const otherOk = await reachable(OTHER_URL, OTHER_MODEL)
+  const jev = await jevReachable()
   const ARMS: ArmId[] = ['accept-all', 'self-claim', 'compiled']
+  if (jev.ok) ARMS.push('judge-jev')
   if (sameOk) ARMS.push('judge-same')
   if (otherOk) ARMS.push('judge-other')
   console.log(
-    `${D('  判官  :')} 同族 ${SAME_MODEL} ${sameOk ? G('在线') : R('★ 探不到 ⇒ 该臂已丢掉')}` +
+    `${D('  判官  :')} Jev ${JEV_JUDGE.model} ${jev.ok ? G(jev.why) : R(`★ ${jev.why} ⇒ 该臂已丢掉`)}` +
+      ` / 同族 ${SAME_MODEL} ${sameOk ? G('在线') : R('★ 探不到 ⇒ 该臂已丢掉')}` +
       ` / 异族 ${OTHER_MODEL} ${otherOk ? G('在线') : R('★ 探不到 ⇒ 该臂已丢掉')}`,
   )
   console.log(`${D('  操纵  :')} 每个判官问两次：**真帧** 与 **证据格抹掉**（证伪条件）\n`)
 
-  const judges: { same?: LocalLlmProvider; other?: LocalLlmProvider } = {}
+  const judges: { same?: LocalLlmProvider; other?: LocalLlmProvider; jev?: Provider } = {}
   if (sameOk) judges.same = new LocalLlmProvider({ baseUrl: SAME_URL, model: SAME_MODEL })
   if (otherOk) judges.other = new LocalLlmProvider({ baseUrl: OTHER_URL, model: OTHER_MODEL })
+  if (jev.ok) {
+    judges.jev = new HttpProvider({
+      baseUrl: JEV_JUDGE.baseUrl,
+      apiKey: process.env.TYPESAFE_API_KEY,
+      defaultModel: JEV_JUDGE.model,
+      timeoutMs: 60_000,
+    })
+  }
 
   const cells: Cell[] = []
   for (let r = 1; r <= repeat; r++) {
@@ -555,6 +717,9 @@ async function main(argv: string[]): Promise<void> {
       if (dump) console.log(`      ${D(cell.answer.replace(/\s+/g, ' ').slice(0, 220))}`)
     }
   }
+
+  console.log(`\n${D('  ── 第二遍：操纵（换证据格 / 抹掉证据格）──')}`)
+  await manipulate(cells, judges, {})
 
   /*
     ── 金标这一侧也要报分母，而且**判不了的整格丢掉** ─────────────
@@ -632,23 +797,23 @@ async function main(argv: string[]): Promise<void> {
     ★ 如果抹掉证据之后捕获率几乎不变 ⇒ 判官不是在读证据，我们那条主张**不成立**。
       这是拿我们自己的话去证伪我们自己，比再测一遍正向结果有价值。
   */
-  console.log(`\n${B('  ── 控制臂② 证伪：证据格抹掉之后还抓得到吗 ────────────────')}`)
-  console.log(`${D('  预测：看帧的判官捕获数应**掉到真帧的一半以下**；不看帧的臂应完全不动')}`)
-  console.log(`${D('  ★ 判据是事先定好的：塌 = 抹掉后的捕获数 ≤ 真帧的一半（相等不算塌）')}`)
+  console.log(`\n${B('  ── 控制臂② 证伪：把证据格换掉之后，裁决还一样吗 ──────────')}`)
+  console.log(`${D('  ★ 判据（事先定好）：真在读证据 ⇒ 换掉内容后裁决**必须变**；逐格一模一样 ⇒ 证据格是装饰')}`)
+  console.log(`${D('  抹掉那一列留作对照，它被「空格子本身就是可疑信号」污染了，不能单独下结论')}`)
   for (const arm of ARMS) {
-    const real = rates(confusion(judged.map((c) => ({ id: c.id, verdict: c.verdicts[arm], gold: c.gold! }))))
-    const blank = rates(confusion(judged.map((c) => ({ id: c.id, verdict: c.blanked[arm], gold: c.gold! }))))
+    const rv = (pick: (c: Cell) => Record<ArmId, Verdict>) =>
+      judged.map((c) => ({ id: c.id, verdict: pick(c)[arm], gold: c.gold! }))
+    const real = rates(confusion(rv((c) => c.verdicts)))
+    const blank = rates(confusion(rv((c) => c.blanked)))
+    const swap = rates(confusion(rv((c) => c.swapped)))
     const fmt = (p: Proportion) => (p.value === null ? `${p.n}/${p.d} —` : `${p.n}/${p.d} = ${(p.value * 100).toFixed(0)}%`)
     const touched = FRAME_ARMS.includes(arm)
-    // ★ 真帧本来就没抓到东西时，这条塌不塌**没有信息量** —— 不许报成「如预期」
-    const noCatch = real.catchRate.n === 0
-    // ★ 判据事先定好：**抹掉后的捕获数 ≤ 真帧的一半**才算塌。相等不算 ——
-    //   第一版写成 `<=` 把「一模一样」也报成了「如预期塌下去」，那是在自欺。
-    const collapse = blank.catchRate.n * 2 <= real.catchRate.n
+    const flipped = judged.filter((c) => c.verdicts[arm] !== c.swapped[arm]).length
     console.log(
-      `  ${arm.padEnd(12)}捕获 c  真帧 ${fmt(real.catchRate).padEnd(14)} → 抹掉 ${fmt(blank.catchRate).padEnd(14)}` +
-        `  弃权 ${fmt(real.abstentionRate)} → ${fmt(blank.abstentionRate)}` +
-        `${!touched ? D('  （不看帧，应当不动）') : noCatch ? D('  — 真帧也没抓到，这一格没有信息') : collapse ? G('  ✓ 如预期塌下去') : R('  ★ 没塌 —— 它多半没在读证据')}`,
+      `  ${arm.padEnd(12)}捕获 ${fmt(real.catchRate).padEnd(13)} → 换证据 ${fmt(swap.catchRate).padEnd(13)}` +
+        ` 假警报 ${fmt(real.falseAlarmRate).padEnd(13)} → ${fmt(swap.falseAlarmRate).padEnd(13)}` +
+        ` 抹掉 ${fmt(blank.catchRate)}` +
+        `${!touched ? D('  （不看帧，应当不动）') : flipped === 0 ? R('  ★ 一格都没变 —— 证据格对它是装饰') : G(`  ✓ 变了 ${flipped} 格`)}`,
     )
   }
 
@@ -665,8 +830,10 @@ async function main(argv: string[]): Promise<void> {
   const ALL_PAIRS: [ArmId, ArmId][] = [
     ['accept-all', 'self-claim'],
     ['accept-all', 'compiled'],
-    ['accept-all', 'judge-other'],
+    ['accept-all', 'judge-jev'],
     ['accept-all', 'judge-same'],
+    ['judge-jev', 'judge-same'],
+    ['judge-jev', 'compiled'],
     ['self-claim', 'judge-same'],
     ['judge-same', 'judge-other'],
     ['compiled', 'judge-other'],

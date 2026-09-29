@@ -19,6 +19,7 @@ import { validate, clip, estimateTokens } from '../src/budget.ts'
 import { defineDecision, isDecision } from '../src/vocab-decision.ts'
 import { noul, choice } from '../src/vocab.ts'
 import type { AnswerSet } from '../src/vocab.ts'
+import type { DecideRequest } from '../src/seam-provider.ts'
 
 const ans = (o: Record<string, unknown>): AnswerSet => o as AnswerSet
 
@@ -288,7 +289,7 @@ test('N2: revise 必须真的重新生成一次，且只重试一次', async () 
   // 判定器：canDeliver 永远说 revise，逼出重试路径
   const alwaysRevise = {
     name: 'always-revise',
-    decide: async (req: { questions: Record<string, unknown> }) => {
+    decide: async (req: DecideRequest) => {
       const answers: Record<string, unknown> = {}
       for (const [id, q] of Object.entries(req.questions)) {
         const t = (q as { type: string }).type
@@ -341,7 +342,7 @@ test('N3: 工具参数是判定 —— 「读取全部文件」必须能读到�
   // 一个专门读「全部」文件的判定器：只要有没读过的就继续读
   const readEverything = {
     name: 'read-everything',
-    decide: async (req: { state: unknown; questions: Record<string, { type: string; criteria?: unknown }> }) => {
+    decide: async (req: DecideRequest) => {
       const s = req.state as {
         files_known?: string[]
         already_read?: string[]
@@ -496,7 +497,7 @@ test('R1: 没有内容来源时，目标文件的内容一个字节都不变', a
     // 最坏情况的调用方：只要 write_file 在候选里就一定选它
     const insistWrite = {
       name: 'insist-write',
-      decide: async (req: { questions: Record<string, { type: string; criteria?: unknown }> }) => {
+      decide: async (req: DecideRequest) => {
         const answers: Record<string, unknown> = {}
         for (const [id, q] of Object.entries(req.questions)) {
           const crit = Object.keys((q.criteria ?? {}) as Record<string, string>)
@@ -564,7 +565,7 @@ test('★ 缺省会用生成器现造输入 —— 而且能建一个**还不存
     // 只要 write_file 在候选里就选它 —— 和 R1 同一个最坏调用方
     const insistWrite = {
       name: 'insist-write',
-      decide: async (req: { questions: Record<string, { type: string; criteria?: unknown }> }) => {
+      decide: async (req: DecideRequest) => {
         const answers: Record<string, unknown> = {}
         for (const [id, q] of Object.entries(req.questions)) {
           const crit = Object.keys((q.criteria ?? {}) as Record<string, string>)
@@ -711,7 +712,7 @@ test('E1: `export KEY=VALUE` 要设上 KEY，不能造出一个叫 `export KEY` 
 /** 造一个「只选第一个候选项」的判定器，风险分由参数给 */
 const fakeJudge = (risk: number, opts: { doneAfter?: number } = {}) => ({
   name: 'fake',
-  decide: async (req: { state: unknown; questions: Record<string, { type: string; criteria?: unknown }> }) => {
+  decide: async (req: DecideRequest) => {
     const s = req.state as { files_known?: string[]; already_read?: string[]; already_done?: string[] | string }
     const answers: Record<string, unknown> = {}
     for (const [id, q] of Object.entries(req.questions)) {

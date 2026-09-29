@@ -58,7 +58,8 @@ function frameWitness(ctx: ScenarioCtx): string {
   try {
     const f = artifact(ctx as AgentCtx)
     const t = (v: unknown) => (Array.isArray(v) ? `数组(${v.length})` : typeof v)
-    return `answer=${t(f.state.answer)} evidence=${t(f.state.evidence)} unfilled=[${f.unfilled.map((u) => u.key).join(',')}] absent=[${f.absent.map((a) => a.key).join(',')}]`
+    const st = f.state as Record<string, unknown>
+    return `answer=${t(st.answer)} evidence=${t(st.evidence)} unfilled=[${f.unfilled.map((u: { key: string }) => u.key).join(',')}] absent=[${f.absent.map((a: { key: string }) => a.key).join(',')}]`
   } catch (err) {
     return `编帧抛了：${(err as Error).message}`
   }

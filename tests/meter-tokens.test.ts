@@ -27,14 +27,15 @@ import { Meter } from '../src/meter.ts'
 import { runAgent } from '../src/agent.ts'
 import type { AgentCtx } from '../src/frame.ts'
 import type { Answer, AnswerSet } from '../src/vocab.ts'
+import type { DecideRequest } from '../src/seam-provider.ts'
 
-const CTX: AgentCtx = { task: 't', cwd: '/w', answer: 'a', draft: 'a' }
+const CTX: AgentCtx = { task: 't', cwd: '/w', draft: 'a' }
 
 /** 一个把 usage 如实报出来的后端 */
 function usageProvider(input_tokens: number | undefined, output_tokens: number | undefined) {
   return {
     name: 'usage',
-    decide: async (req: { questions: Record<string, { type: string; criteria?: Record<string, string> }> }) => {
+    decide: async (req: DecideRequest) => {
       const answers: AnswerSet = {}
       for (const [id, q] of Object.entries(req.questions)) {
         if (q.type === 'noul') answers[id] = { type: 'noul', noul: id === 'needs_auth' ? 0.1 : 0.9 } as Answer
@@ -164,7 +165,7 @@ test('★★ 后端没报 usage ⇒ 按 0 计，但**批次数**要报出来（�
   // 只报一个空的 usage：两个字段都没有 ⇒ 等于没报
   const provider = {
     name: 'silent',
-    decide: async (req: { questions: Record<string, { type: string }> }) => {
+    decide: async (req: DecideRequest) => {
       const answers: AnswerSet = {}
       for (const [id, q] of Object.entries(req.questions)) {
         if (q.type === 'noul') answers[id] = { type: 'noul', noul: 0.9 } as Answer

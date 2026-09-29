@@ -27,6 +27,7 @@ import { tmpdir } from 'node:os'
 import type { AgentEvent } from '../src/events.ts'
 import type { Answer, AnswerSet } from '../src/vocab.ts'
 import type { AgentCtx } from '../src/frame.ts'
+import type { DecideRequest } from '../src/seam-provider.ts'
 
 const start = (task: string, cwd: string) => ({ type: 'run:start', task, cwd, at: 0 })
 const call = (step: number, tool: string, input: string) => ({ type: 'tool:call', step, tool, input })
@@ -161,7 +162,7 @@ test('★ 中间有一步缺结果时，**后面**的步骤也不再采信（那
  */
 const firstOption = {
   name: 'first',
-  decide: async (req: { questions: Record<string, { type: string; criteria?: Record<string, string> }> }) => {
+  decide: async (req: DecideRequest) => {
     const answers: AnswerSet = {}
     for (const [id, q] of Object.entries(req.questions)) {
       if (q.type === 'noul') {

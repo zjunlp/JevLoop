@@ -31,7 +31,7 @@ import {
   traceNameMatches,
 } from '../src/decision-trace.ts'
 import { frameDigest, requestDigest } from '../src/frame-digest.ts'
-import { recordOf, type ReplayRecord } from '../src/replay-schema.ts'
+import type { ReplayRecord } from '../src/replay-schema.ts'
 import { verifyRecord } from '../src/replay-verify.ts'
 
 const AT = Date.UTC(2026, 8, 29, 10, 23, 37)

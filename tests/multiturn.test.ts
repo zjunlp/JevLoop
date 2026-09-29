@@ -19,7 +19,7 @@ import { runAgent } from '../src/agent.ts'
 import { Decider } from '../src/decide.ts'
 import { Meter } from '../src/meter.ts'
 import type { AgentCtx } from '../src/frame.ts'
-import type { QuestionSet } from '../src/vocab.ts'
+import type { DecideRequest } from '../src/seam-provider.ts'
 
 const TURNS: ConversationTurn[] = [
   { task: '列出目录里的文件', answer: '有三个：invoice.ts、notes.md、retry.ts' },
@@ -142,7 +142,7 @@ test('runAgent 把 history 交给了生成器，并压进了 ctx.earlier', async
     meter: new Meter(),
     provider: {
       name: 'spy',
-      decide: async (req: { state: unknown; questions: QuestionSet }) => {
+      decide: async (req: DecideRequest) => {
         seenFrame ??= req.state as Record<string, unknown>
         return {
           answers: { needs_tool: { type: 'noul', noul: 0.1 } },
@@ -219,8 +219,8 @@ test('★ M1：上文截断保留的是**最近**几轮，不是最早的', asyn
     meter: new Meter(),
     provider: {
       name: 'spy',
-      decide: async (req: { state: Record<string, unknown> }) => {
-        if (seenFrame === undefined) seenFrame = req.state
+      decide: async (req: DecideRequest) => {
+        if (seenFrame === undefined) seenFrame = req.state as Record<string, unknown>
         // needs_tool 给低分 → 直接去生成，不进工具循环
         return { answers: { needs_tool: { type: 'noul', noul: 0.05 } }, provider: 'spy', latencyMs: 0 }
       },

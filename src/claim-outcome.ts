@@ -43,7 +43,6 @@
 // 消费方（`claim-audit.ts` 与测试）不需要知道它住在哪个文件
 export { claimOf } from './claim-lexicon.ts'
 export type { Claim } from './claim-lexicon.ts'
-import { claimOf } from './claim-lexicon.ts'
 import type { Claim } from './claim-lexicon.ts'
 
 /** 轨迹里的一步（只要这几栏，不依赖任何上层类型） */

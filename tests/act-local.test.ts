@@ -35,6 +35,7 @@ import { Meter } from '../src/meter.ts'
 import { runAgent } from '../src/agent.ts'
 import type { AgentCtx } from '../src/frame.ts'
 import type { Answer, AnswerSet } from '../src/vocab.ts'
+import type { DecideRequest } from '../src/seam-provider.ts'
 
 async function withTmp<T>(fn: (cwd: string) => Promise<T>): Promise<T> {
   const cwd = await mkdtemp(join(tmpdir(), 'jevloop-delete-'))
@@ -284,10 +285,7 @@ test('★★ 端到端：模型选了 delete_file 而没人授权 —— 文件�
     // 一个「就是想把文件删掉」的判定后端：pick_tool 时永远选 delete_file
     const wantsToDelete = {
       name: 'wants-to-delete',
-      decide: async (req: {
-        state: { base_risk?: number }
-        questions: Record<string, { type: string; criteria?: unknown }>
-      }) => {
+      decide: async (req: DecideRequest) => {
         const answers: AnswerSet = {}
         for (const [id, q] of Object.entries(req.questions)) {
           /*
@@ -304,7 +302,7 @@ test('★★ 端到端：模型选了 delete_file 而没人授权 —— 文件�
             // 把工具的档位改掉这条测试也照样通过（它就不再依赖阶梯了）
             answers[id] = {
               type: 'score',
-              score: req.state.base_risk ?? 0,
+              score: (req.state as { base_risk?: number }).base_risk ?? 0,
               legend: {},
               probabilities: {},
               confidence: 0.95,
@@ -377,10 +375,7 @@ test('★★ 端到端：模型选了 move_file 而没人授权 —— 文件必
 
     const wantsToMove = {
       name: 'wants-to-move',
-      decide: async (req: {
-        state: { base_risk?: number }
-        questions: Record<string, { type: string; criteria?: unknown }>
-      }) => {
+      decide: async (req: DecideRequest) => {
         const answers: AnswerSet = {}
         for (const [id, q] of Object.entries(req.questions)) {
           // ★ 同 delete 那条：`needs_auth` 压低，让**风险档**成为唯一能拦住它的规则
@@ -390,7 +385,7 @@ test('★★ 端到端：模型选了 move_file 而没人授权 —— 文件必
             // 风险分读帧里的 `base_risk` —— 这样把档位改错，这条测试会红
             answers[id] = {
               type: 'score',
-              score: req.state.base_risk ?? 0,
+              score: (req.state as { base_risk?: number }).base_risk ?? 0,
               legend: {},
               probabilities: {},
               confidence: 0.95,

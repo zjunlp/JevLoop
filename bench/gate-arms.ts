@@ -31,8 +31,9 @@
 
 import { buildDecisions } from '../src/decisions.ts'
 import { resolvePolicy } from '../src/policy.ts'
-import type { AgentCtx, Frame } from '../src/frame.ts'
-import type { AnswerSet } from '../src/vocab.ts'
+import type { AgentCtx } from '../src/frame.ts'
+import type { AnswerSet, AnswerMap, NoulQuestion } from '../src/vocab.ts'
+import type { FrameArtifact } from '../src/vocab-decision.ts'
 import type { GateScenario } from './gate-scenarios.ts'
 import type { ScenarioCtx } from './gate-drift.ts'
 
@@ -84,7 +85,7 @@ export function judge(
 }
 
 /** 帧里那些「宿主没喂 / 没投影出来 / 被截断」的格子 —— 契约**记下来了** */
-export function frameSignals(frame: Frame): string[] {
+export function frameSignals(frame: FrameArtifact): string[] {
   const out: string[] = []
   for (const u of frame.unfilled) out.push(`unfilled:${u.key}`)
   for (const a of frame.absent) out.push(`absent:${a.key}`)
@@ -104,7 +105,7 @@ export function contractArm(scenario: GateScenario, ctx: ScenarioCtx, strict: bo
   const artifact = spec.frameArtifact
   if (!artifact) return { outcome: 'error', why: 'canDeliver 没有 frameArtifact', noticed: [] }
 
-  let frame: Frame
+  let frame: FrameArtifact
   try {
     frame = artifact(ctx as AgentCtx)
   } catch (err) {
@@ -121,8 +122,14 @@ export function contractArm(scenario: GateScenario, ctx: ScenarioCtx, strict: bo
     }
   }
 
-  const answers = judge(scenario.claims, frame.state.answer, frame.state.evidence)
-  const out = resolvePolicy(spec.policy, answers)
+  const st = frame.state as { answer: string; evidence: string }
+  const answers = judge(scenario.claims, st.answer, st.evidence)
+  // `answers` 是本文件手工造的 AnswerSet，而策略是按 can_deliver 那两个问题编译出来的 ——
+  // 形状对得上，类型对不上。这里显式收窄，而不是把策略放宽（放宽会让别的调用点失去检查）。
+  const out = resolvePolicy(
+    spec.policy,
+    answers as AnswerMap<{ deliverable: NoulQuestion; unsupported: NoulQuestion }>,
+  )
   return { outcome: out.action as RunResult['outcome'], why: out.reason, noticed }
 }
 
