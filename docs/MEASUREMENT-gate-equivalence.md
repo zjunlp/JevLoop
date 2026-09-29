@@ -748,3 +748,68 @@ The `deliverable` condition is also not obviously wrong — it is what makes the
 rather than accept an unfinished job. Removing it changes behaviour beyond this metric:
 honest failures would be delivered instead of retried. That is a product decision, so it is
 recorded here as a measurement and **not** changed in `DECISION.md`.
+
+---
+
+# Round 6: the frozen operating point, tested on candidates it had never seen
+
+The previous round chose `tU = 0.20, tD = 0.0` on the odd repetitions and reported 3% false
+alarms on the even ones. That is still a fit to a 60-candidate half, so the threshold was
+frozen as a constant in the source (`PREREG`) and re-tested on **240 freshly generated
+candidates** under the same condition.
+
+## Result: it does not replicate
+
+n = 240: **141 deliverable, 99 misleading.** The confusing factor is gone and the misleading
+rate is stable, but the operating point is not.
+
+| arm | false confirmations | catch `c` | false alarm `f` |
+|---|---|---|---|
+| `accept-all` | 99/240 = 41.3% [35.2, 47.6] | 0/99 = 0% (≤3.0%) | 0/141 = 0% (≤2.1%) |
+| `self-claim` | 33/35 = 94.3% | 0/33 = 0% | 24/26 = 92.3% |
+| `compiled` | 96/235 = 40.9% | 3/99 = 3.0% | 2/141 = 1.4% |
+| `judge-same` | 85/211 = 40.3% [33.9, 47.0] | 14/99 = 14.1% [8.6, 22.3] | 15/141 = 10.6% [6.6, 16.8] |
+| **`judge-jev`** | **71/194 = 36.6%** [30.1, 43.6] | **28/99 = 28.3%** [20.4, 37.8] | 18/141 = 12.8% [8.2, 19.3] |
+
+Exact McNemar: `judge-jev` vs `judge-same` **6 : 23, p = 0.0023**; `accept-all` vs `judge-jev`
+**46 : 0, p < 0.0001**.
+
+**At the frozen operating point** (`tU = 0.20, tD = 0.0`):
+
+| arm | catch | false alarms | verdict at Δ = 5pp |
+|---|---|---|---|
+| `judge-jev` | **40/99 = 40.4%** | **13/141 = 9.2%** | ✗ **over budget — did not replicate** |
+| `judge-same` | 11/99 = 11.1% | 14/141 = 9.9% | ✗ over budget |
+
+The previous round's 3% was **1/30 on a 60-candidate half** — a noise artefact, exactly as its
+own caveat warned. On 141 deliverable candidates the same policy costs 9.2%, and the 90%
+interval around the difference from the baseline, [+8.1, +17.4], sits comfortably above the
+5-point margin. So the failure to meet the budget is now **firmly established**, not
+underpowered: with Δ = 5pp, **no model judge in this study meets the false-alarm budget**, and
+the interval is tight enough that more data will not rescue it.
+
+## What did replicate, and is now the cleanest statement of the effect
+
+Because both judges end up at a similar false-alarm cost (9.2% and 9.9%), the same operating
+point supports a like-for-like comparison, which the contract's own thresholds did not:
+
+> **At the same false-alarm cost, the decision model catches 40.4% of the misleading
+> deliveries and the general-purpose model with a prompt catches 11.1%** — 3.6× — and the
+> paired test rejects equality of the two (p = 0.0023, 23 : 6).
+
+Three things also replicated across runs and can be treated as settled:
+
+- the no-gate baseline delivers misleading output at **41–44%** on this condition (three runs:
+  44.2%, 44.2%, 41.3%);
+- the fused judgement (`self-claim`) abstains on ~75% of candidates and, when it does rule,
+  refuses **92–100%** of the deliverable ones;
+- the compiled rule is honest and nearly blind (**3.0%** catch, 1.4% false alarms).
+
+## The methodological outcome
+
+The sequence is worth recording as a method rather than as an incident: a threshold chosen on
+a held-out half *inside one run* still did not survive a genuinely fresh batch. The held-out
+half protects against fitting the selection half, but it does not protect against fitting the
+run. Only freezing the constant and generating new candidates did that — and the cost of not
+doing it would have been a published claim of "3% false alarms, inside budget" that is wrong by
+a factor of three.
