@@ -442,6 +442,9 @@ CWD_ROOT=./你的项目 PORT=7800 npm run serve
 | [`examples/external-host.ts`](examples/external-host.ts) | 一个不是 JevLoop 的宿主，自带一张图 |
 | [`docs/DECISION-CONTRACT.md`](docs/DECISION-CONTRACT.md) | 可移植内核 / 宿主适配器的分界与合规检查表 |
 | [`docs/SKILL-DECISION-ADAPTER.md`](docs/SKILL-DECISION-ADAPTER.md) | 逐步改造一个已有运行时 |
+| [`docs/ADAPTER-CODEX-SCOPE.md`](docs/ADAPTER-CODEX-SCOPE.md) | 把那份 Skill 用在一个我们不拥有的真实宿主上 —— 哪些接得到、哪些接不到 |
+| [`docs/POSITIONING-spec-vs-hook.md`](docs/POSITIONING-spec-vs-hook.md) | ★ 它是一份规范，还是一个 hook —— 以及两种读法各自依赖什么条件 |
+| [`adapters/codex/`](adapters/codex/README.md) | 照着 Skill 做出来的那个真实适配器 |
 
 其余都是接线。最可能想换掉的那几块：
 

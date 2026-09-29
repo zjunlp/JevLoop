@@ -521,6 +521,7 @@ The files that carry the idea, in reading order:
 | [`docs/DECISION-CONTRACT.md`](docs/DECISION-CONTRACT.md) | the portable-core / host-adapter boundary and conformance checklist |
 | [`docs/SKILL-DECISION-ADAPTER.md`](docs/SKILL-DECISION-ADAPTER.md) | how to adapt an existing runtime, step by step |
 | [`docs/ADAPTER-CODEX-SCOPE.md`](docs/ADAPTER-CODEX-SCOPE.md) | that skill applied to a real host we do not own — what is reachable, and what is not |
+| [`docs/POSITIONING-spec-vs-hook.md`](docs/POSITIONING-spec-vs-hook.md) | ★ a specification or a hook — what this is worth, and the condition each reading depends on |
 | [`adapters/codex/`](adapters/codex/README.md) | a working adapter for that host, built by following the skill |
 
 Everything else is plumbing. The parts you are most likely to want to replace:
