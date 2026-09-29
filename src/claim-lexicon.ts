@@ -138,5 +138,6 @@ export function claimOf(answer: string): Claim {
     admitsFailure: failure.hit,
     escalates: escalation.hit,
     hits: [...new Set([...done.hits, ...tests.hits, ...failure.hits, ...escalation.hits])],
+    empty: text.trim() === '',
   }
 }

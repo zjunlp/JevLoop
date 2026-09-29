@@ -24,6 +24,7 @@
     "latency": "node --experimental-strip-types bench/latency.ts",
     "gate-compare": "node --experimental-strip-types bench/gate-compare.ts",
     "gate-derivable": "node --experimental-strip-types bench/gate-derivable-run.ts",
+    "claim-suite": "node --experimental-strip-types bench/claim-suite.ts",
     "replay": "node --experimental-strip-types scripts/replay.ts",
     "trace": "node --experimental-strip-types scripts/trace.ts",
     "metrics": "node --experimental-strip-types scripts/metrics.ts",
