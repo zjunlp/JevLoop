@@ -20,6 +20,9 @@ dist/
 #     `README.md`（约定）+ `DOWNLOADS.md`（**生成的**下载索引）。
 #     **数据一个字节都不进** —— 但「怎么把它拿回来」必须写清楚,
 #     否则别人 clone 下来只有一个空目录,这个仓库就不可复现了。
+# 派生的中间产物（摊平后的外部数据）—— 不是运行记录,也不进 git
+experiments/result/_external/
+
 experiments/dataset/*
 !experiments/dataset/.gitkeep
 !experiments/dataset/README.md

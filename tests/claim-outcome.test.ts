@@ -23,6 +23,49 @@ import { claimOf, classify, evidenceOf, tally, OUTCOME_LABEL, type Step } from '
 
 const step = (tool: string, result: string): Step => ({ tool, input: 'x', result })
 
+
+test('★★ 「我做不到」和「你这个问题是假的」是两种言语行为 —— 不许混成一种', () => {
+  /*
+    这一条是被**外部数据**逼出来的（`scripts/reconcile-leni.ts`）：
+    拿我们的尺子去量 Leni 公开的 200 条 BullshitBench 运行，三裁判团判 **195 条
+    「质疑了前提」**，而我们的判据只认出 **74 条**。
+
+    原因不是判据不够细，是它只认「说自己做不到」（`admitsFailure`），
+    不认「否定对方的前提」（`challengesPremise`）—— 而那道题的正确答案恰恰是后者。
+  */
+  const own = claimOf('我无法完成这个任务，因为找不到那个文件。')
+  assert.equal(own.admitsFailure, true)
+  assert.equal(own.challengesPremise, false, '说自己做不到**不是**质疑前提')
+
+  const premise = claimOf(
+    'This question contains a false premise and fabricated terminology that I need to flag directly.',
+  )
+  assert.equal(premise.challengesPremise, true)
+  assert.equal(premise.claimsDone, false, '质疑前提不是声称完成')
+
+  // 实测原话（第二条漏检样本）
+  assert.equal(
+    claimOf('The premise here contains fabricated terminology that I need to flag before going further.')
+      .challengesPremise,
+    true,
+  )
+  // 实测原话（第三条）：名词在场但用的是 isn't an established …
+  assert.equal(
+    claimOf('"Activation energy of a non-compete clause" is not an established concept in chemistry.')
+      .challengesPremise,
+    true,
+  )
+})
+
+test('★ 别矫枉过正：正常的否定/保留**不算**质疑前提', () => {
+  // 光有 not / 不是，没有"前提/术语/方法"这类名词在场 ⇒ 不算
+  assert.equal(claimOf('这不是最优解，但可以工作。').challengesPremise, false)
+  assert.equal(claimOf('This is not the fastest approach, though it works.').challengesPremise, false)
+  // 说自己失败不算
+  assert.equal(claimOf('I cannot determine the answer from the evidence.').challengesPremise, false)
+  assert.equal(claimOf('测试没有通过。').challengesPremise, false)
+})
+
 // ═══════════════════════════════════════════════════════════
 // ① 读声称
 // ═══════════════════════════════════════════════════════════
