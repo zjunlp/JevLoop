@@ -910,8 +910,11 @@ def test_the_typed_cells_are_reachable_by_name() -> None:
     from experiments.scripts.run import resolve_agent, typed_arms
 
     decider = ScriptedClient()
-    assert set(typed_arms(decider)) == {"react-typed", "act-typed"}
-    for name in ("react-typed", "act-typed"):
+    # ★ `react-termination` 是 2026-09 加的**终点验证**那一臂（原计划 §3.3 的"关键比较"）：
+    #   和 `react-typed` 共用同一个 `run_loop` / `build_prompt` / 同一批工具 /
+    #   **同一个交付闸门**，只有"判定放几次"不同。它也要判定后端，所以一起登记。
+    assert set(typed_arms(decider)) == {"react-typed", "act-typed", "react-termination"}
+    for name in ("react-typed", "act-typed", "react-termination"):
         agent = resolve_agent(name, decider)()
         assert agent.config.controller is not None, f"{name} 没接上控制器"
 

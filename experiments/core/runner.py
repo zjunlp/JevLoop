@@ -292,8 +292,20 @@ def run_cell(
                     steps=len(trajectory.steps),
                     first_divergence_step=_first_divergence(bench, task, trajectory),
                     escalated=trajectory.escalated,
-                    gate_false_reject=bool(judgment.failure_class == "gate_rejected_correct"),
-                    gate_false_deny=bool(judgment.failure_class == "gate_passed_wrong"),
+                    # ★★ 这两个指标以前是从 `failure_class` 里读 `"gate_rejected_correct"` /
+                    #   `"gate_passed_wrong"` —— 而**整棵树里没有任何一处产生过这两个值**
+                    #   （实测：grep 只有本文件在读它），于是两栏**恒为 False**，
+                    #   读起来像"没有误伤"。信息一直在控制器手里（`Decision.gate`），
+                    #   只是从来没往回传。现在按 (闸门第一次裁决 × 判分结果) 算：
+                    #
+                    #       闸门假拒 = 第一判 revise ∧ 最终答案是对的
+                    #       闸门放过 = 第一判 deliver ∧ 最终答案是错的
+                    #
+                    #   ⚠️ 字段名的历史遗留：`gate_false_deny` 指的是"闸门放过了错的"
+                    #      （不是"拒绝了对的"）。名字反了，但它在 spec/测试里，不动它，
+                    #      只在这里写明，免得下一个人再读反一次。
+                    gate_false_reject=bool(outcome.gate == "revise" and judgment.correct),
+                    gate_false_deny=bool(outcome.gate == "deliver" and not judgment.correct),
                     failure_class=judgment.failure_class or ("none" if judgment.correct else "unclassified"),
                     cost=aggregate_cost(session),
                     timing=aggregate_timing(session, wall_ms=wall_ms),

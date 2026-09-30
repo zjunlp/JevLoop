@@ -761,6 +761,9 @@ class TypedController:
                             thought=f"生成答案（{why}）", syntax="generated")
 
         verdict, feedback = self._can_deliver(session, view, ctx)
+        # ★ 记下**第一次**裁决：修订之后再判的那个数已经被闸门影响过了，
+        #   拿它算"闸门错没错"是循环论证（同 `core/agent.py::AgentOutcome.gate`）。
+        first_gate = verdict
         if verdict == "revise":
             self.trace.append({"step": view.step, "node": "canDeliver",
                                "answer": "revise", "detail": feedback})
@@ -775,10 +778,11 @@ class TypedController:
         if verdict == "blocked":
             # 闸门发不出去（帧缺判定依据 / 超预算）→ 这一步**不成立**,
             # 交给 `_blocked` 退回 `unparsed`,循环去看得见的地方弃答。
-            return self._blocked(session, view, "canDeliver")
+            return self._blocked(session, view, "canDeliver", gate="blocked")
 
         return Decision(kind="answer", answer=ctx.draft,
-                        thought=f"生成答案（{why}）", syntax="generated")
+                        thought=f"生成答案（{why}）", syntax="generated",
+                        gate=first_gate)
 
     def _can_deliver(self, session: Session, view: DecisionView,
                      ctx: AgentCtx) -> tuple[str, str]:
@@ -1023,7 +1027,7 @@ class TypedController:
                               [*question] if isinstance(question, list) else [question])
 
     def _blocked(self, session: Session, view: DecisionView, why: str,
-                 *, answer: Answer | None = None) -> Decision:
+                 *, answer: Answer | None = None, gate: str = "") -> Decision:
         """这一步发不出去 / 判定不成立。
 
         ★ 返回 `unparsed` 而不是硬凑一个动作 —— `unparsed` 的措辞是
@@ -1036,7 +1040,7 @@ class TypedController:
         detail = ""
         if answer is None and self.trace:
             detail = self.trace[-1].get("detail", "")
-        return Decision(kind="unparsed", syntax="typed",
+        return Decision(kind="unparsed", syntax="typed", gate=gate,
                         raw=f"typed: {why}{' — ' + detail if detail else ''}")
 
 

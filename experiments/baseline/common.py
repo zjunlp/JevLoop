@@ -329,13 +329,19 @@ def run_loop(session: Session, cfg: LoopConfig) -> AgentOutcome:
                     continue
                 return AgentOutcome(
                     steps=steps, final_answer=None, escalated=True,
+                    # ★ 弃答也要把闸门裁决带回去：`blocked` 是"闸门发不出去"，
+                    #   和"模型格式错了"是两件事，记账里要分得开。
+                    gate=getattr(parsed, "gate", "") or "",
                     error=f"连续 {retries} 步解析不出动作（最后一段: {parsed.raw[-200:]!r}）",
                 )
 
             if parsed.kind == "answer":
                 steps.append(Step(index=len(steps), action=action_answer(parsed.answer),
                                   thought=parsed.thought))
-                return AgentOutcome(steps=steps, final_answer=parsed.answer)
+                # ★ 闸门裁决**回传**（见 `Decision.gate` 的说明）：没有它，那两个
+                #   "闸门错没错"的指标在记账里永远是 0。
+                return AgentOutcome(steps=steps, final_answer=parsed.answer,
+                                    gate=getattr(parsed, "gate", "") or "")
 
             # ★★ **`ask` —— 该问人 / 该弃答。**
             #

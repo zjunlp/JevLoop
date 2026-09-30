@@ -238,11 +238,19 @@ def typed_arms(decider: DecisionClient) -> dict[str, Callable[[], Agent]]:
     - `rewoo × typed`:Worker 根本没有决策可换（`NOTES-*.md` §2.10.1）。
     - `jevloop`:我们自己的完整臂,它有自己的循环,不是「react 换个控制器」。
     """
+    from experiments.jloop.termination_only import TerminationOnlyController
     from experiments.jloop.typed import TypedController
 
     return {
         "react-typed": lambda: react_baseline.ReAct(controller=TypedController(decider)),
         "act-typed": lambda: act_baseline.Act(controller=TypedController(decider)),
+        # ★★ **终点验证** —— 原计划 §3.3 说的那个"关键比较"的另一端。
+        #   和 `react-typed` 共用同一个 `run_loop` / `build_prompt` / 同一批工具 /
+        #   **同一个交付闸门**（`TypedController._can_deliver`，逐字复用），
+        #   只有"判定放几次"不同：这里循环中间一次都不问，只在终点问那一次。
+        "react-termination": lambda: react_baseline.ReAct(
+            controller=TerminationOnlyController(gate=TypedController(decider))
+        ),
     }
 
 
@@ -253,7 +261,17 @@ def resolve_agent(name: str, decider: DecisionClient | None = None) -> "type[Age
         return typed_arms(decider)[name]
     factory = AGENTS.get(name)
     if factory is None:
-        raise SystemExit(f"没有这个 agent: {name!r}\\n{known()}")
+        # ★ 报错要列**真实目录**。原来这里拼的是 `known()` —— 它读的是 `core/registry.py`
+        #   那两个**空**注册表（真正的目录是 `_BUILTIN_ARMS` 和 `typed_arms()`），
+        #   于是报错长这样：「没有这个 agent: 'x'\nbenchmark: （还没接）\nagent: （还没接）」，
+        #   看起来像整个项目什么都没接。**一个会把人指向错误方向的报错，
+        #   比没有报错更费时间**（加 `react-termination` 时为它多绕了两轮）。
+        raise SystemExit(
+            f"没有这个 agent: {name!r}\n"
+            f"  内置臂：{sorted(_BUILTIN_ARMS)}\n"
+            f"  换了决策者的格子："
+            f"{sorted(typed_arms(decider)) if decider else '（判定后端未建，故未枚举）'}"
+        )
     return factory
 
 
@@ -321,7 +339,13 @@ def main(argv: list[str] | None = None) -> int:
     model = build_model(args)
     # ★ 判定后端**只在真要用的时候才建** —— `--decider http` 缺 key 要报错,
     #   但一个跑 `direct` 的人不该被这个报错拦住。
-    needs_decider = args.agent.endswith("-typed")
+    # ★★ 这里原来是 `args.agent.endswith("-typed")` —— **靠臂名的后缀去猜它要不要判定后端**。
+    #   加 `react-termination`（终点验证那一臂）时当场踩到：它要判定后端，名字却不以
+    #   `-typed` 结尾 ⇒ `decider=None` ⇒ 连 `typed_arms()` 那一支都进不去，报出来的还是
+    #   「没有这个 agent」（而且 `known()` 列的是两个**空**注册表，看起来像"什么都还没接"）。
+    #   **能力是属性，不是拼写。** 判据换成"它是不是内置臂"：内置的不需要判定后端，
+    #   其余都是换了决策者的格子。
+    needs_decider = args.agent not in _BUILTIN_ARMS
     decider = build_decider(args) if needs_decider else None
     agent_factory = resolve_agent(args.agent, decider)
 

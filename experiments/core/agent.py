@@ -54,6 +54,10 @@ class AgentOutcome:
     final_answer: str | None = None
     escalated: bool = False
     error: str | None = None
+    #: 交付闸门**第一次**给出的裁决（`deliver` / `revise` / `blocked`；`""` = 这一臂没闸门）。
+    #: ★ 记**第一次**而不是最后一次：修订之后再判的那个数已经是被闸门影响过的结果，
+    #:   用它算"闸门错没错"是循环论证。
+    gate: str = ""
 
 
 class Agent(Protocol):

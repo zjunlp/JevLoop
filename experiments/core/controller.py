@@ -68,6 +68,17 @@ class Decision:
     answer: str = ""
     # 用的是哪种写法（bracket / action-input / json / bare-answer）—— 失败分类要用
     syntax: str = ""
+    """
+    ★★ **交付闸门这一次给出的裁决**（`"deliver"` / `"revise"` / `"blocked"` / `""` = 这一臂没有闸门）。
+
+    为什么它必须回到循环、再进 `AgentOutcome`:那两个指标（**闸门假拒** = 对好答案说 revise、
+    **闸门放过** = 对坏答案说 deliver）算的就是**这一栏 × 判分结果**。
+    以前 `runner.py` 从 `failure_class` 里读 `"gate_rejected_correct"` / `"gate_passed_wrong"` ——
+    而**整棵树里没有任何一处产生过这两个值**（实测 grep 只有 runner.py 自己在读），
+    于是 `gate_false_reject` / `gate_false_deny` **恒为 False**，看起来像"没有误伤"。
+    信息其实一直都在控制器手里，只是从来没往回传。
+    """
+    gate: str = ""
     raw: str = ""
 
 
