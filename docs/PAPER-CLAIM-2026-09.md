@@ -138,3 +138,57 @@
 "完整性 ≠ 真实性"是别人的定理；"无证据完成声明"这个指标也有人提出。
 **我们站在空着的那一格上：把"验证者是否真的在读证据"从一句假设，变成一个可以执行的检验，
 并给出它和实际效果之间的定量关系。**
+
+---
+
+## 8. 数据集：我们在用什么、打算用几个、别人在用什么
+
+### 8.1 我们现在有三层，而它们承担的角色完全不同
+
+| 层 | 是什么 | 规模 | 支撑哪条 claim | 弱点 |
+|---|---|---|---|---|
+| **① 受控任务集** | `bench/tasks.ts` 的 11 个任务 + `bench/confusion.ts` 里 3 个高产写任务，× `bench/tool-variants.ts` 的 7 个工具层条件 | n=120 / n=240 候补 | **C1–C4 全部** | 14 个任务、一个作者写的、外部效度弱 |
+| **② 外部基准 harness** | `experiments/`：11 个 loader（alfworld、bfcl×4、bigbench、fever、gsm8k、hotpotqa、sotuqa、tau2-bench、terminal-bench、triviaqa）× 7 条臂（direct / act / react / react-typed / reflexion / rewoo / plan-then-execute） | 真跑过：gsm8k 300、bfcl-simple 100、bfcl-multiple 100 | **目前一条都不支撑** —— 它只量 acc / 调用数 / token / 墙钟 / 费用 | **没有诚实指标**：没有 unsupported-completion，没有假确认/误伤 |
+| **③ 计划里写了、还没做** | Decision Reliability Suite（30 任务 × 5 条件 × 3–5 重复 × 2 模型）；Terminal-Bench 子集；SWE-bench Verified 子集；Agentic Abstention Terminal 子集；AgentDojo 子集 | — | 未来 | — |
+
+★ 第 ② 层已经能跑、也有真数字（`experiments/result/summary.csv`，34 行），
+但它量的是**成绩**。而 `scripts/frame_ab.py` 里记着一条要紧的事实：
+**基准总分那一格的噪声是 ±9**，而帧改动这类效应是 **±3** ——
+拿外部基准的总分去比我们关心的东西，n=1 根本读不出来。
+这正是不该去堆外部基准成绩、而该把**混淆矩阵那套仪器搬过去**的理由。
+
+### 8.2 我们打算在几个上面做
+
+按性价比排序（不是按愿望）：
+
+1. **bfcl（v3-simple / multiple）**：已经在跑，有工具调用、有确定性评分，最容易接"诚实"指标；
+2. **terminal-bench**：开放式终端探索，是"写了却没发生"最自然的场景；
+3. **tau2-bench**：数据已在本机（11 MB），带真实业务工具；
+4. **alfworld**：数据已在本机（2.1 GB），是 `DECISION.md` §8.18 那次"编造成功"事故的原始出处；
+5. Terminal-Bench / SWE-bench Verified 子集、AgentDojo —— 等前四个跑通再说。
+
+**目标不是"上更多数据集"，而是"让至少两个外部数据集上能报出假确认/误伤"。**
+
+### 8.3 已发表的那些工作用的是什么
+
+| 工作 | venue | 数据集 | 规模 | 公开？ |
+|---|---|---|---|---|
+| CaMeL | **SaTML 2026**（同行评审） | AgentDojo | — | ✅ |
+| IBM Governance by Construction | **ACM CAIS '26**（同行评审） | 自己活循环上的 policy 评估 | 46.2%→71.8%→78.2% | — |
+| Park & Choi | Zenodo 预印本 | **自建合成 2 个任务**（T1 开放式 + B1 可验证） | 21 run / 108 循环 | ❌ 声称发布，Zenodo 上只有两个 PDF |
+| Leni | arXiv 预印本 | SpreadsheetBench Verified 400 + BullshitBench v2 100 + GAIA val 165 + DRACO 对照 100 | 1,299 / 500 / 803 runs | ✅ GitHub（含逐 run CSV、重评脚本） |
+| Anima Core | Zenodo 预印本 | 4 个自建内部套件：注入 30 / 拒答或引用 100（500 文档 3.2M token）/ 成本 200 / GridWorld | 每格重复数**未报告** | 🟡 只核实了首页 |
+| Verification Horizon | arXiv 预印本 | SWE-Universe 真实 PR；671 个 WebDev 任务 × 8 模型；**12.5 万条内部轨迹** / 53.5 万条标注 | 大 | ❌ 无发布声明，用户数据专有 |
+| Propose-Judge-Commit | Zenodo 预印本 | 合成检索语料：40 文档 / 150 问题（60 支持 / 30 矛盾 / 30 无解 / 30 冗余） | 212 个原子 claim | ✅ GitHub |
+
+**四条对选型有直接影响的观察：**
+
+1. **真正量"判定/验证"的工作，只有两篇用公开基准**（CaMeL→AgentDojo；Leni→SpreadsheetBench/BullshitBench/GAIA）。
+   其余要么是自建小集，要么是内部数据。
+2. **只有两篇发布了可复算的产物**（Leni、PJC）。Park & Choi 声称发布，实测只有 PDF ——
+   这条我们自己在 `LITERATURE-POSITION` 里已记过。
+3. **没有一篇报步级标注一致性。** 最接近的是 Anima Core 的一个人工 κ=0.91（只在一个任务集上），
+   Leni 用的是任务级官方评分器。这正是我们 §6 把"金标第二把尺子"排第一的理由。
+4. **规模差距很大但也有例外**：PJC 212 个 claim、Park & Choi 108 个循环 ——
+   我们的受控集（240 候补）**已经超过其中两篇**。我们输的不是样本量，是外部效度。
+   ⇒ 这进一步支持"把仪器搬到外部数据集去"，而不是继续在受控集上加 n。
