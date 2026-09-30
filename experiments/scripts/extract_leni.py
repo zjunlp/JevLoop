@@ -92,6 +92,36 @@ def _steps(raw: str) -> list[dict[str, str]]:
     return out
 
 
+def _response(raw: str) -> str:
+    """从 `leniq_answer` 里取出**整段回答正文**。
+
+    ★★ 第一版这里读错了字段，值得记下来：我用的是 `model_final_answer`，
+      它的中位长度是 **6 个字符**（就是被抽出来的那个值，如 `0`、
+      `Time-Parking 2: Parallel Universe`），于是"犹豫/做不到"这类痕迹
+      **一条也认不出来**（0/210）—— 我当时把那个 0 读成了"我们的尺子在这份
+      数据上不适用"，其实是我**读了一个不含这些痕迹的字段**。
+
+      正文在 `leniq_answer` 里，是一个 JSON：`{"answer": "...全文...", "file_ids": []}`，
+      中位 **663 字符**。换到它之后，回答模式（见 `scripts/reconcile-leni.ts`）
+      才量得出东西来。
+
+      **教训与 §9 那条一样：先怀疑仪器，再怀疑数据。**
+    """
+    if not raw:
+        return ""
+    try:
+        d = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return raw
+    if isinstance(d, dict):
+        for k in ("answer", "text", "content", "response"):
+            v = d.get(k)
+            if isinstance(v, str) and v.strip():
+                return v
+        return ""
+    return raw if isinstance(raw, str) else ""
+
+
 def extract_bullshit() -> Path:
     """BullshitBench 的 500 条运行 + 100 道题（题目用于带上 `technique`）。"""
     runs = list(csv.DictReader((DATA / "eval_runs_bullshit.csv").open(encoding="utf-8", newline="")))
@@ -139,7 +169,10 @@ def extract_gaia(*, scored_only: bool = True) -> Path:
                         "question": t.get("question", ""),
                         "gold_answer": t.get("final_answer", ""),
                         "level": t.get("level", ""),
-                        "answer": (r.get("model_final_answer") or r.get("leniq_answer") or "").strip(),
+                        # ★ 抽出来的那个值（短）
+                        "answer": (r.get("model_final_answer") or "").strip(),
+                        # ★ 整段正文（含推理与可能的犹豫）—— 回答模式读的是它
+                        "response": _response(r.get("leniq_answer", "")).strip(),
                         "steps": steps,
                         "is_correct": (r.get("is_correct") or "").strip(),
                     },

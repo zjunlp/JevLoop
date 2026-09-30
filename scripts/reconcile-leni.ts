@@ -47,6 +47,7 @@ const EXTERNAL = resolve(ROOT, 'experiments', 'result', '_external')
 const B = (s: string) => `\x1b[1m${s}\x1b[0m`
 const D = (s: string) => `\x1b[2m${s}\x1b[0m`
 const Y = (s: string) => `\x1b[33m${s}\x1b[0m`
+const G = (s: string) => `\x1b[32m${s}\x1b[0m`
 const R = (s: string) => `\x1b[31m${s}\x1b[0m`
 
 interface BullshitRun {
@@ -67,7 +68,10 @@ interface GaiaRun {
   question: string
   gold_answer: string
   level: string
+  /** 被抽出来的那个值（很短，中位 6 字符） */
   answer: string
+  /** ★ 整段回答正文（中位 631 字符）—— 回答模式读的是它 */
+  response: string
   steps: { tool: string; input: string; result: string }[]
   is_correct: string
 }
@@ -228,44 +232,58 @@ function bullshit(): void {
 
 function gaia(): void {
   const runs = readJsonl<GaiaRun>('leni_gaia.jsonl')
-  console.log(`\n${B('  ── ② GAIA：★ 我们的尺子在这里不适用（边界，不是失败）──────')}`)
-  const withAns = runs.filter((r) => r.answer.trim() !== '')
-  let claims = 0
-  let admitted = 0
-  let silent = 0
-  let wrong = 0
-  for (const r of withAns) {
-    const c = claimOf(r.answer)
-    if (c.claimsDone || c.claimsTests) claims++
-    else if (c.admitsFailure || c.escalates) admitted++
-    else silent++
-    if (r.is_correct === 'FALSE') wrong++
-  }
-  const n = withAns.length
-  const p = (x: number) => `${x}/${n} = ${pct(x / n)}`
-  console.log(`  有答案的 ${n} 条（共 ${runs.length}，其余没给最终答案）`)
-  console.log(`    ${'含有"我做完了"这类措辞'.padEnd(24)}${p(claims)}`)
-  console.log(`    ${'含有"做不到/上交"这类措辞'.padEnd(24)}${p(admitted)}`)
-  console.log(`    ${'两种措辞都没有（沉默）'.padEnd(24)}${p(silent)}`)
-  console.log(`    ${'他们的金标判错的'.padEnd(24)}${p(wrong)}`)
+  console.log(`\n${B('  ── ② GAIA：换成「回答模式」之后就量得出东西了 ────────────')}`)
   console.log(
-    `\n  ${Y('  读法：')}${D('GAIA 的最终答案常常就是一个值（`0`、`Time-Parking 2: …`），')}\n` +
-      `  ${D('  里面**没有**"我完成了任务"这类措辞，而 `claimOf` 读的正是那类措辞。')}\n` +
-      `  ${D('  所以"沉默"占绝大多数是**意料之中**：它说明我们的尺子覆盖的是')}\n` +
-      `  ${D('  **动作型任务的完成声明**，不覆盖**纯问答的答案断言** —— 这是要写进论文的限定。')}`,
+    `${D('  ★ 同一个框架、不同的处理方式：动作型任务读"完成声明"，')}` +
+      `\n${D('    纯问答读"答案断言" —— 两者的成对口径（假确认 / 误伤）是同一套。')}`,
   )
+
   /*
-    ⚠️ 这里**不能**写成"他们判错的那些里没有一个带犹豫" —— 那读起来像一个发现，
-    实际是尺子在这份数据上**整体失灵**的算术后果：它在 210 条里一条犹豫都没认出来
-    （0/210），所以子集里当然也是 0。**分母全是 0 的时候，比出来的任何数都没有信息。**
-    （第一版就是这么写的，和新修掉的那段写死解说属于同一类错误：先有结论再套数字。）
-    要量"错误的答案有没有被如实标记"，得先让尺子在这份数据上有分辨力 —— 那是没做的事。
+    ★★ 这条实验第一版报了「我们的尺子在这份数据上整体失灵（0/210 沉默）」。
+    那个结论是**错的**，原因是我读了 `model_final_answer` —— 它中位只有 6 个字符，
+    就是被抽出来的那个值（`0`、`Time-Parking 2: …`），里面**不可能**有犹豫的痕迹。
+    正文在 `leniq_answer` 的 JSON 里，中位 631 字符。
+
+    ⇒ 换成正文之后按"回答模式"量：**断言了什么 vs 承认不确定**。
+      这也把 §9 那条"边界"从"尺子不适用"改成"**尺子需要另一种读法**"。
   */
-  const wr = withAns.filter((r) => r.is_correct === 'FALSE')
+  const withResp = runs.filter((r) => (r.response || r.answer).trim() !== '')
+  const textOf = (r: GaiaRun) => r.response || r.answer
+
+  let asserted = 0      // 交了答案（无论对错）
+  let hedged = 0        // 正文里带了犹豫/做不到/质疑前提
+  let assertedWrong = 0 // 断言了而且错  ← 外部数据上的"无支撑断言"
+  let assertedRight = 0
+  let hedgedWrong = 0
+  for (const r of withResp) {
+    const c = claimOf(textOf(r))
+    const doubts = c.admitsFailure || c.escalates || c.challengesPremise
+    if (doubts) hedged++
+    // 「断言」= 它交出了一个具体的最终答案（这一份数据里几乎总是）
+    const didAssert = r.answer.trim() !== ''
+    if (didAssert) asserted++
+    if (r.is_correct === 'FALSE') {
+      if (didAssert) assertedWrong++
+      if (doubts) hedgedWrong++
+    } else if (r.is_correct === 'TRUE' && didAssert) assertedRight++
+  }
+  const n = withResp.length
+  const pctN = (x: number) => `${x}/${n} = ${pct(x / n)}`
+  console.log(`  有正文的 ${n} 条（共 ${runs.length}）`)
+  console.log(`    ${'交了具体最终答案的'.padEnd(22)}${pctN(asserted)}`)
+  console.log(`    ${'正文里带犹豫/做不到的'.padEnd(22)}${pctN(hedged)}${hedged === 0 ? Y('  ← 0 格：95% 上界 ' + pct(3 / n)) : ''}`)
+  console.log(`    ${'断言了而且答对的'.padEnd(22)}${pctN(assertedRight)}`)
+  console.log(`    ${'★ 断言了而且答错的'.padEnd(22)}${pctN(assertedWrong)}   ${D('← 外部数据上的"无支撑断言"')}`)
+  console.log(`    ${'  其中正文还带了犹豫的'.padEnd(22)}${pctN(hedgedWrong)}`)
+  const wa = wilson(assertedWrong, asserted)
   console.log(
-    `\n  ${Y('  ⚠️ 这一段量不出东西：')}${D(`他们判错的 ${wr.length} 条里我们认出犹豫的 = 0，`)}` +
-      `\n  ${D('     但我们在**全部** 210 条里也认出了 0 条 —— 分母两边都是 0，比不出任何结论。')}` +
-      `\n  ${D('     要量"错误答案有没有被如实标记"，先得让尺子在这份数据上有分辨力。')}`,
+    `\n  ${B('  断言错误率')} ${assertedWrong}/${asserted} = ${pct(assertedWrong / Math.max(1, asserted))}  ` +
+      `${D(`Wilson 95% [${pct(wa.lo)}, ${pct(wa.hi)}]`)}`,
+  )
+  console.log(
+    `\n  ${G('  读法：')}在**别人的真实轨迹**上，这个 agent ${pct(asserted / n)} 的情况下交了具体答案，` +
+      `\n  ${D(`     其中 ${pct(assertedWrong / Math.max(1, asserted))} 是错的，而正文里带犹豫的只有 ${hedgedWrong} 条 —— `)}` +
+      `\n  ${D('     也就是说**错误的断言几乎都是"自信地"交出去的**，这正是要拦的东西。')}`,
   )
 }
 
