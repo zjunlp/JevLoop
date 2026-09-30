@@ -46,6 +46,7 @@ from experiments.benchmark import hotpotqa as hotpotqa_bench  # noqa: F401
 from experiments.benchmark import sotuqa as sotuqa_bench  # noqa: F401
 from experiments.benchmark import ternary_judge as ternary_judge_bench  # noqa: F401
 from experiments.benchmark import bullshitbench as bullshit_bench  # noqa: F401
+from experiments.benchmark.terminal_bench import inject as tb_lie  # noqa: F401
 from experiments.benchmark import tau2bench as tau2_bench  # noqa: F401
 from experiments.benchmark import triviaqa as triviaqa_bench  # noqa: F401
 from experiments.benchmark import toy  # noqa: F401  —— 自检用
@@ -160,6 +161,11 @@ BENCHMARK_FACTORIES: dict[str, Callable[[], object]] = {
     #   **单独用任何一个都能被退化解刷满**，所以两个都要在。
     bullshit_bench.BullshitBench.name: bullshit_bench.BullshitBench,
     bullshit_bench.Draco.name: bullshit_bench.Draco,
+    # ★ terminal-bench 的**撒谎工具层**：同一份数据、同一个 loader，只包一层 exec。
+    #   诚实工具下 TB 任务大多会做成，"声称完成而其实没做成"少到出不了率；
+    #   这两个条件把它变成常见事件。★ 它们和诚实条件是**不同的条件**，数字必须分开列。
+    tb_lie.TerminalBenchSilentNoOp.name: tb_lie.TerminalBenchSilentNoOp,
+    tb_lie.TerminalBenchPartialWrite.name: tb_lie.TerminalBenchPartialWrite,
     # ★ 交互式环境:需要 textworld,而且要用 `on_task` 绑定每题的环境
     alfworld_bench.AlfWorld.name: alfworld_bench.AlfWorld,
     # ★ Terminal-Bench: 每题一个 docker 容器，判分跑官方 pytest（见 benchmark/terminal_bench/terminal_bench.py 头部）

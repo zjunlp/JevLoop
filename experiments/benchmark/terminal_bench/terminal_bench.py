@@ -136,7 +136,8 @@ class TerminalBench:
         if not TASKS_DIR.is_dir():
             raise FileNotFoundError(
                 f"{self.name}: 缺 {TASKS_DIR}\n"
-                f"  跑 `python3 -m experiments.scripts.datasets --fetch terminal-bench`"
+                f"  1) python3 -m experiments.scripts.datasets --fetch terminal-bench\n"
+                f"  2) 按 DOWNLOADS.md 里 terminal-bench 那条 note 解压（目录树，抽包器抽不动）"
             )
         all_dirs = sorted(d for d in TASKS_DIR.iterdir()
                           if d.is_dir() and (d / "task.yaml").exists())
@@ -297,21 +298,44 @@ class TerminalBench:
     # ── 下载 ────────────────────────────────────────────────
 
     def downloads(self) -> Sequence[DownloadSpec]:
+        """★ **这里原来声明的是一份永远下不下来的东西**（2026-09 实测）。
+
+        原来写的是 `files=("tasks/", "docker/", "registry.json")`，而有三个问题：
+
+        1. `core/download.py` 抽包时**只取单个文件**（`member.isfile()`），
+           并把 basename 拍平到目标目录 —— **目录树根本抽不出来**。
+           带斜杠的 `"tasks/"` 过 `Path(...).name` 之后是 `"tasks"`，
+           只会去匹配**名叫 tasks 的文件**，一个都匹配不到。
+        2. 实测这个 commit 下**没有 `registry.json`**（`tar tzf | grep -c` = 0）。
+        3. 于是 `--fetch terminal-bench` 每次都抛
+           「tarball 里找不到 [...]」—— 而 `_task_dirs()` 的报错信息**还在叫人去跑它**。
+
+        ⇒ 改成**只下 tarball 不抽**（`files=()` 时 `fetch` 直接返回整包），
+        解压步骤写进 `note`。这和 ALFWorld 的先例一致：那份也是目录树，
+        同样在 note 里写明"解压到 `dataset/alfworld/json_2.1.1/<split>/`"。
+
+        ★ 这样 `--fetch` 至少能**把数据拿到本机**，而"怎么摊开"是明确的一步，
+          不是一句做不到的话。
+        """
         return [
             DownloadSpec(
                 dataset=self.name,
                 kind="http",
-                # ★ registry.json 里登记的 v0.1.1: commit + branch 都写明
                 locator=(f"https://codeload.github.com/laude-institute/terminal-bench"
                          f"/tar.gz/{TB_COMMIT}"),
-                files=("tasks/", "docker/", "registry.json"),
+                # ★ 空 = 不抽，整包返回。见上面 1. 的理由。
+                files=(),
                 revision=TB_COMMIT,
                 size_hint="~14 MB（repo @ v0.1.1，不含 docker 镜像）",
-                note=(f"★ **terminal-bench-core=={TB_VERSION}** —— registry.json 里 publish "
-                      f"的 lock entry:commit {TB_COMMIT[:8]} / branch {TB_BRANCH}。"
-                      "解压到 `dataset/terminal_bench/v0.1.1/`（顶层名是 codeloud 的前缀）。"
-                      "docker 镜像**不在**这份里,每题 Dockerfile 现场 build。"
-                      "task_id_subset 80 个 id (含 .easy/.hard 变体) 的 unique base = 70 dir。"),
+                note=(f"★ **terminal-bench-core=={TB_VERSION}** —— commit {TB_COMMIT[:8]} / "
+                      f"branch {TB_BRANCH}。"
+                      "★ 这是一棵**目录树**（`tasks/` + `docker/`），而 `core/download.py` 只抽单个文件，"
+                      "所以这里**声明不下抽**，解压要自己来（和 ALFWorld 同一个先例）：\n"
+                      f"    tar xzf <tarball> --strip-components=1 -C {TB_ROOT}\n"
+                      "  顶层名是 codeload 的前缀（`terminal-bench-1-<sha>/`），`--strip-components=1` 去掉它。"
+                      "★ docker 镜像**不在**这份里，每题用它的 Dockerfile 现场 build。"
+                      "★ 本 commit 下**没有** `registry.json`（实测），别再按它找。"
+                      f"★ task_id_subset 80 个 id（含 .easy/.hard）的 unique base = {len(SUBSET_BASES)} 个目录。"),
             ),
         ]
 
