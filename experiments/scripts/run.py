@@ -238,6 +238,7 @@ def typed_arms(decider: DecisionClient) -> dict[str, Callable[[], Agent]]:
     - `rewoo × typed`:Worker 根本没有决策可换（`NOTES-*.md` §2.10.1）。
     - `jevloop`:我们自己的完整臂,它有自己的循环,不是「react 换个控制器」。
     """
+    from experiments.jloop.selfcheck import SelfCheckController
     from experiments.jloop.termination_only import TerminationOnlyController
     from experiments.jloop.typed import TypedController
 
@@ -250,6 +251,13 @@ def typed_arms(decider: DecisionClient) -> dict[str, Callable[[], Agent]]:
         #   只有"判定放几次"不同：这里循环中间一次都不问，只在终点问那一次。
         "react-termination": lambda: react_baseline.ReAct(
             controller=TerminationOnlyController(gate=TypedController(decider))
+        ),
+        # ★★ **零资源自检**（SelfCheckGPT 那个思路）—— 落在**同一根轴的同一点**（终点判定），
+        #   但验证者不是判定模型，而是"同一段提示多采几次，看它自己前后一致不一致"。
+        #   它**一次判定后端都不调**，代价是 k 次额外生成。
+        #   和 `react-termination` 逐格可比：同一个循环、同一批工具、同一个终点。
+        "react-selfcheck": lambda: react_baseline.ReAct(
+            controller=SelfCheckController()
         ),
     }
 

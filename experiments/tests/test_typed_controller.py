@@ -913,8 +913,15 @@ def test_the_typed_cells_are_reachable_by_name() -> None:
     # ★ `react-termination` 是 2026-09 加的**终点验证**那一臂（原计划 §3.3 的"关键比较"）：
     #   和 `react-typed` 共用同一个 `run_loop` / `build_prompt` / 同一批工具 /
     #   **同一个交付闸门**，只有"判定放几次"不同。它也要判定后端，所以一起登记。
-    assert set(typed_arms(decider)) == {"react-typed", "act-typed", "react-termination"}
-    for name in ("react-typed", "act-typed", "react-termination"):
+    # ★ 目录里每加一格就要在这里加一行 —— 这条测试的作用就是**在有人加了臂却忘了
+    #   登记时变红**（它已经拦下过一次）。三格的来历见 `jloop/` 各自的文件头。
+    assert set(typed_arms(decider)) == {
+        "react-typed",        # 全程七节点
+        "act-typed",          # 同上，act 循环
+        "react-termination",  # 只在终点判定（原计划的"关键比较")
+        "react-selfcheck",    # 零资源自检（SelfCheckGPT 那个思路）
+    }
+    for name in ("react-typed", "act-typed", "react-termination", "react-selfcheck"):
         agent = resolve_agent(name, decider)()
         assert agent.config.controller is not None, f"{name} 没接上控制器"
 
