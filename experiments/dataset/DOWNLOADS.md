@@ -33,6 +33,7 @@
   ★ 而 v0.1.0 的 `tasks.json` **就是 base 划分**（278 条）;HEAD 上多了 `split_tasks.json`,base 要从里面挑 —— 换版本连哪 278 条都会变。
   ★ `test` 那一列在排行榜口径下要跑 **pass^k = 4 次/任务**（`comb(success,k)/comb(trials,k)`） |
 | `terminal-bench` | http | `https://codeload.github.com/laude-institute/terminal-bench/tar.gz/91e10457b5410f16c44364da1a34cb6de8c488a5` | `3` 个 | 91e10457b5410f16c44364da1a34cb6de8c488a5 | ~14 MB（repo @ v0.1.1，不含 docker 镜像） | ★ **terminal-bench-core==0.1.1** —— registry.json 里 publish 的 lock entry:commit 91e10457 / branch dataset/terminal-bench-core/v0.1.x。解压到 `dataset/terminal_bench/v0.1.1/`（顶层名是 codeloud 的前缀）。docker 镜像**不在**这份里,每题 Dockerfile 现场 build。task_id_subset 80 个 id (含 .easy/.hard 变体) 的 unique base = 70 dir。 |
+| `ternary-judge` | http | `https://codeload.github.com/yakuninvladimir-ui/mvp-ternary-judge/tar.gz/1f1e19a7e466cb9bb6b7e8993a1a75ea3f29fb42` | `2` 个 | 1f1e19a7e466cb9bb6b7e8993a1a75ea3f29fb42 | ~80 KB（整个仓库） | ★ **许可证是 MIT**（`LICENSE`，Copyright (c) 2026 Vladimir Yakunin）—— 本批新接的数据集里唯一一个许可证写在仓库里的。★ 数据是**合成**的（Aldermont Systems 这家公司不存在），所以它测的是判定层的结构，不是真实世界的知识。★ 解压后是 `mvp-ternary-judge-<sha>/`，本 loader 期望它落在 `dataset/ternary_judge/data/`（脚本会改名）。 |
 | `triviaqa` | hf-dataset | `trivia_qa:rc.nocontext` | — | ⚠️ **main**（未钉） | ~700 MB（138,384 + 17,944 + 17,210） | ★ config 必须是 `rc.nocontext` —— ReWOO 用的就是它。★ 答案带**别名集**,官方口径与 ReWOO 口径不同,见本文件头部。`revision` 未钉,已用 fingerprint 记进 dataset_version |
 
 ## 怎么用

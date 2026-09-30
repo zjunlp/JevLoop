@@ -44,6 +44,7 @@ from experiments.benchmark import fever as fever_bench  # noqa: F401
 from experiments.benchmark import gsm8k as gsm8k_bench  # noqa: F401
 from experiments.benchmark import hotpotqa as hotpotqa_bench  # noqa: F401
 from experiments.benchmark import sotuqa as sotuqa_bench  # noqa: F401
+from experiments.benchmark import ternary_judge as ternary_judge_bench  # noqa: F401
 from experiments.benchmark import tau2bench as tau2_bench  # noqa: F401
 from experiments.benchmark import triviaqa as triviaqa_bench  # noqa: F401
 from experiments.benchmark import toy  # noqa: F401  —— 自检用
@@ -152,6 +153,8 @@ BENCHMARK_FACTORIES: dict[str, Callable[[], object]] = {
     triviaqa_bench.TriviaQa.name: triviaqa_bench.TriviaQa,
     fever_bench.Fever.name: fever_bench.Fever,
     sotuqa_bench.SotuQa.name: sotuqa_bench.SotuQa,
+    # ★ 新接：Propose-Judge-Commit 的检索语料 —— 唯一一个外部数据里「证据+主张+独立金标」三样齐全的
+    ternary_judge_bench.TernaryJudge.name: ternary_judge_bench.TernaryJudge,
     # ★ 交互式环境:需要 textworld,而且要用 `on_task` 绑定每题的环境
     alfworld_bench.AlfWorld.name: alfworld_bench.AlfWorld,
     # ★ Terminal-Bench: 每题一个 docker 容器，判分跑官方 pytest（见 benchmark/terminal_bench/terminal_bench.py 头部）
