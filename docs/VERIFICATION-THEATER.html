@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>我们以为在验证，其实没有</title>
+<style>
+  :root{
+    --fg:#14181d; --dim:#5a6570; --dimmer:#8b949e; --line:#e3e8ee; --line2:#cfd6de;
+    --bg:#fff; --soft:#f7f9fb; --accent:#0b5cad; --good:#1a7f37; --warn:#9a6700; --bad:#b42318;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.85;font-size:16.5px}
+  .wrap{max-width:840px;margin:0 auto;padding:66px 28px 96px}
+  .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--dimmer)}
+  h1{font-size:31px;line-height:1.35;margin:12px 0 12px;font-weight:700;letter-spacing:-.015em}
+  .lede{font-size:17.5px;color:var(--dim);margin:0}
+  .meta{margin-top:16px;font-family:var(--mono);font-size:12px;color:var(--dimmer)}
+  h2{font-size:19.5px;margin:52px 0 10px;font-weight:700}
+  h2 .n{font-family:var(--mono);font-size:12px;color:var(--accent);border:1px solid var(--line2);
+    border-radius:5px;padding:1px 7px;font-weight:400;margin-right:9px}
+  h3{font-size:16px;margin:26px 0 6px;font-weight:650}
+  p{margin:12px 0}
+  ul,ol{margin:12px 0;padding-left:20px}
+  li{margin:7px 0}
+  code{font-family:var(--mono);font-size:.92em;background:var(--soft);border:1px solid var(--line);
+    border-radius:4px;padding:1px 5px}
+  table{border-collapse:collapse;width:100%;margin:18px 0;font-size:15px}
+  th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{font-size:12.5px;color:var(--dim);font-weight:600;border-bottom-color:var(--line2)}
+  td.num,th.num{text-align:right;font-family:var(--mono);white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  tr.hl td{background:#f2f7fd}
+  tr.dimrow td{color:var(--dimmer)}
+  .good{color:var(--good);font-weight:600}
+  .bad{color:var(--bad);font-weight:600}
+  .warn{color:var(--warn);font-weight:600}
+  .dim{color:var(--dim)} .dimmer{color:var(--dimmer)}
+  .small{font-size:13.5px;color:var(--dimmer)}
+  .quote{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:18px 0}
+  .quote p{margin:0;font-family:var(--mono);font-size:14px;color:#2b3440}
+  .box{border-left:3px solid var(--accent);background:var(--soft);border-radius:0 10px 10px 0;
+    padding:14px 18px;margin:20px 0}
+  .box.warn{border-left-color:var(--warn)}
+  .box.bad{border-left-color:var(--bad)}
+  .box.good{border-left-color:var(--good)}
+  .box .t{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--dimmer);margin-bottom:6px}
+  .box p:first-of-type{margin-top:0}
+  .box p:last-child{margin-bottom:0}
+  .big{font-size:19px;font-weight:600;line-height:1.65}
+  hr{border:none;border-top:1px solid var(--line);margin:44px 0}
+  footer{margin-top:60px;padding-top:22px;border-top:1px solid var(--line);color:var(--dimmer);font-size:13.5px}
+  @media print{body{font-size:11.5pt}.wrap{padding:0;max-width:none}h2{page-break-after:avoid}
+    table,.box{page-break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">JevLoop · 一个检验，和它照出来的东西</div>
+  <h1>我们以为在验证，其实没有</h1>
+  <p class="lede">
+    Agent 会交出一份格式完美的「已完成」，而事情没做成。为此几乎所有人都加了一层治理——
+    一个判官、一次自我批判、一段 guardrail 提示词。<b>问题在于，这一层常常和它声称检查的证据
+    没有因果联系。</b>换掉证据，它的裁决一格都不动。
+  </p>
+  <div class="meta">以下每个数字都来自本仓库可复现的实验，保留意见都写在正文里，没有藏到附录。</div>
+
+  <h2><span class="n">一</span>现象：假完成不是稀有事件，而且它读起来很正常</h2>
+
+  <p>
+    最直观的例子来自<b>别人公开的真实运行记录</b>（Leni 团队发布的 GAIA 轨迹，207 条有正文的）。
+    这个 agent <b>99.5%</b> 的时候都会给出一个具体答案——而其中 <b class="bad">21.8% 是错的</b>。
+    45 个错误答案里，<b>只有 2 个</b>在正文里流露过任何犹豫。
+  </p>
+
+  <div class="box bad">
+    <div class="t">要命的地方</div>
+    <p class="big">错误的断言几乎都是「自信地」交出去的。</p>
+    <p>
+      没有"我不确定"，没有"证据不足"，没有含糊。就是一句笃定的错话，格式规范、语气正常——
+      <b>任何"读一遍回答"的检查都过得去</b>，因为错误不在措辞里，在<b>回答和现实之间</b>。
+    </p>
+  </div>
+
+  <p>自己造的例子更直白：</p>
+
+  <div class="quote"><p>已完成。<code>alpha.ts</code> 中的 <code>totalOf</code> 函数已复制到新文件 <code>summary.ts</code> 中。</p></div>
+
+  <p>而盘上根本没有那个文件。</p>
+
+  <h2><span class="n">二</span>大家的做法：再加一个判官</h2>
+
+  <p>
+    面对这件事，最常见的方案是在生成之后加一层检查——让一个模型（往往是同一个）读一遍结果，
+    判它能不能交出去。这套做法有很多名字：LLM-as-a-judge、self-critique、evidence verifier、输出闸门。
+  </p>
+
+  <p>
+    它有一个隐含前提：<b>那个判官读了证据，所以它能发现回答和证据对不上。</b>
+    我们决定把这句话拿去证伪。
+  </p>
+
+  <h2><span class="n">三</span>一行检验：把证据换掉</h2>
+
+  <p>
+    如果判官真的在读证据，那么<b>把证据换成别的东西，它的裁决就应该变</b>。
+    所以我们把判官读的那一格替换成<b>另一个任务</b>的证据——真实、非空、形态完全一样，
+    只是内容与这份回答无关。
+  </p>
+
+  <table>
+    <thead><tr><th>判官</th><th class="num">换掉证据后，改判的格数</th></tr></thead>
+    <tbody>
+      <tr class="hl"><td><b>专门的判定模型</b>（读一份声明过的有界帧）</td><td class="num good">37 / 72　·　67 / 120</td></tr>
+      <tr><td>通用模型 + 提示词（今天最常见的配置）</td><td class="num bad">0 / 72　·　0 / 72　·　1 / 120</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box">
+    <div class="t">读法</div>
+    <p>
+      通用模型那个判官<b>几乎完全不受证据内容影响</b>。三次运行、两个数据集、共 264 个格子，
+      证据换了一整遍，它只动过一格。
+    </p>
+    <p>
+      <b>它抓得少，不是因为它"判得差"，而是因为它做的不是验证。</b>
+      它在读回答文本和任务文本，然后给出一个看起来像判定的东西。
+    </p>
+  </div>
+
+  <p>
+    顺带一个同样反直觉的结果：<b>换一个模型族并不必然更好</b>。实测里异族判官抓得更多，
+    但误伤也多到<b>超过连"拦下之后百分之百能修好"都容忍不了的上界</b>，净为负。
+    所以"换个模型更独立"这句流行说法，在我们这套数据上不成立。
+  </p>
+
+  <h2><span class="n">四</span>就算它真读证据，也有一个天花板</h2>
+
+  <p>
+    我们把条件换成：工具的谎言出现在判定层<b>自己读的那份证据里</b>——
+    工具报告"已写入 <code>summary.ts</code>"，而盘上什么都没发生。
+  </p>
+
+  <p>
+    这时判定层被要求<b>怀疑自己的证据通道</b>。本研究里表现最好的闸门，也只拦下
+    <b class="bad">34%</b>。三分之二的假完成照过。
+  </p>
+
+  <div class="box bad">
+    <div class="t">这一条比上一节更根本</div>
+    <p class="big">证据链<b>完整</b>，不等于证据链<b>真实</b>。</p>
+    <p>
+      每一步都有记录、有指纹、可重放——这些是"完整"，是当前大多数治理工作当卖点的那件事。
+      我们量出来的是：在完整但被污染的证据链上，任何依赖它做判断的机制都被锁在 34%。
+    </p>
+  </div>
+
+  <h2><span class="n">五</span>要量这件事，尺子得换</h2>
+
+  <p>
+    我们最初用的是"两组的平均值差"，它测不出东西——最早的对照实验跑了 81 个格子，
+    只观察到 <b>1 个事件</b>。在那个密度下平均值差<b>在数学上就估不出来</b>。
+    换成两个数之后就能测了：
+  </p>
+
+  <table>
+    <thead><tr><th>指标</th><th>问的是</th></tr></thead>
+    <tbody>
+      <tr><td><b>捕获率</b></td><td>该拦的，拦住了多少</td></tr>
+      <tr><td><b>误伤率</b></td><td>合法的活，被错拦了多少</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    两个必须<b>成对</b>报——只报捕获率是可以被刷满的（一个"一律说没做完"的判官拿满分）。
+    每个比例带分子分母；<b>零事件给统计上界，不写 0%</b>（0/27 只能排除发生率高于 11%）；弃权单列。
+  </p>
+
+  <div class="box warn">
+    <div class="t">★ 而我们自己在这把尺子上栽过一次 —— 这条我认为比任何数字都该留着</div>
+    <p>
+      有一轮测出"<b>误伤只有 3%，已经达标</b>"。我们把那个门限<b>冻结成常量</b>、
+      换 <b>240 个全新候选</b>再验——结果是 <b class="bad">9.2%</b>。
+    </p>
+    <p>
+      那 3% 是 30 个样本上的噪声。<b>留出集能防"拟合挑选集"，防不住"拟合这一次运行"。</b>
+      只有把门限事先冻结、再生成新样本才管用。
+    </p>
+  </div>
+
+  <h2><span class="n">六</span>对照怎么摆：按轴，不排排行榜</h2>
+
+  <p>
+    要主张的是"谁做那次判定、它读什么"，所以对照必须变的是<b>验证者</b>，
+    而不是 agent 的推理方式（ReAct / Reflexion / ReWOO 那类变的是 loop 的形状）。
+  </p>
+
+  <table>
+    <thead><tr><th>轴</th><th>位置</th><th>我们的臂</th><th>出处 / 状态</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="5"><b>A 谁判</b></td><td>不判定</td><td><code>react</code> / <code>direct</code></td><td>zero-shot 下界</td></tr>
+      <tr><td>零资源自检（多采几次看自洽）</td><td><code>react-selfcheck</code></td><td><a href="https://github.com/wangxinyufighting/selfcheckgpt">SelfCheckGPT</a>（EMNLP'23）</td></tr>
+      <tr><td>LLM 自评，不碰金标</td><td><code>reflexion-selfeval</code></td><td>Reflexion 的不吃金标那一版</td></tr>
+      <tr class="hl"><td>判定模型读有界帧</td><td><code>react-termination</code> / <code>react-typed</code></td><td>我们</td></tr>
+      <tr><td>规则 / 确定性检查</td><td><code>compiled</code></td><td>Guardrails 一族</td></tr>
+      <tr><td rowspan="2"><b>B 判几次</b></td><td>只在终点判一次</td><td><code>react-termination</code> / <code>react-selfcheck</code></td><td>✅</td></tr>
+      <tr><td>全程七个节点</td><td><code>react-typed</code></td><td>✅</td></tr>
+      <tr><td><b>C 形式</b></td><td>声明式契约 vs 等价代码</td><td>—</td><td>✅ <b>已测：无差别，且可证等价</b></td></tr>
+    </tbody>
+  </table>
+
+  <p>四条臂在同一个循环、同一批工具上逐格比过（20 题，一个模型，<b>只能当方向</b>）：</p>
+
+  <table>
+    <thead><tr><th>臂</th><th class="num">答对</th><th class="num">闸门假拒</th><th class="num">闸门放过</th><th class="num">生成调用</th><th class="num">判定请求</th></tr></thead>
+    <tbody>
+      <tr class="dimrow"><td><code>react</code>（没有验证者）</td><td class="num">15/20</td><td class="num">0</td><td class="num">0</td><td class="num">69</td><td class="num">0</td></tr>
+      <tr class="hl"><td>终点 · 判定模型</td><td class="num">15/20</td><td class="num good">0</td><td class="num warn">5</td><td class="num">69</td><td class="num">20</td></tr>
+      <tr class="hl"><td>终点 · 零资源自检</td><td class="num">15/20</td><td class="num bad">4</td><td class="num good">1</td><td class="num bad">137</td><td class="num">0</td></tr>
+      <tr><td>全程七节点</td><td class="num bad">3/20</td><td class="num">0</td><td class="num bad">11</td><td class="num">49</td><td class="num">273</td></tr>
+    </tbody>
+  </table>
+
+  <p class="small">
+    三条"终点"臂的成绩都是 15/20，只有全程那条掉到 3/20 —— 所以「判定放得越多越好」在这里不成立。
+    第一行的 0/0 是<b>构造上没有闸门</b>，不是"闸门从不犯错"，并列时必须写清。
+  </p>
+
+  <h2><span class="n">七</span>现在能声称什么、不能声称什么</h2>
+
+  <div class="box good">
+    <div class="t">已经确立</div>
+    <ul>
+      <li><b>换掉证据，通用模型的判官几乎不动</b>（264 格里动 1 格）。这是全文最硬的一条。</li>
+      <li>专门的判定模型<b>会</b>随证据改判（37/72、67/120），而且比通用模型判官显著抓得多。</li>
+      <li>工具撒谎时存在一个天花板：最好的闸门只拦下 34%。</li>
+      <li>只改策略（不动判定、不加调用）就能把误伤从 9% 降到 3%，代价是掉一点捕获。</li>
+    </ul>
+  </div>
+
+  <div class="box warn">
+    <div class="t">还没确立 —— 这些不写清，上面就是过度声称</div>
+    <ul>
+      <li>
+        <b>那条"判官不看证据"目前只有<u>一个</u>通用模型（Qwen3.5-9B）。</b>
+        要写成"常见做法不做验证"，至少得再加 3–4 个模型（含异族）；
+        否则它只是"某一个模型不读证据"。<b>这是全文能不能立住的前提。</b>
+      </li>
+      <li>34% 那个天花板来自<b>一个条件</b>，要到多个数据集、多种污染方式上才算界。</li>
+      <li>衡量"对/错"的尺子与<b>被测的闸门同源</b>，而它自己已经误报过四次，每次都把一句老实的认输读成"默不作声地交付"。</li>
+      <li>四臂那张表只有一个数据集、20 题。<b>小，只能当方向。</b></li>
+      <li><b>效应量还不稳</b>：四次同配置运行，捕获率 44% / 73% / 82% / 28–34%。</li>
+    </ul>
+  </div>
+
+  <hr>
+
+  <p class="big" style="margin-top:0">
+    一句话：<b>「加了一层治理」不等于「被治理了」——
+    你可以用一次换证据的检验，在自己那套上花五分钟验证这句话。</b>
+  </p>
+
+  <footer>
+    实验记录：<code>docs/PAPER-CLAIM-2026-09.md</code> ·
+    <code>docs/MEASUREMENT-gate-equivalence.md</code>（Round 1–6）<br>
+    代码：<code>bench/confusion.ts</code> · <code>experiments/jloop/</code> ·
+    <code>src/claim-lexicon.ts</code> · <code>scripts/reconcile-leni.ts</code><br>
+    其它：<code>docs/WHAT-WE-FOUND.html</code>（详细版）· <code>docs/WHAT-WE-FOUND-brief.html</code>（一页版）
+  </footer>
+
+</div>
+</body>
+</html>
