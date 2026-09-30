@@ -236,6 +236,15 @@ export function claimOf(answer: string): Claim {
   const text = stripCode(answer ?? '')
   const failure = matchAny(text, FAILURE_PATTERNS)
   const escalation = matchAny(text, ESCALATION_PATTERNS)
+  /*
+    ⚠️ **已知的过度触发**（实测，未修）：本判据全篇匹配，一篇正面长文里出现一个
+    否定词也会被算成「质疑前提」。DRACO 那 20 条报了 3 条误伤，逐条读只有 1 条为真。
+
+    ★ 试过"只看开头 N 字符"，**两个数据集一起量下来是亏的**：
+    窗口 200 ⇒ BullshitBench 一致率 62.5%（漏 75 条）；窗口 1200 ⇒ 82.5%（漏 34）；
+    不截断 ⇒ 84.5%（漏 30），而 DRACO 误伤只从 3 降到 1。
+    ⇒ 每修掉一条误伤要丢十几条真的，所以不修，**作为已测量的边界记下来**。
+  */
   const premise = matchAny(text, PREMISE_PATTERNS)
   const done = matchAny(text, DONE_PATTERNS)
   const tests = matchAny(text, TEST_PATTERNS)

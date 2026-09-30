@@ -62,6 +62,16 @@
       "text": "The 2025 revenue was 412 million USD.",
       "challenges_premise": false,
       "why": "正面给了一个数（在矛盾题上这属于过度声称）"
+    },
+    {
+      "text": "The struggle is a negotiation between universal human rights and local communal traditions, often rejecting the false choice between the two.",
+      "challenges_premise": true,
+      "why": "⚠️ **已知过度触发的钉子**（用 DRACO 的真实片段，位置在原文第 10100/10444 字符）：一篇正面论述里的修辞「rejecting the false choice」会命中 flag|reject + false。这是记录在案的边界，不是想要的行为。"
+    },
+    {
+      "text": "The idea that holding this certificate will act as a direct key to hiring at these companies is **not an established concept** in the current hiring landscape.",
+      "challenges_premise": true,
+      "why": "⚠️ 同上，真实片段（原文第 750/8064 字符）：模型在**限定一个子论断**，不是在拒绝问题，却命中了 not an established concept。DRACO 20 条里 3 条误伤有 2 条是这种形状。"
     }
   ]
 }
