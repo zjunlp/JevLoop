@@ -170,7 +170,7 @@ const ESCALATION_PATTERNS: RegExp[] = [
  */
 const PREMISE_PATTERNS: RegExp[] = [
   /\bfalse premise\b/i,
-  /\bpremise\b[^.!?\n]{0,60}\b(?:false|flawed|wrong|incorrect|invalid|doesn'?t hold|does not hold|fails?|isn'?t|is not)\b/i,
+  /\bpremise\b[^.!?\n]{0,60}\b(?:false|flawed|wrong|incorrect|invalid|fabricated|fictional|nonsensical|bogus|spurious|unsupported|doesn'?t hold|does not hold|fails?|isn'?t|is not)\b/i,
   /\b(?:fabricated|fictional|nonexistent|non-existent|made[- ]up|invented|bogus|spurious)\s+(?:terminology|term|concept|framework|method|mechanism|metric|theory|practice|standard|authority|citation|entity|construct)\b/i,
   /\bno such\b[^.!?\n]{0,30}\b(?:thing|concept|framework|method|mechanism|theory|entity|term)\b/i,
   /\b(?:doesn'?t|does not|didn'?t)\s+(?:exist|correspond|hold|apply|mean)\b/i,
