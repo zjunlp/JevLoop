@@ -26,11 +26,12 @@ class AdmissionClient(ScriptedClient):
         return response
 
 
-def run(kind, p, form="relational"):
+def run(kind, p, form="relational", low_policy="finish"): 
     client = AdmissionClient(p)
     session = make_session()
     ctl = TypedController(client, pick_input_shape="admission", admission_answer_kind=kind,
-                         admission_question_form=form)
+                         admission_question_form=form,
+                         admission_low_score_policy=low_policy)
     decision = ctl.decide(session, _view(session))
     requests = [r for r in client.requests if any(n.startswith("pickInput::") for n in r.questions)]
     assert requests
@@ -66,6 +67,15 @@ def test_only_question_form_changes_prompt():
         assert relational.questions[node]["type"] == suffices.questions[node]["type"] == "noul"
         assert relational.questions[node]["criteria"] == suffices.questions[node]["criteria"]
         assert relational.questions[node]["instructions"] != suffices.questions[node]["instructions"]
+
+
+def test_ranked_policy_only_changes_low_score_routing():
+    finish, control, _ = run("noul", 0.05)
+    ranked, variant, _ = run("noul", 0.05, low_policy="ranked_action")
+    assert control.state == variant.state
+    assert control.questions == variant.questions
+    assert finish.kind != "tool"
+    assert ranked.kind == "tool"
 
 
 def test_unknown_answer_kind_raises():

@@ -908,7 +908,7 @@ NODE_THRESHOLDS: dict[str, float] = {
 #: 并且 `pickInput` 补上了 `last_result`。帧的**内容**变了 ⇒ 与 typed-4 不可比。
 #: ★ `typed-4` —— 闸门改成**规则先筛、判官只确认**（用户 2026-10-04 的决定）。
 #: ★ `typed-3` 及以前 —— **判官产生裁决**。三批数字**不能进同一张表**。
-DECISION_SPEC_VERSION = "typed-12"
+DECISION_SPEC_VERSION = "typed-13"
 
 #: `allow_choices_without_escape` 的**离线说明** —— 见那个字段的文档。
 #: ★ 它是一份**声明**，不是一个可调的参数:打开它的批次是另一个方法。
@@ -1221,6 +1221,8 @@ class TypedController:
     # A1a changes only the answer type; keep the measured boolean control.
     admission_answer_kind: str = "noul"
     admission_question_form: str = "relational"
+    # A2 changes only low-score routing, not missing-answer handling.
+    admission_low_score_policy: str = "finish"
 
     #: ★★★ **只观察、不落地的判定点**（照 μ 的 `shadow` 模式）。
     #:
@@ -1645,16 +1647,29 @@ class TypedController:
             ranked.sort(key=lambda t: -t[2])
             best_i, best_o, best_p = ranked[0]
             bar = NODE_THRESHOLDS["pickInput"]
+            if self.admission_low_score_policy not in ("finish", "ranked_action"):
+                raise ValueError(f"Unknown admission low-score policy: {self.admission_low_score_policy!r}")
+            take_ranked = best_p < bar and self.admission_low_score_policy == "ranked_action"
+            low_score_detail = (
+                " ⇒ 按排序选择动作，风险与授权闸门照常运行"
+                if take_ranked
+                else " ⇒ 没有任何候选过线，转去尝试收尾（逃逸是推导出来的,不是选项）"
+            )
             self.trace.append({
                 "step": view.step, "node": "pickInput",
-                "answer": f"[{best_i}] {best_o}" if best_p >= bar else "none_cleared_the_bar",
+                "answer": f"[{best_i}] {best_o}" if (best_p >= bar or take_ranked) else "none_cleared_the_bar",
                 "top": best_p,
                 "detail": (f"一候选一题:{len(ranked)} 个候选各自打分,最高 [{best_i}] "
                            f"`{best_o}` = {best_p:.3f}（门限 {bar}）"
-                           + ("" if best_p >= bar else " ⇒ **没有任何候选过线**,"
-                              "转去尝试收尾（逃逸是推导出来的,不是选项）")),
+                           + ("" if best_p >= bar else low_score_detail)),
             })
             if best_p < bar:
+                if self.admission_low_score_policy == "ranked_action":
+                    return {first: best_o}, None
+                if self.admission_low_score_policy != "finish":
+                    raise ValueError(
+                        f"Unknown admission low-score policy: {self.admission_low_score_policy!r}"
+                    )
                 return {}, NO_ACTION_FITS
             return {first: best_o}, None
 
