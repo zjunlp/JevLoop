@@ -1497,7 +1497,14 @@ class TypedController:
             #     而"要不要做这个动作"已经由**更前面**的 `needsTool` 判过了。
             #     §8.1：能由精确规则定的，不交给判定模型。
             return {first: options[0]}, None
-        if self.pick_input_shape == "per_candidate" and not self.allow_choices_without_escape:
+        # ★★★ **问法跟候选的结构走** —— 环境可以为**这一个工具**声明用哪种
+        #   （`Tool.candidate_shape`），没说才用控制器的默认。
+        #   为什么必须有这一栏:`docs/ACTION-SELECTION-LESSONS.md` 那条结论
+        #   （"N 选 1 的 argmax 是病,一候选一题是修法"）在 TERNARY 上**被实测推翻**了,
+        #   而推翻它的原因是候选的**结构**:同质候选要比较,异构候选要准入。
+        #   详见 `Tool.candidate_shape`。
+        shape = getattr(tool, "candidate_shape", None) or self.pick_input_shape
+        if shape == "per_candidate" and not self.allow_choices_without_escape:
             # ★★★ **一候选一题**（2026-10-04）—— 见 `PICK_INPUT_CANDIDATE_ASK` 的说明。
             #
             #   ① **候选进状态（编号表）,题里只引用编号。**

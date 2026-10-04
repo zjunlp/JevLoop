@@ -81,6 +81,28 @@ def test_the_candidate_set_does_not_leak_across_tasks() -> None:
     )
 
 
+def test_read_doc_declares_the_comparative_shape() -> None:
+    """★★★ **同质候选要声明成比较型问法,而且这个声明是有数的。**
+
+    检索报出来的 1~3 篇是同一家公司的不同文档（`— company profile` /
+    `— market news` / `Sector commentary #N`），问的是成立年份 —— 只有 profile 有。
+    实测（同一条码,20 题）:N 选 1 是 15/12/12/12,一候选一题是 8/8/9/9。
+    判官在 N 选 1 里选对了 profile,各答各的时反而挑了 `market news`。
+
+    ★ 这条测试钉的是**声明**,不是控制器的默认值:控制器默认是 `per_candidate`,
+      而这个数据集**必须**有能力说"我这组候选要比较"。
+      声明丢了的话行为会静默地退回默认 —— 而默认恰好是更差的那一个。
+    """
+    b = _bench()
+    tools = _tools(b)
+    assert tools["read_doc"].candidate_shape == "comparative", (
+        "`read_doc` 的同质候选必须声明成比较型 —— "
+        "一候选一题在这组候选上实测更差（8/8/9/9 对 15/12/12/12）"
+    )
+    # ★ `search` 那一边不该跟着变:它是**生成**参数（provider=None）,没有候选集。
+    assert tools["search"].candidate_shape is None
+
+
 def test_the_benchmark_scoring_is_untouched_by_the_candidate_source() -> None:
     """★ 候选源是**动作空间**的声明，不是判分的改动。
 

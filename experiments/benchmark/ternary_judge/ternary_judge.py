@@ -244,6 +244,17 @@ class TernaryJudge:
             live_candidates=lambda: sorted(self._seen_docs) or [d["doc_id"] for d in docs],
             describe_candidate=lambda d, _m={x["doc_id"]: x["title"] for x in docs}:
                 f"{_m.get(d, d)}",
+            # ★★★ **同质候选 ⇒ 比较型问法。** 实测（2026-10-04,20 题,同一条码）:
+            #
+            #     一候选一题:  8, 8, 9, 9 题对   —— 判官挑 `d020`/`d023`/`d019`
+            #     N 选 1:     15,12,12,12 题对   —— 判官挑 `d008`/`d003`/`d007`
+            #
+            #   检索报出来的这 1~3 篇是**同一家公司的不同文档**（标题分别写着
+            #   `— company profile` / `— market news` / `Sector commentary #8`）,
+            #   而"成立年份"只在 profile 里。判官**能靠标题区分**（N 选 1 做到了）,
+            #   但各答各的时它给三篇打了 0.25 / 0.29 / 0.31 —— 排序是错的。
+            #   ⇒ 这类候选要**互相比较**,不是各自过一个绝对门限。
+            candidate_shape="comparative",
                 parameters={
                     "type": "object",
                     "properties": {
