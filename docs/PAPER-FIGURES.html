@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JevLoop · 论文插图草稿（Fig.1 / Fig.2 / Fig.3）</title>
+<style>
+  :root{
+    --fg:#14181d; --dim:#5a6570; --dimmer:#8b949e; --line:#e3e8ee; --line2:#cfd6de;
+    --bg:#ffffff; --soft:#f7f9fb; --accent:#0b5cad; --good:#1a7f37; --warn:#9a6700; --bad:#b42318;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.7;font-size:15px}
+  .wrap{max-width:820px;margin:0 auto;padding:48px 24px 80px}
+  h1{font-size:22px;margin:0 0 6px}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--dimmer)}
+  .note{background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:18px 0;font-size:13.5px;color:var(--dim)}
+  .note p{margin:6px 0}.note p:first-child{margin-top:0}.note p:last-child{margin-bottom:0}
+  hr{border:none;border-top:1px solid var(--line);margin:48px 0}
+  .figblock{margin:34px 0}
+  .band{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dimmer);margin-bottom:8px}
+  .colbox{border:1px dashed var(--line2);border-radius:4px;margin:0 auto;position:relative}
+  .colbox::after{content:attr(data-w);position:absolute;right:-1px;top:-19px;
+    font-family:var(--mono);font-size:10.5px;color:var(--dimmer)}
+  .caption{max-width:100%;margin:14px auto 0;font-size:13.5px;color:#2b3440;line-height:1.75}
+  .caption .lbl{font-weight:700}
+  code{font-family:var(--mono);font-size:.92em;background:var(--soft);border:1px solid var(--line);border-radius:3px;padding:0 4px}
+
+  /* ── 通用零件 ─────────────────────────────────────── */
+  .box{border:1px solid var(--line2);border-radius:5px;padding:4px 8px;font-size:10.5px;
+    line-height:1.3;text-align:center;background:#fff}
+  .box .s{display:block;font-family:var(--mono);font-size:8.5px;color:var(--dimmer);margin-top:1px}
+  .box.dec{border:1px dashed var(--accent);color:var(--accent);font-weight:600}
+  .box.ent{border:1.5px solid var(--fg);background:var(--soft)}
+  .end{font-family:var(--mono);font-size:10px;font-weight:700;border:1.5px solid var(--fg);
+    border-radius:5px;padding:4px 7px;background:#fff;white-space:nowrap}
+  .ar{font-family:var(--mono);font-size:9.5px;color:var(--dimmer);padding:0 5px;white-space:nowrap;text-align:center}
+  .ev{font-family:var(--mono);font-size:8.5px;color:var(--accent);text-align:center;margin-top:2px}
+
+  /* ── Fig 1 ─────────────────────────────────────────── */
+  .f1{width:326px;padding:12px 10px}
+  .f1 .hdr{font-size:10px;font-family:var(--mono);color:var(--dimmer);text-align:center;
+    margin-bottom:10px;letter-spacing:.04em}
+  .par{border:1px solid var(--line2);border-radius:7px;padding:8px 9px;margin:7px 0}
+  .par.ours{border:1.5px solid var(--accent);background:#f6faff}
+  .par .lbl{font-size:11.5px;font-weight:700;margin-bottom:7px;display:flex;gap:6px;align-items:baseline}
+  .par .lbl .b{font-family:var(--mono);font-size:9.5px;font-weight:400;color:var(--dimmer);
+    border:1px solid var(--line2);border-radius:3px;padding:0 4px;flex:none}
+  .par .lbl .dim2{font-weight:400;font-size:10px;color:var(--dimmer)}
+  .sk{display:flex;align-items:center;justify-content:center;margin:2px 0 7px;flex-wrap:nowrap}
+  .cs{font-size:10.5px;line-height:1.55;color:var(--dim)}
+  .cs.bad{color:var(--bad)}
+  .cs.ok{color:var(--good);font-weight:600}
+  .f1 .claim{margin-top:10px;border-top:1px solid var(--line);padding-top:8px;
+    font-size:11px;font-weight:600;color:var(--accent);text-align:center;line-height:1.6}
+
+  /* ── Fig 2 ─────────────────────────────────────────── */
+  .f2{width:682px;padding:12px 12px 10px}
+  .pane{border:1px solid var(--line);border-radius:8px;padding:10px 11px;margin-bottom:9px}
+  .pane .pt{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--dimmer);margin-bottom:8px}
+  .row{display:flex;align-items:center;gap:0;flex-wrap:nowrap}
+  .n{border:1px solid var(--line2);border-radius:6px;padding:5px 8px;font-size:10.5px;
+    text-align:center;background:#fff;line-height:1.35;white-space:nowrap}
+  .n .s{display:block;font-family:var(--mono);font-size:8.5px;color:var(--dimmer)}
+  .n.dec{border:1px dashed var(--accent);color:var(--accent);font-weight:600}
+  .n.gen{border-color:var(--fg)}
+  .n.ok{border-color:var(--good);color:var(--good);font-weight:600}
+  .n.no{border-color:var(--bad);color:var(--bad);font-weight:600}
+  .stack{display:flex;flex-direction:column;align-items:center;gap:2px}
+  .two{display:flex;gap:9px}
+  .two > .pane{flex:1;margin-bottom:0}
+  .kv{display:flex;gap:7px;font-size:10.5px;line-height:1.5;margin:4px 0}
+  .kv .k{font-family:var(--mono);font-size:9.5px;color:var(--accent);flex:none;min-width:74px;padding-top:1px}
+  .kv .v{color:#2b3440}
+  .ledger{font-family:var(--mono);font-size:9.5px;color:#2b3440;background:var(--soft);
+    border-radius:4px;padding:5px 7px;margin-top:6px;line-height:1.6;white-space:pre}
+  .tagline{font-size:10px;color:var(--dimmer);font-family:var(--mono);margin-top:6px;text-align:center}
+
+  /* ── Fig 3（分析章备用）────────────────────────────── */
+  .f3{width:326px;padding:10px 8px}
+  .f3 .hdr{font-size:10.5px;font-family:var(--mono);color:var(--dimmer);text-align:center;
+    margin-bottom:8px;letter-spacing:.04em}
+  .arm{border:1px solid var(--line2);border-radius:6px;padding:7px 9px;margin:6px 0}
+  .arm .t{font-size:11.5px;font-weight:700;display:flex;gap:6px;align-items:baseline}
+  .arm .t .b{font-family:var(--mono);font-size:10px;color:var(--dimmer);border:1px solid var(--line2);
+    border-radius:3px;padding:0 4px;flex:none}
+  .arm .m{font-family:var(--mono);font-size:9.5px;color:#2b3440;background:var(--soft);
+    border-radius:3px;padding:3px 5px;margin:5px 0;white-space:pre;overflow:hidden}
+  .arm .d{font-size:11px;color:var(--bad);line-height:1.5}
+  .arm .d.ok{color:var(--good);font-weight:600}
+  .arm.ours{border:1.5px solid var(--accent);background:#f6faff}
+  .f3 .claim{margin-top:9px;border-top:1px solid var(--line);padding-top:7px;
+    font-size:11px;font-weight:600;color:var(--accent);text-align:center;line-height:1.5}
+
+  @media print{
+    .wrap{padding:0;max-width:none}
+    .figblock{page-break-inside:avoid}
+    hr{page-break-after:always;border:none}
+    .note{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">JevLoop · 论文插图草稿</div>
+  <h1>Fig. 1（单栏·Intro）/ Fig. 2（双栏·Method）/ Fig. 3（分析章备用）</h1>
+
+  <div class="note">
+    <p><b>尺寸是真的</b>：单栏 <b>326px</b>（3.4in），双栏 <b>682px</b>（7.1in）@96dpi。虚线框就是栏边界。</p>
+    <p><b>Fig. 1 按你的意见重画了</b>：原来那版（四种答法逐条列缺陷、带 <code>1/120</code> 这类数）**不是 intro 的语言**，它是分析章的东西 —— 已原样挪到 <b>Fig. 3</b>，一个字没丢。</p>
+    <p><b>新的 Fig. 1 只回答一个问题</b>：那个 <code>END</code> 是被谁、按什么触发的。三行对齐，眼睛直接比。</p>
+  </div>
+
+  <hr>
+
+  <!-- ══════════════════════════ FIG 1 ══════════════════════════ -->
+  <div class="figblock">
+    <div class="band">Fig. 1 · 单栏 · Intro（大同行向）</div>
+    <div class="colbox" data-w="326px" style="width:326px">
+      <div class="f1">
+        <div class="hdr">WHO FIRES &ldquo;END&rdquo;，AND ON WHAT GROUNDS?</div>
+
+        <div class="par">
+          <div class="lbl"><span class="b">A</span>Workflow</div>
+          <div class="sk">
+            <div class="box">人写好的流程<span class="s">a human draws the graph</span></div>
+            <span class="ar">→</span>
+            <div class="box">模型只填空<span class="s">model fills the slots</span></div>
+            <span class="ar">→</span>
+            <span class="end">END</span>
+          </div>
+          <div class="cs bad">停在哪，也是人写好的 —— 你没为它写过的情况，它根本不存在</div>
+        </div>
+
+        <div class="par">
+          <div class="lbl"><span class="b">B</span>Agent loop <span class="dim2">（今天）</span></div>
+          <div class="sk">
+            <div class="box ent">模型的<b>一条输出流</b><span class="s">动作 + 停不停 · 同一个来源</span></div>
+            <span class="ar">形状<br>决定→</span>
+            <span class="end">END</span>
+          </div>
+          <div class="cs bad">干活的和喊停的是同一个东西 —— 所以"做完了"和"写得像做完了"分不开</div>
+        </div>
+
+        <div class="par ours">
+          <div class="lbl"><span class="b">C</span>Ours</div>
+          <div class="sk">
+            <div class="box">生成<span class="s">the work</span></div>
+            <span class="ar">→</span>
+            <div class="stack">
+              <div class="box dec">判决</div>
+              <div class="ev">↑ 证据</div>
+            </div>
+            <span class="ar">→</span>
+            <span class="end">END</span>
+          </div>
+          <div class="cs ok">喊停的是另一个东西，而且它必须去读证据 —— "停得对不对"第一次成了可以单独量的东西</div>
+        </div>
+
+        <div class="claim">差别不在"谁来判"，<br>在"判的时候看什么"</div>
+      </div>
+    </div>
+    <div class="caption">
+      <p><span class="lbl">Figure 1.</span>
+      <b>三种范式，差别只有一处：<code>END</code> 由谁触发、依据是什么。</b>
+      (A) <b>Workflow</b>：控制流由人写好，模型只在格子里填空——它只在你写过的地方存在。
+      (B) <b>今天的 agent loop</b>：干活的动作和"该不该停"来自<b>同一条输出流</b>，于是终止判据是生成物的形状；而"假完成"恰恰是最像样的续写，所以判据与错误同源。
+      (C) <b>本文</b>：生成只能<b>提议</b>完成，喊停由另一个判决做出，且该判决必须去读证据。于是"停得对不对"从一个无名的副产品变成<b>一个可以单独测量的判断</b>。
+      三行的 <code>END</code> 对齐画，是为了让读者一眼比较它由谁触发。</p>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ══════════════════════════ FIG 2 ══════════════════════════ -->
+  <div class="figblock">
+    <div class="band">Fig. 2 · 双栏 · Method</div>
+    <div class="colbox" data-w="682px" style="width:682px">
+      <div class="f2">
+
+        <div class="pane">
+          <div class="pt">(a) The loop — the exit is a decision point, not a shape</div>
+
+          <div class="row" style="margin-bottom:7px">
+            <div class="n gen">Generator<span class="s">大模型生成</span></div>
+            <div class="ar">→</div>
+            <div class="n dec">needs_tool?<span class="s">decision point</span></div>
+            <div class="ar">─是→</div>
+            <div class="n">pick_tool · pick_input · grade_risk<span class="s">decision points</span></div>
+            <div class="ar">→</div>
+            <div class="n">execute tool</div>
+            <div class="ar">→</div>
+            <div class="n dec">admission<span class="s">decision point</span></div>
+            <div class="ar">↺</div>
+          </div>
+
+          <div class="row">
+            <div class="n" style="visibility:hidden">Generator</div>
+            <div class="ar" style="visibility:hidden">→</div>
+            <div class="ar" style="min-width:74px">↓ 否</div>
+            <div class="ar">→</div>
+            <div class="n gen">draft<span class="s">生成交付草稿</span></div>
+            <div class="ar">→</div>
+            <div class="n dec" style="min-width:150px">canDeliver<span class="s">读 draft · state · evidence · requirements</span></div>
+            <div class="ar">→</div>
+            <div class="stack">
+              <div class="n ok">deliver → end</div>
+              <div class="n" style="border-color:var(--warn);color:var(--warn)">revise → 改一次再判</div>
+              <div class="n no">blocked → 不许交付</div>
+            </div>
+          </div>
+
+          <div class="tagline">生成只能<b>提议</b>完成；关闭由一次带裁决值的判决做出</div>
+        </div>
+
+        <div class="two">
+
+          <div class="pane">
+            <div class="pt">(b) Inside one decision point</div>
+            <div class="kv"><span class="k">frame</span><span class="v">声明过的字段：<code>draft</code> · <code>state</code> · <code>evidence</code> · <code>requirements</code>，<b>逐项写明排除了什么</b></span></div>
+            <div class="kv"><span class="k">questions</span><span class="v"><code>unsupported</code>（≥0.5 → revise）<br><code>deliverable</code>（≥ 阈值 → deliver）</span></div>
+            <div class="kv"><span class="k">answer</span><span class="v">类型化 + <b>校准概率</b> —— 不是一段文本</span></div>
+            <div class="kv"><span class="k">verdict</span><span class="v"><code>deliver</code> / <code>revise</code> / <code>blocked</code></span></div>
+            <div class="kv"><span class="k">state</span><span class="v">每点 <code>off</code> / <code>shadow</code>（照问照记、不生效）/ <code>active</code></span></div>
+            <div class="ledger">recorded per batch:
+  first verdict · the draft it rejected
+  probability · frame digest · request digest</div>
+          </div>
+
+          <div class="pane">
+            <div class="pt">(c) What that makes measurable</div>
+            <div class="kv"><span class="k">2 × 2</span><span class="v">宣布完成 × 后置条件 ⇒ <b>编造交付</b> / <b>诚实交付</b> / 弃权</span></div>
+            <div class="kv"><span class="k">two rates</span><span class="v"><b>抓取率</b> / <b>假警报率</b>，每个比例带分子分母<br>零计数给 rule-of-three <b>上界</b>，不写 0%</span></div>
+            <div class="kv"><span class="k">gate ledger</span><span class="v">假拒（草稿本来对）· 改好了 · 放过 · 弃权</span></div>
+            <div class="kv"><span class="k">re-sweep</span><span class="v">概率落盘 ⇒ 阈值<b>离线重扫，零 API 成本</b></span></div>
+            <div class="kv"><span class="k">shadow</span><span class="v">换判定器之前，先在不改变行为的前提下采剖面</span></div>
+            <div class="ledger">由 47% → 25% 那一轮得到的账：
+  blocked 27 · 保护 0 · 误杀 27
+  阈值 0.60→0.50：+10 正确，放过不变</div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+    <div class="caption">
+      <p><span class="lbl">Figure 2.</span>
+      <b>方法：把控制决策做成有裁决值、读声明字段的对象。</b>
+      (a) 循环。横向是先验路径（要不要动手、挑哪个工具、参数、风险），观测在进上下文前先过一次<b>准入判决</b>；终点路径是<b>退出判决</b> <code>canDeliver</code>——生成只能提议完成，关闭要由一次裁决做出，出口有三个（<code>deliver</code> / <code>revise</code>，上限一次 / <code>blocked</code>）。
+      (b) 一个判决点的内部：帧是<b>声明过的字段集</b>（逐项写明排除了什么），答案是<b>类型化 + 校准概率</b>而不是文本，因此每个点可以 <code>off</code> / <code>shadow</code> / <code>active</code>。<b>第一次裁决</b>与<b>被驳回的那一版草稿</b>都要落账——没有后者，就分不出闸门是立功还是误伤。
+      (c) 由此可测的东西：2×2、两个带分子分母的比率、闸门自己的四项账；概率落盘让阈值可以零成本离线重扫，<code>shadow</code> 让"换判定器"在改变行为之前就能先比。
+      右下角是本文实测得到的账（FTA，n=100）：27 次弃权里 <b>0 次保护、27 次打回了本来就诚实的答案</b>，而它们全部是 <code>deliverable</code> 的置信度落在 0.50–0.59、阈值 0.60 造成的。</p>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ══════════════════════════ FIG 3 ══════════════════════════ -->
+  <div class="figblock">
+    <div class="band">Fig. 3 · 单栏 · 分析章备用（= 原来那版 Fig. 1，一字未改）</div>
+    <div class="colbox" data-w="326px" style="width:326px">
+      <div class="f3">
+        <div class="hdr">WHO DECIDES, AND WHAT DOES THE DECISION READ?</div>
+
+        <div class="arm">
+          <div class="t"><span class="b">A</span>Written rules</div>
+          <div class="m">if cmd in DANGEROUS: deny</div>
+          <div class="d">长尾上没有它 —— 你没为它写过的情况，它根本不存在</div>
+        </div>
+
+        <div class="arm">
+          <div class="t"><span class="b">B</span>Fused into generation</div>
+          <div class="m">while 还有工具调用: …
+else: return   ← 退出</div>
+          <div class="d">判据＝生成物的<b>形状</b>。假完成正是"最像样的续写" ⇒ <b>判据与错误同源</b></div>
+        </div>
+
+        <div class="arm">
+          <div class="t"><span class="b">C</span>Decoupled judge, same text</div>
+          <div class="m">v = judge(draft)   ← 读了同一段话</div>
+          <div class="d">执行者换掉了，判据没换。<b>换证据后裁决只动 1/120</b> ⇒ 证据盲</div>
+        </div>
+
+        <div class="arm ours">
+          <div class="t"><span class="b">D</span>The exit is a decision point</div>
+          <div class="m">v = canDeliver(draft, state,
+               evidence, requirements)</div>
+          <div class="d ok">判据换了来源 ⇒ 这个判断才第一次可以计数、测量、路由</div>
+        </div>
+
+        <div class="claim">A–C 变的是"谁来判"；<br>我们变的是"判据读什么"</div>
+      </div>
+    </div>
+    <div class="caption">
+      <p><span class="lbl">Figure 3.</span>
+      <b>（分析章）四种答法，只有最后一种换了判据的来源。</b>
+      与 Fig. 1 的分工：Fig. 1 只讲三个范式的形状，给大同行看；这一张进分析章，逐条对上已有做法并给出本文测到的数——
+      (C) 那一格尤其要留：它<b>看起来像修复</b>（有个独立的判官），实际上判据仍是同一段文本，换证据后裁决只动 1/120。有它，claim 才不是"我们比规则好"，而是"前面三种都在同一个地方错"。</p>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

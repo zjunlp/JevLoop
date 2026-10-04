@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JevLoop · 控制不是生成</title>
+<style>
+  :root{
+    --fg:#14181d; --dim:#5a6570; --dimmer:#8b949e; --line:#e3e8ee; --line2:#cfd6de;
+    --bg:#ffffff; --soft:#f7f9fb; --accent:#0b5cad; --good:#1a7f37; --warn:#9a6700; --bad:#b42318;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.8;font-size:16.5px}
+  .wrap{max-width:840px;margin:0 auto;padding:64px 28px 96px}
+  .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--dimmer)}
+  h1{font-size:31px;line-height:1.35;margin:10px 0 14px;font-weight:700;letter-spacing:-.01em}
+  .lede{font-size:17.5px;color:var(--dim);margin:0 0 8px}
+  h2{font-size:20px;margin:52px 0 10px;font-weight:700;display:flex;gap:10px;align-items:baseline}
+  h2 .n{font-family:var(--mono);font-size:12px;color:var(--accent);border:1px solid var(--line2);
+    border-radius:5px;padding:1px 7px;font-weight:400;flex:none}
+  h3{font-size:16px;margin:30px 0 6px;font-weight:650}
+  p{margin:11px 0}
+  ul{margin:11px 0;padding-left:20px}
+  li{margin:7px 0}
+  code{font-family:var(--mono);font-size:.92em;background:var(--soft);border:1px solid var(--line);
+    border-radius:4px;padding:1px 5px}
+  hr{border:none;border-top:1px solid var(--line);margin:44px 0}
+  .quote{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:16px 0}
+  .quote p{margin:0;font-family:var(--mono);font-size:14px;color:#2b3440}
+  pre{font-family:var(--mono);font-size:13.5px;line-height:1.7;background:var(--soft);
+    border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:16px 0;color:#2b3440;
+    white-space:pre-wrap;word-break:break-word}
+  pre .c{color:var(--dimmer)}
+  pre b{color:var(--accent)}
+  table{border-collapse:collapse;width:100%;margin:18px 0;font-size:15px}
+  th,td{padding:9px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{font-size:13px;color:var(--dim);font-weight:600;border-bottom-color:var(--line2)}
+  td.num,th.num{text-align:right;font-family:var(--mono);white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  tr.hl td{background:#f2f7fd}
+  .good{color:var(--good);font-weight:600}
+  .bad{color:var(--bad);font-weight:600}
+  .warn{color:var(--warn);font-weight:600}
+  .dim{color:var(--dim)}
+  .small{font-size:13.5px;color:var(--dimmer)}
+  .big{font-size:19px;font-weight:600;line-height:1.6}
+  .rule{border-left:3px solid var(--accent);padding:2px 0 2px 16px;margin:22px 0}
+  .aside{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:18px 0}
+  .aside .t{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--dimmer);margin-bottom:6px}
+  .aside p:first-of-type{margin-top:0}
+  .aside p:last-child{margin-bottom:0}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:20px 0}
+  .diagram{border:1px solid var(--line);border-radius:10px;padding:14px 10px}
+  .colcap{font-family:var(--mono);font-size:11.5px;letter-spacing:.06em;color:var(--dimmer);
+    text-align:center;margin:0 0 12px}
+  .flow{display:flex;flex-direction:column;align-items:center;margin:0}
+  .node{border:1px solid var(--line2);border-radius:8px;padding:6px 12px;font-size:13px;
+    line-height:1.5;text-align:center;max-width:100%}
+  .node .sub{display:block;font-family:var(--mono);font-size:10.5px;color:var(--dimmer);margin-top:2px}
+  .node.dec{border:1px dashed var(--accent);color:var(--accent)}
+  .node.stop{border-color:var(--bad);color:var(--bad);font-weight:600}
+  .node.stop .sub{color:var(--bad);font-weight:400}
+  .node.deliver{border-color:var(--good);color:var(--good);font-weight:600}
+  .node.deliver .sub{color:var(--dimmer);font-weight:400}
+  .node.ghost{border:none;color:var(--dimmer);font-size:11px;padding:2px 0}
+  .arw{font-family:var(--mono);font-size:12px;color:var(--dimmer);padding:2px 0;line-height:1.3;
+    text-align:center;white-space:nowrap}
+  .branch{display:flex;gap:10px;align-items:flex-start;justify-content:center;width:100%}
+  .leg{display:flex;flex-direction:column;align-items:center;flex:1;min-width:0}
+  .pills{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+  .pill{font-family:var(--mono);font-size:12.5px;color:#2b3440;background:var(--soft);
+    border:1px solid var(--line2);border-radius:999px;padding:2px 11px}
+  .steps{counter-reset:s;list-style:none;padding-left:0}
+  .steps li{counter-increment:s;position:relative;padding-left:38px;margin:12px 0}
+  .steps li::before{content:counter(s);position:absolute;left:0;top:2px;font-family:var(--mono);
+    font-size:12px;color:var(--accent);border:1px solid var(--line2);border-radius:5px;padding:1px 7px}
+  .now{color:var(--accent);font-weight:600}
+  footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);color:var(--dimmer);font-size:13.5px}
+  @media (max-width:760px){.two{grid-template-columns:1fr}}
+  @media print{body{font-size:11.5pt}.wrap{padding:0;max-width:none}h2{page-break-after:avoid}
+    .two{grid-template-columns:1fr 1fr;page-break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">JevLoop · 研究计划</div>
+  <h1>控制不是生成</h1>
+  <p class="lede">
+    我们研究的不是"怎么让模型判得更准"，而是：
+    <b>agent loop 的控制流，能不能成为一个可以被独立测量、并且以证据（而不是文本）为输入的对象。</b>
+    这条 claim 底下有三条推论、一条界，和四个还没补上的缺口。
+  </p>
+
+  <div class="rule">
+    <p class="big">
+      控制不是生成——<br>
+      生成的产物，不能同时充当它自己的验收标准。
+    </p>
+  </div>
+
+  <p>
+    这是一条<b>区分</b>，不是一条处方。处方（"退出应该是一个判决点"）会招来"凭什么"；
+    区分不会——它指出的是两件被当成一件事的东西，其实不是一件。一旦接受，你就没法再把它合起来看。
+  </p>
+
+  <p>
+    更关键的是，它把"要分开的东西"从<b>执行者</b>挪到了<b>判据</b>。
+    这正是它比"把判定从生成里解耦出来"高一档的地方，也是我们那条最难看的数据能被解释的原因：
+    <code>judge-same</code> 在执行者上已经完全解耦——换模型、独立进程、专门接口——
+    却只动了 <b class="bad">0/72、0/72、1/120</b> 格。若 claim 是"解耦"，这是打脸；
+    若 claim 是"控制不是生成"，这正是它预测的失败方式：<b>分开的是答话的人，没分开的是判据。</b>
+    一个 claim 能把自己最难看的数据解释成支持，通常说明它是真的。
+  </p>
+
+  <div class="aside">
+    <div class="t">要防住的一种误读</div>
+    <p>
+      "控制不是生成"不能被读成"模型不可信，所以要用规则"。它讲的是<b>判据的来源</b>，
+      不是执行者是谁。我们自己的数据把这两种读法分开了：规则是确定性的地板，
+      而耦合证据的判定器比不耦合的强 <b>3.6 倍</b>（见第三节）。
+      <b>这句话不写，reviewer 会把这篇当成一篇 guardrails 论文。</b>
+    </p>
+  </div>
+
+  <table>
+    <tr><th>如果控制不是生成，那么……</th><th>我们手上已经有的东西</th></tr>
+    <tr><td>控制必须被<b>声明</b></td><td>七个节点；<code>DECISION.md</code></td></tr>
+    <tr><td>控制必须被<b>单独测量</b></td><td>两个数（抓取率 / 假警报率）、配对操作、换证据</td></tr>
+    <tr><td>控制可以被<b>单独路由和开关</b></td><td>谁判 / 判几次两条轴；影子模式</td></tr>
+    <tr><td>控制的正确性有<b>自己的界</b></td><td>证据的可信度是上界（34%，18/53）</td></tr>
+    <tr class="hl"><td>"完成率"必须和<b>任务成绩分开报</b></td><td>41–44% 误导性交付的那个量级</td></tr>
+  </table>
+
+  <h2><span class="n">一</span>问题：loop 的控制是生成的副产品</h2>
+
+  <p>
+    今天所有 harness 都是同一个形状——控制流没有人声明、没有人测量：
+  </p>
+
+<pre>while <b>模型还在发工具调用</b>:
+    a = LLM(历史)
+    if a 是工具调用: 执行，结果塞回历史
+    else: <b>结束</b>          <span class="c">// 控制权在生成模型手里</span></pre>
+
+  <p>
+    这条退出条件是整条 loop 里最吃重、却最少被审视的一行。而它恰好是我们测到最容易出事的地方：
+    不加闸门、生成什么就交什么的时候，误导性的交付占 <b class="bad">44.2%（53/120）</b>；
+    换成全新生成的候选，是 <b class="bad">41.3%（99/240）</b>。
+    前一个数来自特意为造出这个类而写的任务集，所以那是密度、不是真实世界的发生率——
+    但两组指向同一件事：<b>假完成就是"最像样的下一段续写"</b>，判据和错误同源。
+  </p>
+
+  <p>
+    更麻烦的是评测看不见这件事。大家报的是任务成功率，那个数把"写得对不对"和"控制得对不对"
+    混在一起，所以它永远回答不了"这条 loop 本身是不是健全"。我们最早的对照实验跑了 81 个格子，
+    只观察到 <b>1 个事件</b>——在那个密度下，"两组的平均差"在数学上就估不出来。
+  </p>
+
+  <div class="rule">
+    <p class="big">所以我们换两件事：把控制从生成里拆出来，并且给控制本身找一把尺子。</p>
+  </div>
+
+  <h2><span class="n">二</span>推论一 · 谁拥有结束的权力，必须分开</h2>
+
+  <h3>2.1 流程</h3>
+
+  <div class="two">
+    <div class="diagram">
+      <p class="colcap">传统 agent loop</p>
+      <div class="flow">
+        <div class="node">任务</div>
+        <div class="arw">↓</div>
+        <div class="node">大模型生成<span class="sub">动作 + 停不停 · 同一个分布</span></div>
+        <div class="arw">↓</div>
+        <div class="node dec">有工具调用？<span class="sub">读的是生成物的形状</span></div>
+        <div class="branch">
+          <div class="leg">
+            <div class="arw">↓ 有</div>
+            <div class="node">执行工具</div>
+            <div class="arw">↓</div>
+            <div class="node">结果塞回历史<span class="sub">↺ 回到生成</span></div>
+          </div>
+          <div class="leg">
+            <div class="arw">↓ 没有</div>
+            <div class="node stop">结束<span class="sub">return 这段生成</span></div>
+            <div class="arw">&nbsp;</div>
+            <div class="node ghost">没有裁决值<br>不可数 · 不可测 · 不可路由</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="diagram">
+      <p class="colcap">改写后 —— 退出是一个判决点</p>
+      <div class="flow">
+        <div class="node">任务</div>
+        <div class="arw">↓</div>
+        <div class="node">大模型生成</div>
+        <div class="arw">↓</div>
+        <div class="node dec">需要工具吗？<span class="sub">判决点</span></div>
+        <div class="branch">
+          <div class="leg">
+            <div class="arw">↓ 是</div>
+            <div class="node">挑工具 / 挑输入 / 评风险<span class="sub">判决点</span></div>
+            <div class="arw">↓</div>
+            <div class="node">执行工具</div>
+            <div class="arw">↓</div>
+            <div class="node dec">准入判决<span class="sub">判决点 · 上下文是判决记录</span></div>
+            <div class="arw">↺</div>
+          </div>
+          <div class="leg">
+            <div class="arw">↓ 否</div>
+            <div class="node">生成交付草稿</div>
+            <div class="arw">↓</div>
+            <div class="node dec">canDeliver<span class="sub">判决点 · 读声明 · 状态 · 证据 · 任务要求</span></div>
+            <div class="arw">↓</div>
+            <div class="node deliver">deliver → 结束<span class="sub">revise → 修一次再判<br>blocked → 如实报告</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p>
+    左边那个虚线框是<b>假的判决点</b>：它长得像分支，但它的条件不是被声明的，
+    而是从生成物的形状里读出来的。右边每个虚线框都是真的判决点——有名字、有字段、有裁决值。
+  </p>
+
+  <h3>2.2 伪代码</h3>
+
+  <div class="two">
+    <div class="diagram">
+      <p class="colcap">传统：退出是生成的一个形状</p>
+<pre>while True:
+    a = LLM(历史)      <span class="c"># 动作 + 停不停</span>
+    if a 有工具调用:
+        历史 += 执行(a) <span class="c"># 无条件进上下文</span>
+    else:
+        <b>return a</b>       <span class="c"># ← 退出</span></pre>
+    </div>
+
+    <div class="diagram">
+      <p class="colcap">改写后：退出是一个判决点</p>
+<pre>while not 已交付:
+    if 需要工具吗():   <span class="c"># 判决点</span>
+        t = 挑工具()   <span class="c"># 判决点</span>
+        历史 += 准入判决(执行(t))
+                       <span class="c"># 判决点</span>
+    else:
+        d = 生成交付草稿()
+        <b>v = canDeliver(d, 状态, 证据, 任务要求)</b>
+                       <span class="c"># ← 判决点：退出</span>
+        if v == deliver: return d
+        if v == revise:  按缺的证据修一次，再判
+        else:            如实报告，不假装完成</pre>
+    </div>
+  </div>
+
+  <h3>2.3 差在哪</h3>
+
+  <table>
+    <tr><th>差在哪</th><th>传统 loop</th><th>退出是判决点</th></tr>
+    <tr>
+      <td><b>谁拥有结束的权力</b></td>
+      <td>生成本身——它停止发工具调用，循环就结束了</td>
+      <td>判决——生成只能<b>提议</b>完成，关闭要由一次裁决来做</td>
+    </tr>
+    <tr>
+      <td><b>退出判据从哪里来</b></td>
+      <td>生成物的<b>形状</b>（没有工具调用了）</td>
+      <td>一份<b>声明过的字段集</b>：声明、状态、证据、任务要求</td>
+    </tr>
+    <tr>
+      <td><b>观测怎么进上下文</b></td>
+      <td>无条件塞回历史——<b>上下文是日志</b></td>
+      <td>先过一次准入判决——<b>上下文是判决记录</b></td>
+    </tr>
+    <tr class="hl">
+      <td><b>能不能被测量</b></td>
+      <td><b>不能</b>：没有裁决值，也就没有分子分母</td>
+      <td><b>能</b>：抓取率、假警报率、弃权率，逐点算</td>
+    </tr>
+    <tr>
+      <td><b>能不能被路由 / 开关</b></td>
+      <td><b>不能</b>：没有可替换的接口</td>
+      <td><b>能</b>：每个点可以单独换判定器、单独关掉、单独跑影子模式</td>
+    </tr>
+  </table>
+
+  <p>
+    后两行是重点。<b>前三行说的是"更合理"，第四、五行说的是"从此可以被检验"。</b>
+    一篇论文能站住的通常是后两行。
+  </p>
+
+  <h3>2.4 它戳的是评测</h3>
+
+  <p>
+    这一条推论真正的用处不在架构，在评测。今天所有 agent 报的"任务完成率"，
+    其完成判据<b>来自被测系统自己</b>。于是两件坏事同时发生：
+  </p>
+
+  <ul>
+    <li><b>横向不可比。</b>两个系统各自的完成标准不同，成功率不是同一个东西的两次测量。</li>
+    <li><b>纵向可被刷。</b>一个把"什么时候算完"放得更宽松的模型会得到更高的完成率——
+      而它和真实做对程度的关系，没人量过。</li>
+  </ul>
+
+  <p>
+    我们实测到的量级就是这个风险的大小：在写类条件上，<b>41–44% 的交付是误导性的</b>（见第一节）。
+    这不是"模型不行"，这是<b>传统 loop 里根本没有一个位置是负责在交付前把这句话和现实对一遍的</b>。
+  </p>
+
+  <div class="rule">
+    <p class="big">
+      所以这条推论的可引用形式是一句评测批评，而不是一句架构偏好：<br>
+      用生成物的形状充当自己的终止条件，会让"完成率"同时失去可比性和可证伪性。
+    </p>
+  </div>
+
+  <h2><span class="n">三</span>推论二 · 判断的输入必须是证据</h2>
+
+  <h3>3.1 仪器：两个数，不是平均值</h3>
+
+  <p>
+    不看两组的均值差，看判定层<b>批准</b>的东西里有多少是误导（假警报率）、
+    该拦的拦住了多少（抓取率）。这类比例在事件稀少时也估得出来，而且零事件时给的是<b>上界</b>。
+  </p>
+
+  <ul>
+    <li>每个比例都带<b>分子和分母</b>，不给光秃秃的百分数。</li>
+    <li>区间用 Wilson；零计数用 <b>rule of three</b> 给上界，绝不写"0%"。</li>
+    <li><b>弃权单独计</b>——"我不确定"不是"我判对了"，也不是"我判错了"。</li>
+    <li>配对比较用<b>精确 McNemar</b>；要说"没有差别"就用 <b>TOST 等价检验 + MDE</b>，不当"证明了零假设"。</li>
+  </ul>
+
+  <p>
+    仪器之外还有两件我们自己造的东西，是整个方法的支点：
+    <b>配对操作</b>（表面话一模一样、真值相反）和<b>换证据</b>（把 A 任务的证据接到 B 任务的声明上，
+    看判定会不会跟着动）。有了这两个，"判得准不准"才第一次有真值可对。
+  </p>
+
+  <h3>3.2 已经测到的三条</h3>
+
+  <table>
+    <tr><th>命题</th><th>装置</th><th class="num">结果</th></tr>
+    <tr>
+      <td>把判定<b>融进生成</b>不可用</td>
+      <td>融合自评</td>
+      <td class="num"><span class="bad">开口时假警报 72.7–100%</span><br>真错只抓到 <span class="bad">0/14</span>；弃权 74–86%</td>
+    </tr>
+    <tr>
+      <td><b>解耦不够</b>——判定器看不见证据</td>
+      <td>换证据 · <code>judge-same</code></td>
+      <td class="num">只动了 <span class="bad">0/72、0/72、1/120</span> 格<br><span class="small">同一个模型、同样的问题，只是完全解耦</span></td>
+    </tr>
+    <tr class="hl">
+      <td><b>证据耦合有效</b></td>
+      <td>换证据 · 耦合判定器</td>
+      <td class="num"><span class="good">抓取 40.4% vs 11.1%</span><br>匹配假警报成本；McNemar <b>23:6</b>，p=0.0023</td>
+    </tr>
+  </table>
+
+  <p class="small">
+    前两条合起来是"分开执行者不够"；三条合起来是一句话：
+    决定判定质量的是<b>问题里带了哪些字段</b>，不是谁来答、判几次。
+  </p>
+
+  <h2><span class="n">四</span>推论三 · 控制可以被单独测量和路由</h2>
+
+  <p>
+    对象不是"agent"，是 agent 每次跃迁时的那一个<b>控制决策</b>。我们已经把它拆成七个节点，
+    分先验（决定下一步）和后验（评价产出）两半：
+  </p>
+
+  <table>
+    <tr><th>半</th><th>节点</th><th>它回答的问题</th></tr>
+    <tr><td rowspan="4"><b>先验</b><br><span class="small">决定下一步</span></td>
+        <td><code>needs_tool</code></td><td>这一步要不要动工具</td></tr>
+    <tr><td><code>pick_tool</code></td><td>用哪一个</td></tr>
+    <tr><td><code>pick_input</code></td><td>参数填什么</td></tr>
+    <tr><td><code>grade_risk</code></td><td>这个动作有没有风险</td></tr>
+    <tr><td rowspan="3"><b>后验</b><br><span class="small">评价产出</span></td>
+        <td><code>step_ok</code></td><td>这一步做得对不对</td></tr>
+    <tr><td><code>is_done</code></td><td>做完了没有</td></tr>
+    <tr><td><code>can_deliver</code></td><td>能不能交出去</td></tr>
+  </table>
+
+  <p>三个轴描述它、也是我们做实验的自变量：</p>
+  <div class="pills">
+    <span class="pill">A 谁判：人写死 → 融进生成 → 零资源自检 → LLM 自评 → 独立判定模型 → 规则</span>
+    <span class="pill">B 判几次：终点一次 vs 全程七个节点</span>
+    <span class="pill">C 形式：声明式契约 vs 等价 if/else</span>
+  </div>
+
+  <div class="aside">
+    <div class="t">C 轴是 null，这点必须先说清楚</div>
+    <p>
+      声明式契约和等价的 <code>if/else</code> 我们可以<b>证明</b>是等价的，实验也确实测不出差别。
+      所以"我们提出一种新格式"不能当贡献讲。C 轴只说明一件事：
+      <b>研究对象不是形式，是控制本身。</b>
+    </p>
+  </div>
+
+  <div class="aside">
+    <div class="t">DECISION.md 的意义（重新定位）</div>
+    <p>
+      它的意义<b>也不是格式</b>——是<b>"控制可以被测量"的前提条件</b>：把 loop 的守卫集中到一处，
+      可 diff、可 review、可逐点开关。守卫散在 prompt 和代码里的时候，你连"判了几次、
+      每次带什么字段"都数不清，更谈不上给它算抓取率。
+    </p>
+    <p>
+      所以要改的说法是：从"我们提出一种描述决策的格式"，改成
+      <b>"我们让 agent loop 的控制第一次成为一个可测量的对象，<code>DECISION.md</code> 是它的载体"</b>。
+    </p>
+  </div>
+
+  <h2><span class="n">五</span>诚实的一格：把区分做出来，不等于修好</h2>
+
+  <p>
+    这里有个必须自己先说的反证。我们做了一个消融：<b>同一个循环、同一批工具、
+    同一个交付闸门</b>（<code>canDeliver</code> 逐字复用，不是第二份实现），
+    只改"判定放几次"。四条臂，ternary-judge 20 题，qwen3.5-9b 生成 + Jev 判定：
+  </p>
+
+  <table>
+    <tr>
+      <th>臂</th><th class="num">答对</th><th class="num">闸门假拒</th>
+      <th class="num">闸门放过</th><th class="num">生成调用</th><th class="num">判定请求</th>
+    </tr>
+    <tr>
+      <td><code>react</code><span class="small"> 没有验证者</span></td>
+      <td class="num">15/20</td><td class="num">0</td>
+      <td class="num dim">0<span class="small"> 构造上无闸门</span></td>
+      <td class="num">69</td><td class="num">0</td>
+    </tr>
+    <tr class="hl">
+      <td><code>react-termination</code><span class="small"> 退出是判决点</span></td>
+      <td class="num">15/20</td><td class="num">0</td>
+      <td class="num bad">5</td>
+      <td class="num">69</td><td class="num">20</td>
+    </tr>
+    <tr>
+      <td><code>react-selfcheck</code><span class="small"> 零资源自检</span></td>
+      <td class="num">15/20</td><td class="num bad">4</td>
+      <td class="num good">1</td>
+      <td class="num bad">137</td><td class="num">0</td>
+    </tr>
+    <tr>
+      <td><code>react-typed</code><span class="small"> 全程七节点</span></td>
+      <td class="num bad">3/20</td><td class="num">0</td>
+      <td class="num">11</td>
+      <td class="num">49</td><td class="num">273</td>
+    </tr>
+  </table>
+
+  <p>
+    退出变成判决点之后，那 5 条错的<b>全放过去了</b>。所以这条推论必须写成两层，缺一层就是过度声称：
+  </p>
+
+  <ul>
+    <li><b>结构层（可证）</b>：把退出变成一个判决点，是让"完成"这件事第一次可以被计数、被测量、
+      被路由、被逐点开关的<b>前提</b>。今天没有任何系统能报出自己"退出判得准不准"，因为没有那个量。
+      这一层的收益不依赖它准不准。</li>
+    <li><b>效果层（已测，但看条件）</b>：效果出在专门为假完成造出来的写类条件上（44.2% / 41.3%），
+      以及匹配误伤后的 40.4% vs 11.1%（23:6，p=0.0023）；天花板 34%（18/53）。</li>
+  </ul>
+
+  <div class="aside">
+    <div class="t">这张表怎么读，才不会被打掉</div>
+    <p>
+      ① 取<b>第一次</b>裁决。修订之后再判的那个数已经被闸门影响过，拿它算"闸门错没错"是循环论证。<br>
+      ② <code>react</code> 的 0 放过<b>不是"它从不犯错"</b>，是<b>构造上没有闸门</b>，那个字段恒为假。<br>
+      ③ 这一格<b>不能</b>读成"终点验证更好"：<code>react-typed</code> 掉到 3/20 是<b>任务成绩被做坏了</b>
+      （本地 9B 不擅长那六种逐步判定），不是"判定放得越多越差"这条规律。<br>
+      ④ 放过那两栏的<b>分母不一样</b>（<code>react-typed</code> 有 17 条错的，
+      <code>react-termination</code> 只有 5 条），所以 11 vs 5 不能直接比。<br>
+      ⑤ <b>n=20、一个模型、一个数据集。</b>这四条臂的用途是证明"这条臂和这两个数都活着"，不是给效应量。
+    </p>
+  </div>
+
+  <h2><span class="n">六</span>这条 claim 的界：证据的可信度</h2>
+
+  <div class="quote">
+    <p>判定器的正确性上界，是它证据的可信度。</p>
+  </div>
+
+  <p>
+    这不是一句口号，我们有它的一个具体数字。当谎言<b>藏在证据通道里</b>——
+    工具调用静默无操作、只写了一半、或者干脆伪造输出——
+    最好的 gate 也只能抓到 <b class="bad">34%（18/53）</b>。判定器再怎么换、怎么训、怎么解耦，
+    都判不出一个会撒谎的观测。
+  </p>
+
+  <div class="rule">
+    <p class="big">
+      这条界把领域指向下一个方向：不是换更好的判定器，而是给观测做<b>来源认证</b>（provenance）。
+    </p>
+  </div>
+
+  <p>
+    一条能证的界比一个刷高的数有价值得多，因为它同时给出了"为什么"和"接下来该做什么"。
+    这也是这条 claim 最可能被 follow 的地方——它不是一个系统的介绍，
+    是一个可以被反驳、被复现、被继续推的命题。
+  </p>
+
+  <h2><span class="n">七</span>还缺什么（缺了就不够 follow）</h2>
+
+  <table>
+    <tr><th>缺口</th><th>为什么致命</th><th>代价</th></tr>
+    <tr>
+      <td><b>机制没测</b><br><span class="small">判定接受度是否跟着表面流畅度走</span></td>
+      <td>我们证明了"看不见证据"，没解释<b>为什么</b>。没有解释，别人只能抄结论，没法接着做。</td>
+      <td class="num"><span class="good">很便宜</span><br>纯 replay</td>
+    </tr>
+    <tr>
+      <td><b>只有一家的模型</b><br><span class="small">Qwen3.5-9B，n=72–120</span></td>
+      <td>"prompted judge 证据盲"是要写进 claim 的，单家族单模型撑不住。</td>
+      <td class="num">要 3–4 个模型<br>含另一个家族</td>
+    </tr>
+    <tr>
+      <td><b>外部一致性是 in-sample</b><br><span class="small">89.5% 一致率</span></td>
+      <td>最后三个 pattern 是从那 20 个漏检里反推出来的，等于用答案调了尺子。</td>
+      <td class="num">需要<br>out-of-sample</td>
+    </tr>
+    <tr>
+      <td><b>成本还没进 claim</b></td>
+      <td>托管判定器一次往返约 <b>390 ms</b>（其中约 254 ms 是握手），
+        判定占墙钟 <b>62–80%</b>（<code>§8.11</code>）；
+        Jev 的假警报超预算 +9.2pp [8.1, 17.4]（Δ=5pp 下）。这是真实的反方证据。</td>
+      <td class="num">数据已有<br>需要写进论证</td>
+    </tr>
+  </table>
+
+  <p class="small">
+    另有一条可检验的预测，至今没测，但它是把这一节从"我们测到一个现象"变成"我们解释了它"的那一步：
+    <b>表面流畅度 ↔ 退出判决接受度，相关性应当显著，且高于"真值 ↔ 接受度"。</b>
+    纯 replay，不花 API 钱。
+  </p>
+
+  <h2><span class="n">八</span>下一步（按依赖排序）</h2>
+
+  <ol class="steps">
+    <li>
+      <b class="now">测机制</b>：流畅度 ↔ 判定接受度的相关性。它决定我们有没有"解释"，
+      而不只是"测量"。最便宜，且结论会改写后面所有叙事。
+    </li>
+    <li>
+      <b>补跨模型</b>：3–4 个模型，含另一个家族，跑同一套配对操作。
+      这一步决定"证据盲"是现象还是某个模型的毛病。
+    </li>
+    <li>
+      <b>把换证据测试搬到先验节点</b>（<code>pick_tool</code>）：纯 replay，复用现成的
+      <code>scripts/frame_ab.py</code>。目的是把"先验 + 后验"合成<b>一个</b>控制层，
+      而不是两半各说各话。
+    </li>
+    <li>
+      <b>provenance 那一块先写成 future work</b>，现在不做。它是天花板指出的方向，
+      不是我们这轮能交付的东西。
+    </li>
+  </ol>
+
+  <h2><span class="n">九</span>标题候选</h2>
+  <table>
+    <tr><th>候选</th><th>它承诺什么</th></tr>
+    <tr class="hl">
+      <td><b>控制不是生成：agent loop 的守卫必须以证据为输入</b></td>
+      <td>主标题。一条区分，不是一个处方——指出的是两件被当成一件事的东西。</td>
+    </tr>
+    <tr>
+      <td><i>Control Is Not Generation: Agent Loop Guards Must Read Evidence</i></td>
+      <td>英文对应。区分放在前，要求放在后。</td>
+    </tr>
+    <tr>
+      <td><i>Decoupling Is Not Enough: Agent Control Is Bounded by Evidence Provenance</i></td>
+      <td>"不够"只需要一个反例，我们有（<code>judge-same</code> 那条）；后半句是那条界。
+        风险是它把 claim 说小成了"解耦的补充"。</td>
+    </tr>
+  </table>
+
+  <hr>
+
+  <p class="small">
+    本文档的定位：把已经确立的结果组装成一个可被 follow 的研究对象，
+    并诚实标出还没有的部分。文中所有数字来自本仓库自己的实验与 <code>experiments/</code> 下的评测；
+    凡属提案、而非已测结论的，正文里都写明了（第五节末、第六节、第七节）。
+  </p>
+
+  <footer>
+    JevLoop · <code>docs/CONTROL-IS-NOT-GENERATION.html</code> ·
+    与 <code>docs/PAPER-CLAIM-2026-09.md</code>、<code>docs/WHAT-WE-FOUND.html</code> 同源，供评估方向用。
+  </footer>
+
+</div>
+</body>
+</html>
