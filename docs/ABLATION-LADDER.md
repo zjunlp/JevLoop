@@ -73,7 +73,7 @@ ALFWorld 20 题的 run-to-run 标准差是 **1.30 题**（`docs/ALFWORLD-VARIANC
 |---|---|---|---|---|---|---|
 | — | 基线（历史完整批次） | `b9d7df1` / `1fe533f` | 11, 11 | 2 | exact run commits listed below | ALFWorld baseline used `1fe533f`; no claim that `cd2bd5f` produced it |
 | A1a | 只换回答类型：布尔 → true/false/unclear 选择题；题面、帧、0.5 门限不变 | `d874239` | 11, 11 | 3 | 准入型 TERNARY：9, 9 → 9, 9；ALFWorld：0 → 0 | 仅换回答类型没有改善；TERNARY 逐题配对无变化。ALFWorld 单次仅筛选 |
-| A1b | 单独改为“够不够”问法；保留旧布尔回答类型 | `pending` | | | | |
+| A1b | 单独改为“够不够”问法；保留旧布尔回答类型 | `5546011` | 12, 11 | 3 | 准入型 TERNARY：9, 9 → 9, 9；ALFWorld：0 → 0 | TERNARY 无变化；ALFWorld 多行动但仍未完成，单次仅筛选 |
 | A2 | 准入型的逃逸＝**平先验/取排序第一**，不再拿门限卡（缺口 2） | | | | | |
 | A3 | 布尔判定点的**三区**：中间区落到调用方的默认（缺口 2） | | | | | |
 | A4 | 门限**按题型分开声明**，用错题型就抛错（缺口 1） | | | | | |
@@ -106,6 +106,22 @@ exit.stop_reason 为 Connection refused。三格均排除，不把日志填满 2
 
 全局 spec digest 目前不能区分控制器字段 admission_answer_kind；本次靠明确臂名、提交、
 同帧同题面的回归测试及请求 digest 区分。后续先补有效配置记录和真实后端出处，再做论文汇总。
+
+## A1b 结果及运行出处
+
+有效运行均来自 `5546011feab14e59c26a2dd74b5590a2503bfc42`，dirty=false，exit.stop_reason=null，无判定降级。
+
+| 数据集 / 臂 | run 时间戳（均 seed20261003） | 任务正确数 |
+|---|---|---|
+| TERNARY 默认 | 2026-10-04T16-36-39Z / 16-40-32Z | 12/20 / 11/20 |
+| TERNARY 布尔准入 | 2026-10-04T16-44-22Z / 16-48-07Z | 9/20 / 9/20 |
+| TERNARY suffices 准入 | 2026-10-04T16-51-50Z / 16-55-32Z | 9/20 / 9/20 |
+| ALFWorld 默认 | 2026-10-04T16-59-16Z | 3/20 |
+| ALFWorld 布尔准入 | 2026-10-04T17-20-11Z | 0/20 |
+| ALFWorld suffices 准入 | 2026-10-04T17-26-13Z | 0/20 |
+
+A1b 的 TERNARY 准入两臂都是 29 次工具调用。ALFWorld 布尔准入 23 次，suffices 准入 34 次；
+它多行动，但没有多完成任务。这个 ALFWorld 单次差异只作筛选。
 
 ## A1a 协议补充
 
