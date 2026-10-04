@@ -90,6 +90,12 @@ ALFWorld 20 题的 run-to-run 标准差是 **1.30 题**（`docs/ALFWORLD-VARIANC
 配置 digest 分别为 `b5a60af92540f3c1`、`57a173e74780c5a9`、`9dc5803915a06982`，不再共用一个有效配置身份。
 ALFWorld 默认批次有 1 次降级，故只作筛选；两个准入批次无降级，均为 0/20。
 
+## 后端 provenance 回归（`9292345`）
+
+这次改动只增加结构化 `actual_provider` / `fallback_chain`，不改变 controller 行为。
+TERNARY：默认 10/10，准入 9/9，suffices 9/9；ALFWorld：默认 2/20，准入 0/20，suffices 1/20。
+完整批次 dirty=false、无降级。正常批次的 actual provider 是 `http:jev-1.13.0`；规则/非后端批次的 actual provider 可为空，不能误读成 Mock。
+
 ## A1a 结果及运行出处
 
 有效运行均来自 `d87423988193519cc01112a7762911f0c62b8d2b`，dirty=false，exit.stop_reason=null，无判定降级。
