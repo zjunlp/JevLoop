@@ -52,7 +52,8 @@ def test_clipping_is_reported_not_silent() -> None:
     spec = FrameSpec("t", (FrameField("last_result", 100, "output"),))
     frame = compile_frame(spec, AgentCtx(last_result="x" * 500))
     assert frame.truncations["last_result"] == (500, 100)
-    assert "truncated" in frame.render() and "500→100" in frame.render()
+    assert frame.count_truncations == {}
+    assert "truncated" in frame.render() and "chars 500→100" in frame.render()
 
 
 def test_no_truncation_no_note() -> None:
@@ -72,8 +73,8 @@ def test_candidate_list_cap_is_reported() -> None:
     ctx = AgentCtx()
     setattr(ctx, "candidates_list", [f"f{i}" for i in range(50)])
     frame = compile_frame(spec, ctx)
-    assert frame.truncations["candidates_list"] == (50, MAX_LISTED_CANDIDATES)
-    assert "truncated" in frame.render()
+    assert frame.count_truncations["candidates_list"] == (50, MAX_LISTED_CANDIDATES)
+    assert "items 50→20" in frame.render()
 
 
 # ═══════════════════════════════════════════════════════════

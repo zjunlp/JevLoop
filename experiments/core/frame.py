@@ -349,8 +349,10 @@ class Frame:
 
     node: str
     lines: tuple[str, ...]
-    # 字段名 → 原文长度 vs 实际放入的长度
+    # 字段名 → 截断详情。旧字段仍是 (原长, 实际长)；
+    # 另存 count_truncations，避免数量与字符截断互相覆盖。
     truncations: dict[str, tuple[int, int]]
+    count_truncations: dict[str, tuple[int, int]]
     # 声明了但**这次没拿到**的字段（`AgentCtx` 上是空的）
     missing: tuple[str, ...]
     # ★ 上面那些里,**判定真的靠它**的那些（`FrameField.required`）。
@@ -369,7 +371,10 @@ class Frame:
         for line in self.lines:
             out.append(line)
         if self.truncations:
-            parts = [f"{k}: {was}→{now}" for k, (was, now) in sorted(self.truncations.items())]
+            parts = [f"{k}: chars {was}→{now}" for k, (was, now) in sorted(self.truncations.items())]
+            out.append(f"(truncated — {'; '.join(parts)})")
+        if self.count_truncations:
+            parts = [f"{k}: items {was}→{now}" for k, (was, now) in sorted(self.count_truncations.items())]
             out.append(f"(truncated — {'; '.join(parts)})")
         if self.missing:
             out.append(f"(absent — {', '.join(self.missing)})")
@@ -417,6 +422,7 @@ def compile_frame(spec: FrameSpec, ctx: AgentCtx) -> Frame:
     """
     lines: list[str] = []
     truncations: dict[str, tuple[int, int]] = {}
+    count_truncations: dict[str, tuple[int, int]] = {}
     missing: list[str] = []
     missing_required: list[str] = []
 
@@ -433,7 +439,7 @@ def compile_frame(spec: FrameSpec, ctx: AgentCtx) -> Frame:
             items = list(raw)
             if len(items) > MAX_LISTED_CANDIDATES:
                 # ★ 截断候选**必须明说** —— 模型会以为「就这些」
-                truncations[spec_field.name] = (len(items), MAX_LISTED_CANDIDATES)
+                count_truncations[spec_field.name] = (len(items), MAX_LISTED_CANDIDATES)
                 items = items[:MAX_LISTED_CANDIDATES]
             # ★ **空的列表是一个事实,不是一处空白。**
             #   `actions_left:` 后面什么都没有,和「这个字段没喂上」在渲染上
@@ -450,6 +456,7 @@ def compile_frame(spec: FrameSpec, ctx: AgentCtx) -> Frame:
         lines.append(f"{spec_field.label}: {body}")
 
     return Frame(node=spec.node, lines=tuple(lines), truncations=truncations,
+                 count_truncations=count_truncations,
                  missing=tuple(missing), missing_required=tuple(missing_required),
                  excluded=spec.excluded)
 
