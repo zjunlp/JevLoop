@@ -144,6 +144,9 @@ class DecideResponse:
     dropped: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # provider retains the planned provider for compatibility; actual is explicit.
+    actual_provider: str = ""
+    fallback_chain: list[str] = field(default_factory=list)
 
 
 class DecisionClient(Protocol):
@@ -286,7 +289,7 @@ class MockClient:
                 out[qid] = Answer(kind="score", score=0, confidence=0.5)
             else:
                 out[qid] = Answer(kind="noul", noul=0.5)
-        return DecideResponse(answers=out, provider=self.name,
+        return DecideResponse(answers=out, provider=self.name, actual_provider=self.name,
                               degraded=True, warnings=["mock：保守答案，不代表任何判定"])
 
 
@@ -351,6 +354,7 @@ class HttpJevClient:
         return DecideResponse(
             answers=answers,
             provider=self.name,
+            actual_provider=self.name,
             model=payload.get("model"),
             input_tokens=int(usage.get("input_tokens", 0) or 0),
             output_tokens=int(usage.get("output_tokens", 0) or 0),
@@ -380,18 +384,22 @@ class FallbackClient:
 
     def decide(self, request: DecideRequest) -> DecideResponse:
         first = self.clients[0].name
+        attempted: list[str] = []
         for client in self.clients:
+            attempted.append(client.name)
             try:
                 resp = client.decide(request)
             except Exception as exc:  # noqa: BLE001 —— 任何一层挂了都该往下走
                 self.degradations.append({"from": client.name, "error": f"{type(exc).__name__}: {exc}"})
                 continue
             if client is not self.clients[0]:
-                # ★ 降级发生了 —— 记进 warnings,而且**provider 保留原计划那个**
-                resp.warnings.append(
-                    f"降级：原计划用 {first}，实际用 {client.name}"
-                )
+                # ★ 降级发生了 —— keep planned provider for old readers, but
+                # record the actual responder and chain structurally.
+                resp.warnings.append(f"降级：原计划用 {first}，实际用 {client.name}")
+                resp.degraded = True
             resp.provider = first
+            resp.actual_provider = client.name
+            resp.fallback_chain = list(attempted)
             return resp
         raise RuntimeError(
             f"判定后端全部不可用：{[c.name for c in self.clients]}；"

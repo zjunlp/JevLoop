@@ -211,6 +211,8 @@ class DecisionBatchEvent(Event):
     #: 只证明那个字符串当初就没有地方可写。⚠️ **不可证伪的"没发生"**比报了
     #: 降级还危险：它让"我们跑的是真 Jev"变成一个没有证据的说法。
     provider: str = ""
+    actual_provider: str = ""
+    fallback_chain: list[str] = field(default_factory=list)
     #: 这一批有没有降过级。★ **`provider` 保留原计划的那个**（和 TS 侧
     #: `provider-fallback.ts` 同一条规矩）—— 所以只有这个布尔认得出降级。
     degraded: bool = False

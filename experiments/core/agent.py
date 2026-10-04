@@ -153,6 +153,8 @@ class Session:
         #   判定后端是降级链，正常降级以前在日志上不留痕 —— 于是"我们跑的是真 Jev"
         #   变成一个没有证据的说法。这三项就是那个证据。
         self._batch_provider: str = ""
+        self._batch_actual_provider: str = ""
+        self._batch_fallback_chain: list[str] = []
         self._batch_degraded: bool = False
         self._batch_warnings: list[str] = []
         #: 整轮累计的降级次数 —— 跑完要**大声报出来**，不能只在 event 里躺着。
@@ -407,7 +409,8 @@ class Session:
         return [{"call": i, "task_id": e.task_id, **e.response}
                 for i, e in enumerate(self.model_events())]
 
-    def note_batch(self, *, provider: str, degraded: bool, warnings: Sequence[str] = ()) -> None:
+    def note_batch(self, *, provider: str, degraded: bool, warnings: Sequence[str] = (),
+                   actual_provider: str = "", fallback_chain: Sequence[str] = ()) -> None:
         """记下**这一批是谁答的**。
 
         ★ 在拿到 `DecideResponse` 之后、逐条记账之前调用。见
@@ -415,12 +418,15 @@ class Session:
           不在这里留痕，日志上就查不出"这批其实是 Mock 答的"。
         """
         self._batch_provider = provider
+        self._batch_actual_provider = actual_provider or provider
+        self._batch_fallback_chain = list(fallback_chain)
         self._batch_degraded = bool(degraded)
         self._batch_warnings = list(warnings)
         if degraded:
             self.decider_degradations += 1
-        if provider and provider not in self.decider_providers:
-            self.decider_providers.append(provider)
+        actual = actual_provider or provider
+        if actual and actual not in self.decider_providers:
+            self.decider_providers.append(actual)
 
     def _close_batch(self) -> None:
         if not self._batch_decisions:
@@ -438,6 +444,8 @@ class Session:
                 latency_ms=self._batch_request_ms,
                 decisions=[d.__dict__ for d in self._batch_decisions],
                 provider=self._batch_provider,
+                actual_provider=self._batch_actual_provider,
+                fallback_chain=list(self._batch_fallback_chain),
                 degraded=self._batch_degraded,
                 warnings=list(self._batch_warnings),
                 working_start=working_start,
@@ -448,6 +456,8 @@ class Session:
         self._batch_request_ms = 0.0
         self._batch_requests = 0
         self._batch_provider = ""
+        self._batch_actual_provider = ""
+        self._batch_fallback_chain = []
         self._batch_degraded = False
         self._batch_warnings = []
 

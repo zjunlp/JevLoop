@@ -2843,6 +2843,8 @@ class TypedController:
         #   而那不能证明没降级，只证明那个字符串当初没地方可写。
         session.note_batch(
             provider=resp.provider,
+            actual_provider=resp.actual_provider or resp.provider,
+            fallback_chain=resp.fallback_chain,
             degraded=resp.degraded,
             warnings=resp.warnings,
         )
