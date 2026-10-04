@@ -1172,6 +1172,7 @@ def test_the_typed_cells_are_reachable_by_name() -> None:
         #   ⚠️ 它和 `react-typed-singlechoice` 现在是**同一个对照的两端**,
         #     而 `react-typed`（默认）落在 comparative 那一端。
         "react-typed-admission",
+        "react-typed-admission-choice",
         # ★★ **闸门的对照臂** —— `gates_rules_first=False`（判官产生裁决）。
         #   它换的是**裁决的来源**，和默认那一版的问法完全不同，
         #   所以两批数字不能进同一张表（`DECISION_SPEC_VERSION` 已到 typed-4）。
@@ -2528,10 +2529,10 @@ def test_the_decision_spec_fingerprint_is_pinned() -> None:
     """
     from experiments.jloop.typed import DECISION_SPEC_VERSION, decision_spec_digest
 
-    assert DECISION_SPEC_VERSION == "typed-10", (
+    assert DECISION_SPEC_VERSION == "typed-11", (
         "bump 版本时把这一行也改掉，并把下面的指纹更新成新的"
     )
-    assert decision_spec_digest() == "ea0a6fa0f74b7b21", (
+    assert decision_spec_digest() == "1ac8b5538bece471", (
         "判定规格的指纹变了 —— 问法 / 门限 / 兜底 / 帧预算里有东西被改动。\n"
         "  · 如果是**有意的**改动：bump `DECISION_SPEC_VERSION`，"
         "并把这条断言里的值换成新指纹。\n"

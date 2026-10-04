@@ -624,6 +624,7 @@ PICK_INPUT_CANDIDATE_ASK = (
     "Judge only this one action — the other candidates are judged separately, "
     "and `how_this_world_works` tells you what actions do in this world."
 )
+PICK_INPUT_ADMISSION_UNCLEAR = "Cannot tell from the supplied evidence."
 PICK_INPUT_CANDIDATE_CRITERIA = {
     "true": "doing this now is required by the task, or is a necessary step towards it",
     "false": ("it is not what the task needs next — already done, out of order, "
@@ -901,7 +902,7 @@ NODE_THRESHOLDS: dict[str, float] = {
 #: 并且 `pickInput` 补上了 `last_result`。帧的**内容**变了 ⇒ 与 typed-4 不可比。
 #: ★ `typed-4` —— 闸门改成**规则先筛、判官只确认**（用户 2026-10-04 的决定）。
 #: ★ `typed-3` 及以前 —— **判官产生裁决**。三批数字**不能进同一张表**。
-DECISION_SPEC_VERSION = "typed-10"
+DECISION_SPEC_VERSION = "typed-11"
 
 #: `allow_choices_without_escape` 的**离线说明** —— 见那个字段的文档。
 #: ★ 它是一份**声明**，不是一个可调的参数:打开它的批次是另一个方法。
@@ -930,6 +931,7 @@ DECISION_SPEC_PARTS: tuple[str, ...] = (
     "UNKNOWN_TOOL_BAND", "RAISE_STEP", "RISK_CONFIRM_ASK", "RISK_CONFIRM_CRITERIA",
     "RISK_CONFIRM_WHEN", "ANSWER_EVIDENCE_STEPS", "ANSWER_EVIDENCE_RESULT_CHARS",
     "PICK_INPUT_CANDIDATE_ASK", "PICK_INPUT_CANDIDATE_CRITERIA", "PICK_INPUT_SHAPE",
+    "PICK_INPUT_ADMISSION_UNCLEAR",
     # ★ `PICK_INPUT_SHAPE_AUTO` 也进指纹:它不是"跑法",它决定
     #   `shape = 环境声明 or 全局默认` 这条解析规则 —— 拿掉它,
     #   `pick_input_shape` 的默认值就从"自动"变成"某一种",那是另一个方法。
@@ -1210,6 +1212,8 @@ class TypedController:
     #:   显式写 `"comparative"` / `"admission"` = **压过环境声明** ——
     #:   对照臂靠这一条才成立,理由见 `PICK_INPUT_SHAPE_AUTO`。
     pick_input_shape: str = PICK_INPUT_SHAPE_AUTO
+    # A1a changes only the answer type; keep the measured boolean control.
+    admission_answer_kind: str = "noul"
 
     #: ★★★ **只观察、不落地的判定点**（照 μ 的 `shadow` 模式）。
     #:
@@ -1599,9 +1603,24 @@ class TypedController:
                                threshold=0.0, frame="pickInput")
                 for i, o in enumerate(options, 1)
             ]
+            if self.admission_answer_kind == "choice":
+                # Keep the prompt and true/false descriptions identical to the
+                # boolean control. Only the response vocabulary changes.
+                criteria = dict(PICK_INPUT_CANDIDATE_CRITERIA,
+                                unclear=PICK_INPUT_ADMISSION_UNCLEAR)
+                questions = [
+                    _choice_question(q.node, q.ask, list(criteria),
+                                     criteria=criteria, threshold=0.0,
+                                     frame="pickInput", escape="unclear")
+                    for q in questions
+                ]
+            elif self.admission_answer_kind != "noul":
+                raise ValueError(f"Unknown admission answer kind: {self.admission_answer_kind!r}")
             scored = self._ask(session, session.next_batch(), ctx, view.step, questions)
             ranked = [
-                (i, o, scored[f"pickInput::{i}"].prob_true())
+                (i, o, (scored[f"pickInput::{i}"].probabilities.get("true", 0.0)
+                        if self.admission_answer_kind == "choice"
+                        else scored[f"pickInput::{i}"].prob_true()))
                 for i, o in enumerate(options, 1)
                 if f"pickInput::{i}" in scored
             ]
