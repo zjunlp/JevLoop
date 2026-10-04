@@ -908,7 +908,7 @@ NODE_THRESHOLDS: dict[str, float] = {
 #: 并且 `pickInput` 补上了 `last_result`。帧的**内容**变了 ⇒ 与 typed-4 不可比。
 #: ★ `typed-4` —— 闸门改成**规则先筛、判官只确认**（用户 2026-10-04 的决定）。
 #: ★ `typed-3` 及以前 —— **判官产生裁决**。三批数字**不能进同一张表**。
-DECISION_SPEC_VERSION = "typed-13"
+DECISION_SPEC_VERSION = "typed-14"
 
 #: `allow_choices_without_escape` 的**离线说明** —— 见那个字段的文档。
 #: ★ 它是一份**声明**，不是一个可调的参数:打开它的批次是另一个方法。

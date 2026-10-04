@@ -540,7 +540,7 @@ NODE_FRAMES: dict[str, FrameSpec] = {
             # ★★★ **一张编号的候选表** —— 状态里放一次,题里只引用 `[i]`。
             #   照 `jev-ultrafast::action_space`（"dynamic, indexed action space"）。
             #   预算给得大:ALFWorld 一步 ~28 条命令,每条还要带一句说明。
-            FrameField("action_table", 6000, "actions_on_the_table", clip="list"),
+            # A6 moves this longest field to the end without changing its budget.
             # ★★★ **这个世界的动作语义** —— 环境语义,不是任务脚本（见 `Tool.action_rules`）。
             #   `jev-ultrafast` 把它放在 `instructions` 里;我们放在**状态**里,
             #   因为 N 道候选题共享同一份帧 —— 放题里就是 N 倍预算。
@@ -571,6 +571,7 @@ NODE_FRAMES: dict[str, FrameSpec] = {
             # ★ 改道时补上"缺什么"：ALFWorld 那一类里**同一个动词换个宾语**就是另一步
             #   （`go to X` → `go to Y`），所以参数这一步同样需要知道为什么被打回。
             FrameField("redirect_note", 1500, "redirect_note"),
+            FrameField("action_table", 6000, "actions_on_the_table", clip="list"),
         ),
         excluded=(
             # ★ `last_result` **2026-10-04 从这里搬到了 `fields`**（见上面的说明）。
