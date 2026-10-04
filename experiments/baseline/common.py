@@ -29,7 +29,7 @@ from typing import Callable, Sequence
 from experiments.core.agent import AgentOutcome, Session, action_answer, action_ask, action_tool
 from experiments.core.controller import Controller, Decision, DecisionView
 from experiments.core.models import Message
-from experiments.core.types import Action, Step, Tool
+from experiments.core.types import HARNESS_PSEUDO_TOOLS, Action, Step, Tool
 
 # ReAct 的截断点。**没有它,模型会自己把 Observation 也编出来** ——
 # 那不叫幻觉,叫我们没告诉它该停在哪。
@@ -324,7 +324,7 @@ def run_loop(session: Session, cfg: LoopConfig) -> AgentOutcome:
                 # ★ 重试也要留下痕迹 —— 不然后面分不清「一次就对」和「纠了两次才对」
                 session.note_retry(0.0)
                 if retries <= cfg.max_parse_retries:
-                    steps.append(Step(index=len(steps), action=action_tool("__parse_error__", {}),
+                    steps.append(Step(index=len(steps), action=action_tool(HARNESS_PSEUDO_TOOLS[0], {}),
                                       observation=PARSE_NUDGE))
                     continue
                 return AgentOutcome(
@@ -341,7 +341,10 @@ def run_loop(session: Session, cfg: LoopConfig) -> AgentOutcome:
                 # ★ 闸门裁决**回传**（见 `Decision.gate` 的说明）：没有它，那两个
                 #   "闸门错没错"的指标在记账里永远是 0。
                 return AgentOutcome(steps=steps, final_answer=parsed.answer,
-                                    gate=getattr(parsed, "gate", "") or "")
+                                    gate=getattr(parsed, "gate", "") or "",
+                                    # ★ 闸门 revise 过就把**改之前那一版**带回去 ——
+                                    #   没有它，`gate_false_reject` 分不出闸门是立功还是误伤。
+                                    draft=getattr(parsed, "draft", "") or "")
 
             # ★★ **`ask` —— 该问人 / 该弃答。**
             #
@@ -362,9 +365,18 @@ def run_loop(session: Session, cfg: LoopConfig) -> AgentOutcome:
             #     能回答它。带上 `escalated=True`,「闸门拦下了」这件事在结果里
             #     就是看得见的,不会被读成「模型不会做」。
             if parsed.kind == "ask":
+                # ★★ **`gate` 也要回传。** 原来这一条**漏了它** —— 于是一个
+                #   "闸门说 blocked、所以退回弃答"的结果，在记账里和"模型自己
+                #   要求问人"、"步数用完了"长得一模一样，全都是 `escalated=True`
+                #   加一句自由文本。实测（`fta × react-termination`）28 条弃权
+                #   因此被归进 `agent_error`，和真正的 TimeoutError 混在一栏。
+                #   闸门拒绝交付和 harness 崩了是两件事，记账里必须分得开。
                 return AgentOutcome(
                     steps=steps, final_answer=None, escalated=True,
                     error=f"该问人：{parsed.raw or parsed.answer}",
+                    gate=getattr(parsed, "gate", "") or "",
+                    # ★ 闸门拒绝交付时打回的那一版也要回来 —— 判"保护还是误杀"靠它。
+                    draft=getattr(parsed, "draft", "") or "",
                 )
 
             # 工具（异常在 ToolExecutor 里已经转成观察 + 错误事件 —— 不再吞第二遍）
@@ -414,15 +426,65 @@ def parsed_tool_guess(text: str) -> str:
     return bracket.group("name") if bracket else m.group("body").strip().splitlines()[0].strip()
 
 
+def render_live_candidates(tools: Sequence[Tool], *, cap: int = 40) -> str:
+    """**环境此刻允许的动作** —— 有 `live_candidates` 的工具在这里列出来。
+
+    ★★ 为什么必须有它（2026-10-01，ALFWorld，`react` 臂第一次真跑）：
+
+        `live_candidates` 是给 `pickInput` 用的（typed 那侧「**从 28 条里挑一条**」），
+        而 **prompt 那一侧的臂从来没接上它**。实测后果：模型编出
+        `find microwaved apple` / `list items` / `move to kitchen` 这类命令，
+        **一条都不是 ALFWorld 的动词**，环境一律回 `Nothing happens.`，5 题 0 分。
+
+        ⇒ 那不是"模型弱"，是**两条臂看到的动作空间不一样**：
+          typed 那侧在候选里挑，prompt 那侧在盲编。
+          这正是 `baseline/README.md` 那条「**臂与臂之间只许差在自变量上**」
+          被破掉的地方 —— 而破掉之后，两臂的差里混进了一个和自变量无关的东西。
+
+    ★ 外部文献也是这么做的：ALFWorld 上的 agent 每一步都被给出合法命令表。
+      不接它，跑出来的不是"这个模型行不行"，而是"这个 prompt 有没有告诉它能做什么"。
+    """
+    blocks: list[str] = []
+    for tool in tools:
+        if tool.live_candidates is None:
+            continue
+        try:
+            options = list(tool.live_candidates())
+        except Exception:  # noqa: BLE001 —— 环境没绑上时不该把整轮带走
+            continue
+        if not options:
+            continue
+        shown = options[:cap]
+        # ★ 截断必须**明说**（同 `Frame.candidate_notes` 那条：
+        #   截了但没人知道截了多少，和没截是两回事）。
+        more = f" … (+{len(options) - cap} more)" if len(options) > cap else ""
+        # ★★ **渲染成完整的 Action 语法，不是只给参数值。**
+        #   第一版只列了命令原文（`go to cabinet 1`），于是模型照着写
+        #   `Action: go to cabinet 1` —— **没带工具名**，解析全挂，
+        #   10 题全在 2 步内弃答（实测）。候选是**参数值**，而工具名是另一回事，
+        #   只给前者等于教了一个错的格式。
+        arg = first_arg_name(tool) or "arg"
+        lines = "\n".join(f"  - Action: {tool.name}[{o}]" for o in shown)
+        blocks.append(
+            f"`{tool.name}` currently accepts only these "
+            f"({len(options)}) — use one of them verbatim as `{arg}`:\n{lines}{more}"
+        )
+    return "\n\n".join(blocks)
+
+
 def build_prompt(session: Session, cfg: LoopConfig, steps: Sequence[Step]) -> str:
     """整个 prompt。**每一步重建一次**（ReAct 原文就是重发 scratchpad）。"""
     scratchpad = render_history(steps, with_thought=cfg.with_thought)
+    live = render_live_candidates(session.tools)
     parts = [
         cfg.instruction,
         cfg.preamble,
         "",
         "# Tools",
         render_tools(session.tools),
+        # ★ 只有真的存在"环境每步给的动作表"时才加这一段 ——
+        #   多工具数据集（BFCL 那些）没有 `live_candidates`，它们一个字都不变。
+        *(["", "# Currently allowed actions", live] if live else []),
         "",
         "# Format",
         FORMAT_WITH_THOUGHT if cfg.with_thought else FORMAT_WITHOUT_THOUGHT,
@@ -453,18 +515,38 @@ _ARG_NOTE = (
 )
 
 FORMAT_WITH_THOUGHT = (
-    "Use exactly this format, one block per step:\n"
-    "Thought: <your reasoning about what to do next>\n"
+    "Reply with **exactly one** Thought/Action pair, then STOP.\n"
+    "Thought: <one or two sentences about what to do next>\n"
     "Action: <tool_name>[...]      (or)  Action: finish[<final answer>]\n"
     + _ARG_NOTE + "\n"
-    "Stop after the Action line. Do not write the Observation yourself."
+    # ★★★ **这两行是 2026-10-01 加的，它们修的是一个很贵的歧义。**
+    #
+    #   原文只有 "one block per step" + "Stop after the Action line"。而实测
+    #   （ALFWorld × `deepseek-flash`）模型在那句话上**烧掉了 20,844 个推理 token**
+    #   （88k 字符），推理原文：
+    #
+    #     "But I can output the whole sequence in one response? The instruction says
+    #      'Use exactly this format, one block per step'. I'll output multiple blocks,
+    #      each with Thought and Action, and then finish."
+    #
+    #   它最后**真的**一次吐了 3 个 Action（正文只有 540 字符，而 API 记了 41,827 token）。
+    #   后果：单次调用 184 秒、整批 10 题跑了 25 分钟，而且多出来的 Action 全被丢弃
+    #   （循环只执行第一个）——**又慢又错，全是我们一句话写歧义造成的。**
+    #
+    #   ⇒ 说清三件事：一次一个、后面的步**轮到你再说**、不要自己往下写。
+    "**Exactly one Action per reply — never more.** "
+    "After the Action line you must stop; the environment will return one Observation, "
+    "and you will be asked again for the next step. "
+    "Do not write later steps in advance, and do not write the Observation yourself."
 )
 
 FORMAT_WITHOUT_THOUGHT = (
-    "Use exactly this format, one block per step:\n"
+    "Reply with **exactly one** Action, then STOP.\n"
     "Action: <tool_name>[...]      (or)  Action: finish[<final answer>]\n"
     + _ARG_NOTE + "\n"
-    "Stop after the Action line. Do not write the Observation yourself.\n"
+    "**Exactly one Action per reply — never more.** "
+    "After the Action line you must stop; the environment will return one Observation, "
+    "and you will be asked again for the next step.\n"
     "Do not output a Thought line."
 )
 
