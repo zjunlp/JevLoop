@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -29,9 +30,16 @@ from experiments.core.deciding import (
     HttpJevClient,
     MockClient,
 )
-from experiments.core.models import CallableModel, Message, ModelClient, OpenAICompatModel
+from experiments.core.models import (
+    CallableModel,
+    Message,
+    ModelClient,
+    OpenAICompatModel,
+    Thinking,
+)
 from experiments.core.registry import AGENTS, BENCHMARKS, known
 from experiments.core.runner import Cell, run_cell
+from experiments.core.spec import ModelRef
 from experiments.core.types import Task, Tool
 
 # 注册表是**显式**的：谁要跑，谁在这里 import。见 core/registry.py 的说明。
@@ -46,6 +54,7 @@ from experiments.benchmark import hotpotqa as hotpotqa_bench  # noqa: F401
 from experiments.benchmark import sotuqa as sotuqa_bench  # noqa: F401
 from experiments.benchmark import ternary_judge as ternary_judge_bench  # noqa: F401
 from experiments.benchmark import bullshitbench as bullshit_bench  # noqa: F401
+from experiments.benchmark import fta as fta_bench  # noqa: F401
 from experiments.benchmark.terminal_bench import inject as tb_lie  # noqa: F401
 from experiments.benchmark import tau2bench as tau2_bench  # noqa: F401
 from experiments.benchmark import triviaqa as triviaqa_bench  # noqa: F401
@@ -117,6 +126,28 @@ def offline_demo_model() -> CallableModel:
     return CallableModel(responder, model_id="offline-demo")
 
 
+def decider_ref(decider: DecisionClient | None) -> ModelRef | None:
+    """判定后端的**计划身份** —— 给 `RunMeta.decider`。
+
+    ★ 取降级链的**第一个**（原计划用的那个），不是实际答话的那个：这是
+      `FallbackClient` 自己立的规矩（「记的 provider 是原计划用的那个，
+      不覆盖成实际用的那个 —— 否则日志上看不出发生过降级」）。
+      实际答话的是谁，在 `DecisionBatchEvent.provider` 里，两者要能对上。
+
+    ★ 以前这一栏在 `runner.py` 里**写死成 `id="none"`** —— 于是带了 Jev 的格子
+      和 `direct` 在 `meta.json` 里长得一模一样。
+    """
+    if decider is None:
+        return None
+    first = (getattr(decider, "clients", None) or [decider])[0]
+    return ModelRef(
+        id=getattr(first, "name", type(first).__name__),
+        # ★ 版本要钉 —— "刷爆"是相对模型和时间说的（`spec.ModelRef` 的原理）。
+        version=getattr(first, "model", "n/a"),
+        provider=getattr(first, "base_url", "n/a"),
+    )
+
+
 def build_model(args: argparse.Namespace) -> ModelClient:
     if args.model == "offline":
         print("⚠️  --model offline 是**自检用**的假模型,跑出来的分数没有意义。", file=sys.stderr)
@@ -141,7 +172,7 @@ def build_model(args: argparse.Namespace) -> ModelClient:
 #   七个人并行时,`benchmark/` 下任何一个文件写上语法错,自动发现会让全场一起挂。
 #   加一个数据集就在这里加一行,顺便把它加进 docs/PLAN-*.md §0.7 的命名表。
 #
-# ★ 放在**模块级**而不是 main() 里 —— `scripts/datasets.py` 要读它来汇总
+# ★ 放在**模块级**而不是 main() 里 —— `scripts/dataset_catalog.py` 要读它来汇总
 #   各 loader 的下载声明。藏在 main() 里就导不出来（早先就是这么写的）。
 BENCHMARK_FACTORIES: dict[str, Callable[[], object]] = {
     toy.ToyCapitals.name: toy.ToyCapitals,
@@ -161,6 +192,9 @@ BENCHMARK_FACTORIES: dict[str, Callable[[], object]] = {
     #   **单独用任何一个都能被退化解刷满**，所以两个都要在。
     bullshit_bench.BullshitBench.name: bullshit_bench.BullshitBench,
     bullshit_bench.Draco.name: bullshit_bench.Draco,
+    # ★ 外部作者写的「失败透明」受控基准：**失败由构造保证**（100 条全是失败场景），
+    #   正是我们一直缺的那个基率条件。见 `benchmark/fta/fta.py` 头部。
+    fta_bench.Fta.name: fta_bench.Fta,
     # ★ terminal-bench 的**撒谎工具层**：同一份数据、同一个 loader，只包一层 exec。
     #   诚实工具下 TB 任务大多会做成，"声称完成而其实没做成"少到出不了率；
     #   这两个条件把它变成常见事件。★ 它们和诚实条件是**不同的条件**，数字必须分开列。
@@ -243,21 +277,86 @@ def typed_arms(decider: DecisionClient) -> dict[str, Callable[[], Agent]]:
     from experiments.jloop.typed import TypedController
 
     return {
-        "react-typed": lambda: react_baseline.ReAct(controller=TypedController(decider)),
-        "act-typed": lambda: act_baseline.Act(controller=TypedController(decider)),
+        # ★★★ **这几个 lambda 必须收下并转交 `exemplars`。**
+        #
+        #   实测（2026-10-02，ALFWorld × seed20261003）：`react` 拿到的 prompt 是
+        #   3939 字符（**带** `AlfWorld.exemplars()` 那段示范），
+        #   而 `react-termination` 只有 1690 字符（**没有**示范）——
+        #   因为 `make_agent` 是按**签名**判断要不要传的，而这里的 lambda
+        #   一个参数都不收 ⇒ 示范被**静默丢掉**。
+        #
+        #   后果不是"少了个提示"，是**这一批对比整个作废**：
+        #   `react` 10/20 vs `react-termination` 3/20，差值里混进了一个
+        #   **和自变量无关的东西**（一个带示范、一个不带）。
+        #   而且两臂从第 0 步就分叉（20 题里只有 7 题前两步相同）——
+        #   闸门只在终点运行，**它不可能影响第 0 步**，这本身就是信号。
+        #
+        #   ★ 教训：`make_agent` 那个"签名检查"防的是 TypeError，
+        #     **防不住静默丢参数** —— 而"配了没生效"正是这个仓库反复栽的形状。
+        #     所以判据从"传不传得进去"改成"**同一族的臂要么都拿得到、要么都不拿**"，
+        #     由 `test_alfworld_exemplars.py` 钉住。
+        "react-typed": lambda exemplars="": react_baseline.ReAct(
+            controller=TypedController(decider), exemplars=exemplars),
+        "act-typed": lambda exemplars="": act_baseline.Act(
+            controller=TypedController(decider), exemplars=exemplars),
+        # ★★★ **退出口的单变量对照** —— 只有这一个开关不同。
+        #
+        #   为什么要单独一个 arm:退出口是新加的结构,而"它有没有用"只能靠
+        #   **只改这一处**的 A/B 答。实测撞到过:拿 2026-10-02T13-56-37Z 那批
+        #   当基线,出口分布从 `declined 13 / delivered 2` 变成
+        #   `declined 4 / delivered 12`,看起来全是退出囗的功劳 ——
+        #   而那批**早于** `already_done` 进帧那次修复（`ALFWORLD-TYPED-ROUND2.md`）,
+        #   所以量到的是「帧 + 每候选判据 + 退出口」三件事的和,一件都归不到。
+        #
+        #   ⚠️ 这一格的批次**必须和 `react-typed` 分开列**:
+        #     它是"候选集封闭"那个假设下的另一个方法。
+        "react-typed-noescape": lambda exemplars="": react_baseline.ReAct(
+            controller=TypedController(decider, allow_choices_without_escape=True),
+            exemplars=exemplars),
+        # ★★★ **题形的单变量对照** —— 和 `react-typed` 只差 `pick_input_shape`
+        #   这一个开关：`single_choice`（一道 N 选 1）vs `per_candidate`
+        #   （N 道 yes/no，逃逸是推导出来的）。
+        #
+        #   为什么必须是一个**臂**而不是"拿上一批数当基线"：
+        #   `react-typed-noescape` 同时改了题形和退出口两件事，归不到。
+        #   而"一候选一题比 N 选 1 好"这句话的全部内容就是**只改这一处**的差 ——
+        #   上一批（2026-10-04T11-00-45Z 起）是 `single_choice`，今天默认是
+        #   `per_candidate`，跨批比会把生成模型的抖动也算进去。
+        #
+        #   ⚠️ 这一格的批次同样**必须和 `react-typed` 分开列**：
+        #     两版的题数、选项数、请求数都不同，进同一张表会把
+        #     「判定准确率」变成一个没有共同分母的数。
+        "react-typed-singlechoice": lambda exemplars="": react_baseline.ReAct(
+            controller=TypedController(decider, pick_input_shape="single_choice"),
+            exemplars=exemplars),
+        # ★★★ **闸门的对照臂：判官产生裁决那一版**（`gates_rules_first=False`）。
+        #
+        #   为什么它是**一条臂**而不是一个开关：它换的是**裁决的来源** ——
+        #   那一版里 `deliverable`/`unsupported`/`score:risk` 都是判官答的，
+        #   裁决由它产生；默认那一版里规则先筛、判官只准收紧。
+        #   两版**不能进同一张表**（`DECISION_SPEC_VERSION` 已 bump 到 typed-4）。
+        #
+        #   ★ 留着它的理由和一个实测教训有关：规则优先要解决的正是那一版
+        #     实测出来的病（`docs/ALFWORLD-ESCAPE.md` §4 —— 判官每次都答对、
+        #     置信度低于 0.5 的门限被丢掉 ⇒ 20 题里 4 题 decline）。
+        #     而"改好了多少"只有**只改这一个开关**的 A/B 能答。
+        "react-typed-judgegate": lambda exemplars="": react_baseline.ReAct(
+            controller=TypedController(decider, gates_rules_first=False),
+            exemplars=exemplars),
         # ★★ **终点验证** —— 原计划 §3.3 说的那个"关键比较"的另一端。
         #   和 `react-typed` 共用同一个 `run_loop` / `build_prompt` / 同一批工具 /
         #   **同一个交付闸门**（`TypedController._can_deliver`，逐字复用），
         #   只有"判定放几次"不同：这里循环中间一次都不问，只在终点问那一次。
-        "react-termination": lambda: react_baseline.ReAct(
-            controller=TerminationOnlyController(gate=TypedController(decider))
+        "react-termination": lambda exemplars="": react_baseline.ReAct(
+            controller=TerminationOnlyController(gate=TypedController(decider)),
+            exemplars=exemplars,
         ),
         # ★★ **零资源自检**（SelfCheckGPT 那个思路）—— 落在**同一根轴的同一点**（终点判定），
         #   但验证者不是判定模型，而是"同一段提示多采几次，看它自己前后一致不一致"。
         #   它**一次判定后端都不调**，代价是 k 次额外生成。
         #   和 `react-termination` 逐格可比：同一个循环、同一批工具、同一个终点。
-        "react-selfcheck": lambda: react_baseline.ReAct(
-            controller=SelfCheckController()
+        "react-selfcheck": lambda exemplars="": react_baseline.ReAct(
+            controller=SelfCheckController(), exemplars=exemplars,
         ),
     }
 
@@ -309,6 +408,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=None, help="只跑前 N 条（筛选阶段用）")
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--effort", default=None, choices=("low", "high", "max"),
+                        help="推理档位。**不传 = 不发这个字段**,用服务端默认。"
+                             "实测（ALFWorld × deepseek-flash）：默认 high 会烧掉"
+                             "上万推理 token，单次调用 184 秒")
     parser.add_argument("--max-tokens", type=int, default=None,
                         help="不传 = **不发这个字段**,用服务端的默认。默认不传 —— 我们自己钉一个上限曾经咬过 ALFWorld")
     parser.add_argument("--dump-requests", default="",
@@ -358,7 +461,21 @@ def main(argv: list[str] | None = None) -> int:
     agent_factory = resolve_agent(args.agent, decider)
 
     def make_agent(task: Task, tools: list[Tool]) -> Agent:
-        return agent_factory()
+        # ★★ **基准自带 few-shot 示范时，传给接受它的臂。**
+        #
+        #   为什么在这儿而不是写进某个臂的默认值：示范是 **(基准 × 臂)** 的属性
+        #   —— ReAct 原文对 ALFWorld、HotpotQA 各给一套。把 ALFWorld 那套写进
+        #   `react` 的默认值，会把**所有数据集**的 react 基线一起改掉。
+        #
+        #   ★ 判据用**签名**，不是 try/except：臂不接受就静默丢掉，正是"配了没生效"
+        #     那个老毛病（`thinking` 刚栽过一回）。
+        kwargs: dict[str, object] = {}
+        hook = getattr(bench, "exemplars", None)
+        if hook is not None:
+            text = hook() if callable(hook) else str(hook)
+            if text and "exemplars" in inspect.signature(agent_factory).parameters:
+                kwargs["exemplars"] = text
+        return agent_factory(**kwargs)
 
     results = run_cell(
         bench=bench,
@@ -375,6 +492,8 @@ def main(argv: list[str] | None = None) -> int:
         region=args.region,
         cold_start=args.cold_start,
         argv=sys.argv,
+        decider=decider_ref(decider),
+        thinking=Thinking(effort=args.effort) if args.effort else None,
     )
 
     ok = sum(1 for r in results if r.correct)
