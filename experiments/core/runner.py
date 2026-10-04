@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import sys
 import time
+import hashlib
+import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
@@ -300,6 +302,8 @@ def run_cell(
                         seed=cell.seed,
                         prompt_hash=_prompt_hash(bench, cell.arm),
                         decision_spec=_decision_spec(cell.arm),
+                        controller_config=_controller_config(agent),
+                        controller_config_digest=_controller_config_digest(_controller_config(agent)),
                         commit=commit,
                         dirty=dirty,
                         region=region,
@@ -387,10 +391,15 @@ def run_cell(
                     "task_count": first.task_count,
                     "arm": first.arm,
                     "generator": describe(model),
+                    "decider": {"id": first.decider.id, "version": first.decider.version,
+                                "provider": first.decider.provider},
                     "temperature": first.temperature,
                     "max_tokens": first.max_tokens,
                     "seed": first.seed,
                     "prompt_hash": first.prompt_hash,
+                    "decision_spec": first.decision_spec,
+                    "controller_config": first.controller_config,
+                    "controller_config_digest": first.controller_config_digest,
                     "commit": first.commit,
                     "dirty": first.dirty,
                     "region": first.region,
@@ -552,6 +561,41 @@ def _first_divergence(bench: Benchmark, task: Task, trajectory: Trajectory) -> i
     if hook is None:
         return -1
     return int(hook(task, trajectory))
+
+
+def _controller_config(agent: Agent) -> dict:
+    """Snapshot init settings from the actual controller, never a parallel arm table.
+
+    Exclude clients, runtime traces and counters. Wrapped controllers retain their
+    own init settings and recursively record their gate/controller configuration.
+    """
+    from dataclasses import fields, is_dataclass
+
+    def snapshot(controller):
+        if controller is None:
+            return {}
+        out = {"class": f"{type(controller).__module__}.{type(controller).__qualname__}"}
+        if not is_dataclass(controller):
+            return out
+        for f in fields(controller):
+            if not f.init or f.name in ("client", "trace", "redirects"):
+                continue
+            value = getattr(controller, f.name)
+            if value is None or isinstance(value, (str, int, float, bool)):
+                out[f.name] = value
+            elif isinstance(value, (set, frozenset)) and all(isinstance(v, str) for v in value):
+                out[f.name] = sorted(value)
+            elif f.name in ("gate", "controller"):
+                out[f.name] = snapshot(value)
+        return out
+
+    config = getattr(agent, "config", None)
+    controller = getattr(config, "controller", None)
+    return snapshot(controller)
+
+
+def _controller_config_digest(config: dict) -> str:
+    return hashlib.sha256(json.dumps(config, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
 def _decision_spec(arm: str) -> str:

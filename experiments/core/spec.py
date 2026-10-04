@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 # ═══════════════════════════════════════════════════════════
@@ -62,6 +62,9 @@ class RunMeta:
     #: 于是"那两批是同一个方法吗"在盘上答不出来 —— 而两张表并排放在一起的前提
     #: 正是这句话成立。空串 = 这一臂没有类型化判定（`direct` / `react` 那一类）。
     decision_spec: str = ""
+    # Effective controller settings, separate from the shared vocabulary digest.
+    controller_config: dict = field(default_factory=dict)
+    controller_config_digest: str = ""
 
 
 # ═══════════════════════════════════════════════════════════
