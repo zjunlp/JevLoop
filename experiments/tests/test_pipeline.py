@@ -147,6 +147,130 @@ def test_pipeline_end_to_end_writes_a_complete_log(tmp_path: Path) -> None:
     ids = {json.loads(line)["run_id"] for line in (run_dir / "results.jsonl").read_text().splitlines()}
     assert ids == {results[0].run_id}
 
+    # ★ 判分器的原话必须落盘 —— 否则"命中哪一条假声明"只能靠重跑回答
+    rows = [json.loads(line) for line in (run_dir / "results.jsonl").read_text().splitlines()]
+    assert all("detail" in row for row in rows), "results.jsonl 里缺 detail"
+    assert all("gate_corrected" in row for row in rows), "results.jsonl 里缺 gate_corrected"
+    assert all("gate_draft_correct" in row for row in rows), \
+        "results.jsonl 里缺 gate_draft_correct"
+
+
+def test_detail_and_gate_corrected_are_written_but_not_required_when_reading_back() -> None:
+    """★★ 两个决定，分开的，都要有理由：
+
+      写盘一侧 **强制**（`Result` 里没有默认值 ⇒ 少传就 TypeError）；
+      读回一侧 **不要求**（不在 `REQUIRED_RESULT_FIELDS` 里）。
+
+    ★ 为什么不放进 `REQUIRED_RESULT_FIELDS`：那张表是 `summarize` 用来
+      **拒收残缺行**的，加进去会让**此前所有批次**的 results.jsonl 变成残缺行
+      —— 为了一个诊断字段废掉已有数据，是本模块最反对的那种交换。
+      `detail` 和 `gate_corrected` 都是诊断，不是分组键、也不是效果字段。
+    """
+    for field in ("detail", "gate_corrected", "gate_draft_correct", "stop_reason"):
+        assert field in Result.__dataclass_fields__
+        assert field not in REQUIRED_RESULT_FIELDS
+
+
+def test_stop_reason_is_a_first_class_field_not_reconstructed_from_events() -> None:
+    """★★ **"这一题为什么结束"必须由 runner 写下来,不能事后从事件流重建。**
+
+    ★ 为什么：实测（2026-10-02）拿 `answer` 事件重建 alfworld / fta 两批时，
+      `Result` 里没有 `outcome.error`，于是 **一条 `agent_error` 被重建成
+      `exhausted`** —— "抛异常"被读成了"跑满预算"。两者的含义、
+      以及**该不该进任务分母，完全相反**：
+
+          异常/环境挂掉  ⇒ 这一题**不算数**（不是能力结果）
+          跑满预算      ⇒ 这一题**算数**（它确实没做完）
+
+      同一个事后重建还把 alfworld 那 2 条空答案读成了"跑满预算"，
+      而它们其实是 **`declined`（这一臂自己升级弃答）**。
+      ⇒ 少写一栏，重建就会**编出一个不同的故事**，而账面上看不出来。
+    """
+    from experiments.core.agent import AgentOutcome
+    from experiments.core.runner import _stop_reason
+    from experiments.core.types import Step
+
+    def n_steps(k: int) -> list:
+        return [Step(index=i, action=None, observation="", thought="") for i in range(k)]
+
+    cases = [
+        # (outcome, max_steps, 期望)
+        (AgentOutcome(final_answer="done"), 20, "delivered"),
+        (AgentOutcome(escalated=True, gate="blocked"), 20, "blocked"),
+        (AgentOutcome(escalated=True, error="该问人：..."), 20, "declined"),
+        (AgentOutcome(error="TimeoutError: timed out"), 20, "error"),
+        (AgentOutcome(final_answer=""), 20, "exhausted"),
+        (AgentOutcome(final_answer=None), 20, "exhausted"),
+        # ★ 空白正文不算交付 —— 否则"跑满预算"会被记成交付了一个空答案
+        (AgentOutcome(final_answer="   \n "), 20, "exhausted"),
+        # ★★ 步数用满**也**是 `escalated=True`,但它是 `exhausted`,不是 `declined`。
+        #    这是旧账分不出"闸门拦下的 28 条"和"跑满预算"的原因。
+        (AgentOutcome(escalated=True, steps=n_steps(30), error="用满 30 步仍未给出答案"), 30, "exhausted"),
+        # ★ 闸门拦下**优先于**步数判据：它是一次真实的裁决
+        (AgentOutcome(escalated=True, gate="blocked", steps=n_steps(30)), 30, "blocked"),
+        # ★ 自己决定不交(未满步数)仍然是 `declined`
+        (AgentOutcome(escalated=True, steps=n_steps(3), error="该问人：x"), 30, "declined"),
+    ]
+    for outcome, cap, expected in cases:
+        assert _stop_reason(outcome, cap) == expected, (outcome, cap, expected)
+
+
+def test_stop_reason_separates_the_loop_view_from_the_scorer_view(tmp_path: Path) -> None:
+    """★ `stop_reason` 是**循环**的口径,`failure_class` 是**判分器**的口径,两者不可互推。
+
+    ★ 为什么这条要有：准确率 = 交付率 × 交付正确率，而乘法把
+      「没停下」和「停下但停错了」混成一个数。要拆开，就得有一栏记
+      **循环**那边发生了什么 —— 从判分器的结论是推不出来的。
+    """
+    run_cell(
+        bench=ToyCapitals(), make_agent=lambda task, tools: Direct(), model=half_knowledge_model(),
+        cell=Cell(dataset="toy", arm="direct", seed=0), log_root=tmp_path,
+    )
+    rows = [
+        json.loads(line)
+        for line in next(tmp_path.glob("toy/direct/*/results.jsonl")).read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows, "这一批没有结果行"
+    for row in rows:
+        assert row["stop_reason"] in {"delivered", "declined", "blocked", "exhausted", "error"}, row
+    # 这一臂是直接作答的,所以每一题都应当交出了答案
+    assert {r["stop_reason"] for r in rows} == {"delivered"}
+
+
+def test_draft_scoring_falls_back_when_check_raises() -> None:
+    """★★★ `check()` **抛异常不等于判不了** —— 要回落到 `score()`,不能吞成 `False`。
+
+    ★ 实测（2026-10-02，ALFWorld）：`AlfWorld.check()` **故意抛** `NeedsTextWorld`
+      （"成败由环境状态判定,不是对答案字符串打分" —— 它自己的文档原话）。
+      旧代码把那个异常吞掉 ⇒ `draft_correct` 恒为 `False` ⇒
+
+          `gate_false_reject` 恒为 0   —— 读起来像"闸门一次没错杀"
+          `gate_corrected`   退化成 `revise ∧ correct`
+
+      于是 **闸门在两道已经赢了的题上打回答案**，被记成了"闸门改好了 2 条"：
+      **误杀被记成功劳**，而账面上看不出来。
+    """
+    from experiments.core.types import Task, Trajectory
+    from experiments.core.runner import _draft_was_correct
+    from experiments.core.agent import AgentOutcome
+
+    class Bench:
+        """`check` 抛（像 ALFWorld），`score` 只看轨迹（也像 ALFWorld）。"""
+
+        def check(self, task, answer):  # noqa: ANN001
+            raise RuntimeError("成败在环境状态里,不在答案字符串里")
+
+        def score(self, task, trajectory):  # noqa: ANN001
+            from experiments.core.types import Judgment
+
+            # 判据是**轨迹**，与 `final_answer` 无关 —— 这正是 ALFWorld 的形状
+            return Judgment(correct=True, score=1.0)
+
+    outcome = AgentOutcome(gate="revise", draft="草稿", final_answer="终稿")
+    assert _draft_was_correct(
+        Bench(), Task(task_id="t", prompt="p"), Trajectory(task_id="t", arm="stub"), outcome
+    ) is True
+
 
 def test_meta_stamps_dirty_so_unreproducible_numbers_are_visible(tmp_path: Path) -> None:
     """★ 脏工作区跑出来的数字别人复现不了,连跑它的人自己都复现不了 —— 必须盖章。"""

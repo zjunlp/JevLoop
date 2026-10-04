@@ -173,15 +173,40 @@ class TernaryJudge:
             Tool(
                 name="search",
                 description="Search the 40-document corpus for a phrase; returns matching lines with doc_id.",
+                # ★★★ **这个工具要的是「语料里字面出现的短语」，而模型会发一句话。**
+                #   实测（2026-10-04）:它把**自己的结论**当搜索词发出去 ——
+                #   `search('No value found. The provided corpus does not contain …')`
+                #   ⇒ 没有匹配 ⇒ 它如实报告"语料里没有" ⇒ 而正确答案是"文档互相矛盾"。
+                #   `contradiction` 那 5 道**全部**死在这里:**检索根本没发生。**
+                argument_hints={"query": (
+                    "ONE short phrase, copied verbatim from a sentence: an entity name "
+                    "ALONE (e.g. `Caldera Metrics`) or a field word ALONE (e.g. `revenue`, "
+                    "`founded`). "
+                    "Do NOT join words that are not adjacent in the text — this is a "
+                    "LITERAL SUBSTRING match over single sentences, so `Caldera Metrics "
+                    "2025 revenue` matches nothing even though every word is in the corpus, "
+                    "while `Caldera Metrics` and `revenue` each match. "
+                    "NOT a question, NOT a sentence, NOT a conclusion about whether the "
+                    "answer exists. When in doubt, search the ENTITY NAME alone — one hit "
+                    "is enough to start reading."
+                )},
                 parameters={
                     "type": "object",
                     "properties": {"query": {"type": "string", "description": "phrase to look for"}},
                     "required": ["query"],
                 },
+            # ★ 只读 ⇒ 声明风险 0：这是常量，不该让模型去猜（`gradeRisk` 的第一条硬规则）
+            base_risk=0,
             ),
             Tool(
                 name="read_doc",
                 description="Read one document in full by its doc_id.",
+                # ★★★ **候选必须能互相区分,否则 `pickInput` 是一道无法回答的题。**
+                #   实测(2026-10-04):没有这一行时,40 个 `d00x` 拿到同一句判据,
+                #   判官答"一个都不合适" 21/21 —— 而任务是「Lindenthal Pharma 哪年成立」,
+                #   文档标题里**就写着公司名**。给它标题,它就能选。
+                describe_candidate=lambda d, _m={x["doc_id"]: x["title"] for x in docs}:
+                    f"{_m.get(d, d)}",
                 parameters={
                     "type": "object",
                     "properties": {
@@ -189,6 +214,8 @@ class TernaryJudge:
                     },
                     "required": ["doc_id"],
                 },
+            # ★ 只读 ⇒ 声明风险 0：这是常量，不该让模型去猜（`gradeRisk` 的第一条硬规则）
+            base_risk=0,
             ),
         )
 

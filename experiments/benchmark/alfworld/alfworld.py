@@ -114,6 +114,56 @@ class NeedsTextWorld(RuntimeError):
     """
 
 
+#: ★★ **ALFWorld 的 few-shot 示范**（见 `AlfWorld.exemplars`）。
+#:
+#: 写法上刻意**不写 Observation 行** —— 格式说明里明写「不要自己写 Observation」，
+#: 示范里再把 Observation 写出来等于自相矛盾。改用一句"(the environment replies)"
+#: 表示那一步由环境补。
+ALFWORLD_EXEMPLARS = """# How a task is solved (one worked example)
+
+Task: put a clean plate on the countertop.
+
+Thought: I need a plate first. I will look inside the cabinets.
+Action: act[go to cabinet 1]
+   (the environment replies with an Observation — you never write it yourself)
+Thought: The cabinet is closed, so I have to open it before I can see inside.
+Action: act[open cabinet 1]
+Thought: A plate is inside. Take it.
+Action: act[take plate 1 from cabinet 1]
+Thought: I am holding the plate, but it is not clean yet. Cleaning happens at a sinkbasin.
+Action: act[go to sinkbasin 1]
+Thought: I am at the sink and holding the plate. Clean it with the sink.
+Action: act[clean plate 1 with sinkbasin 1]
+Thought: The plate is clean now. I need to put it on the countertop.
+Action: act[go to countertop 1]
+Thought: I am at the countertop holding the clean plate. Put it down here.
+Action: act[put plate 1 on countertop 1]
+Thought: The last Observation confirmed the plate is on the countertop, so the task is done.
+
+Three rules that decide most of these tasks:
+
+  · **A step only counts once the environment has confirmed it.** Never say you did
+    something in a Thought and then call finish — call finish only after you have seen
+    the Observation that shows the last step actually happened.
+  · **Transformations need the right appliance — and you must be HOLDING the object.**
+    `clean` needs a sinkbasin, `heat` needs a microwave, `cool` needs a fridge.
+    Go there first, then apply it to the object **in your hand**.
+
+    ⚠️ **Do NOT put the object into the appliance and then transform it.**
+    `move apple 1 to microwave 1` followed by `heat apple 1 with microwave 1`
+    does **nothing** — the apple is no longer in your hand. The correct order is:
+
+        take apple 1 from countertop 1
+        heat apple 1 with microwave 1      ← still holding it; no open/close needed
+
+    Putting it inside first is the single most common way to get stuck on these tasks.
+
+  · **If nothing changes, do something different.** Repeating a command that returned
+    "Nothing happens." will not work — repeating it ten times will also not work.
+    Look somewhere else, check `inventory` to see what you are carrying, and never
+    repeat a command that just failed."""
+
+
 @dataclass
 class AlfWorld:
     """ALFWorld 文本环境。"""
@@ -344,9 +394,14 @@ class AlfWorld:
 
         ⚠️ 而它也是「判定模型只能从枚举里挑」那条硬约束**天然满足**的地方:
           环境直接把候选给你了,不用猜。
-          但 `core/frame.py::candidate_provider` 读的是**静态** `enum`,
-          接不住这种**动态**候选 —— **那是一个还没做的接口改动**,
-          记在这里,别用「先传个空列表」糊过去。
+
+        ★★ **动态候选的接口已经接上了**（`core/frame.py::candidate_provider`
+          的第一条分支读 `tool.live_candidates`）。这里曾经写着"那是一个还没做的
+          接口改动,别用「先传个空列表」糊过去" —— 接口接上之后那段说明**没删**,
+          于是它变成了一个**反向的谎**:读它的人会以为动态候选还不支持,
+          进而去写一个静态 `enum` 来"绕过"一个已经解决的问题。
+          ★ 顺带记规模:开局 21 条 → `pickInput` 21 道小题,
+            离 `MAX_QUESTIONS = 96` 还远;但**每步重建**仍然必需。
         """
         env = self._ensure_env()
         return [str(c) for c in ((env["info"].get("admissible_commands") or [[""]])[0])]
@@ -370,6 +425,28 @@ class AlfWorld:
         self._actions.append(command)
         return str(obs[0]), bool(infos["won"][0]), bool(dones[0])
 
+    def exemplars(self) -> str:
+        """★ **ALFWorld 专用的 few-shot 示范** —— 给 prompt 那几条臂用。
+
+        ★★ 为什么它必须存在（2026-10-01 实测）：`react` 臂的 `DEFAULT_EXEMPLARS`
+        一直是**空串**，于是模型在 ALFWorld 上只拿得到格式说明和一张合法命令表。
+        实测（本地 9B，n=10，`--max-tokens 2048`）10 题里 **6 题撞满 30 步从没调
+        `finish`**（"I am stuck in a loop trying to move cup 1..."），另 3 题**草率
+        `finish`**（"I have **successfully** moved the saltshaker 1 to drawer 1,
+        **completing the task**"）。
+
+        ⇒ 那不是"模型弱"，是**我们没告诉它这类任务怎么一步步做**。ReAct 原文在
+           ALFWorld 上的成绩靠的正是这套示范（原文 prompt 里带 ALFWorld 轨迹）。
+
+        ★ 它教两件事，各对上面一种失败：
+
+          ① **交互形状**：`go to` → `open` → `take` → `clean/heat/cool` → `go to` → `put`。
+             动作长这样，光看一张命令表推不出来。
+          ② **收尾前要见到证据**：最后一步只有**看到 Observation 确认了**才算数 ——
+             直接针对那 3 题草率 `finish`。
+        """
+        return ALFWORLD_EXEMPLARS
+
     def tools(self) -> Sequence[Tool]:
         """ALFWorld 的动作空间 —— **一个工具,参数是命令原文**。
 
@@ -388,6 +465,55 @@ class AlfWorld:
             #   在那之前 agent 编出来的命令(`examine counter` / `use apple`)
             #   一条都不合法,环境全回 `Nothing happens.`。
             live_candidates=self.admissible,
+            # ★★★ **环境自己给的成败信号，可检索。**
+            #   `Nothing happens.` 是 TextWorld 的拒绝语（这一步没成）；
+            #   `[task complete]` 是**我们的 loader 依据 `infos["won"]` 追加的**
+            #   （见 `AlfWorld.step`）—— 也就是说这一条**就是判分器的真值**，
+            #   只是提前出现在了观察里。
+            #   ⇒ 「这一步成没成」「任务做完没有」不该让模型猜，照查即可。
+            observation_signals={
+                "failure": ("Nothing happens.",),
+                "goal_reached": ("[task complete]",),
+            },
+            # ★★★ **声明这一调的地板风险 = 1（可逆写入）。**
+            #
+            #   为什么现在必须声明：闸门改成「规则先筛、判官只确认」之后
+            #   （`docs/GATES-RULES-FIRST.md`），**档位不再由判官给** ——
+            #   规则先看工具声明，再看参数的模式表，两个都没有 ⇒
+            #   `UNKNOWN_TOOL_BAND` = 2 = 不可逆 ⇒ `ask_human` ⇒ 在基准里等于整题停下。
+            #   以前不声明只是"让判官判"，现在不声明是"每一步都去问人"。
+            #
+            #   ★ 而这一条**是可作证的**，不是猜的：`act` 的内容不是任意字符串 ——
+            #     `live_candidates=self.admissible`（上面那几行）把命令空间限死在
+            #     **环境自己给的合法命令**里，而那批命令全部是世界内的可逆动作
+            #     （走、看、拿、放、开、关、热、冷、洗）。没有一条能删数据、
+            #     花钱，或者把机器留在某个状态。
+            #   ⇒ 声明 1 而不是 0：`take` / `put` / `clean` 确实改状态，
+            #     说成"只读"会让 `auto` 放过一次状态改变。
+            #     ★ 而 `RISK_PATTERNS` 仍然**抬得动**它 —— 声明是地板，不是天花板。
+            base_risk=1,
+            # ★★★ **这个世界的动作语义** —— 环境语义,不是任务脚本。
+            #   照 `browser-use/jev-ultrafast` 的 `NEXT_ACTION`（12 条浏览器语义）
+            #   与 μ 的 `browser-step`。**判官现在得自己从任务文本里推断 ALFWorld
+            #   的机制**（先拿才能放、先开才能拿、先洗/热/冷才能放……），
+            #   而实测的后果就是那道 28 选 1 的题:`top` 贴在门限上、
+            #   一个命令重复 18 次。
+            #
+            # ★★ **界线**:这里只写"凡是带容器的世界都这样"的规则。
+            #   不写"把 Vase 放进 Safe 219"那种任务脚本 —— 那既不可泛化,
+            #   也会把这一臂变成在数据集上过拟合（`jev-ultrafast` 的 README
+            #   明写它没有 site-specific action scripts）。
+            action_rules=(
+                "This world is a set of rooms with containers. You carry at most one thing.\n"
+                "- You must be AT a location before you can touch anything in it: `go to X` first.\n"
+                "- You must HOLD a thing before you can put or transform it: `take X` first.\n"
+                "- A closed container hides its contents and refuses taking: `open X` first.\n"
+                "- Clean / heat / cool a thing BEFORE putting it where the task wants it.\n"
+                "- `examine` / `look` / `inventory` only report; they change nothing. "
+                "Repeating them does not advance the task.\n"
+                "- The task is only done when the goal object is in the goal location. "
+                "Arriving there is not the same as putting it there."
+            ),
             name="act",
             description=("Execute one command in the environment. "
                          "The command must be one that the environment currently allows."),

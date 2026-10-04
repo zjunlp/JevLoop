@@ -352,7 +352,12 @@ def test_truncation_is_not_an_absence() -> None:
     截断的正文里留着 `原文→实际` 的痕迹,判定模型至少知道「这里少了」;
     而缺席是「压根没有」。前者可以判,后者不能。
     """
-    long = "证据" * 1000
+    # ★ 长度按**声明的预算**造,不硬编码 —— 预算改了这条测试不该失效。
+    #   第一版写死 1000 个"证据",把 `draft` 的预算从 900 提到 8000 之后
+    #   它不再截断,于是 `truncations["draft"]` 直接 KeyError:
+    #   **测的本来是"截断要报出来",却因为长度不够变成了"没有截断"**。
+    budget = next(f.budget for f in frame_for("canDeliver").fields if f.name == "draft")
+    long = "证据" * (budget // 2 + 10)
     req = _req(node="canDeliver", ctx=AgentCtx(task="t", draft=long))
     assert req.frame.missing_required == ()
     assert req.frame.truncations["draft"][0] == len(long)
@@ -385,3 +390,108 @@ def test_the_seven_nodes_all_declare_a_required_field() -> None:
         "isDone": ["task"],
         "canDeliver": ["draft", "task"],
     }
+
+
+def test_tool_input_is_rendered_for_reading_not_as_a_python_dict() -> None:
+    """★★★ **`input` 是给判定模型看的，不是 `str(dict)`。**
+
+    实测（2026-10-10，把完整请求体打出来才看见）:
+
+        already_done: {'command': 'open microwave 1'}) -> You open the microwave 1. …
+
+    三处后果：
+
+      ① 判官读的是 Python 语法 ⇒ `history` 更快撞预算（实测 `400→300`）；
+      ② `gradeRisk` 的 `target` 同样是这个字面量；
+      ③ ★★★ `candidate_already_done` **对 `pickInput` 静默失效** ——
+         它拿 `r.input`（字典串）和 `question.options`（命令原文）求交集，
+         **永远为空**，于是一条本该报警的检查变成死信。
+
+    ★ 判据：单参数给**值**（那才是"这一步做了什么"），多参数给 `k=v` 对。
+      枚举候选那一侧给的是裸值，两边形状必须一致。
+    """
+    from experiments.core.frame import render_tool_input
+
+    assert render_tool_input({"command": "go to cabinet 1"}) == "go to cabinet 1"
+    assert render_tool_input({"base": 10, "height": 5}) == "base=10, height=5"
+    assert render_tool_input({}, "raw fallback") == "raw fallback"
+    # 单参数的值**就是候选里那个字符串** —— 交集才非空
+    assert render_tool_input({"command": "look"}) in ("look",)
+
+
+def test_options_that_cannot_be_told_apart_are_reported() -> None:
+    """★★★ **N 个选项的说明全是同一句 ⇒ 这道题没有可判别的依据。**
+
+    这条校验是 2026-10-04 实测补的,而它**本该在构造时就抓住那个问题**:
+
+      TERNARY 的 `pickInput` 是 40 个 `d001…d040`,判据却来自一张
+      **ALFWorld 的动词表** —— 40 个候选拿到**同一句话**。
+      判官答「一个都不合适」**21/21**(置信度 0.62)。
+
+    ★ 它**不是不会挑,是没有可挑的依据**。而症状会伪装成"判官质量差":
+      没有这条校验,日志上只能看到"判官老逃/乱挑",看不出是问题本身坏了。
+
+    ★★ 而且这件事**帧预算救不了**:把整条请求从 4k 放宽到 32k、
+      还补上 `last_result`,退出口**一次都没少**(21/21 → 21/21)。
+      给它每个候选的真实身份(文档标题),才是修法 —— 实测退出口掉到 **19%**。
+    """
+    from experiments.core.frame import Question, Request, compile_frame, frame_for
+
+    ctx = AgentCtx(task="t", last_result="obs")
+
+    def req(criteria):
+        q = Question(node="pickInput", kind="choice", ask="?", threshold=0.0,
+                     criteria=criteria, options=list(criteria), closed_choices=True)
+        return Request(frame=compile_frame(frame_for("pickInput"), ctx), question=q)
+
+    same = {o: "take this step if it is the next thing the task requires"
+            for o in ("d001", "d002", "d003")}
+    codes = {v.code for v in req(same).check(ctx)}
+    assert "indistinguishable_options" in codes, (
+        f"三个候选一句判据居然没被报出来 —— 那这条校验就是摆设。拿到的是 {codes}"
+    )
+    # 而**真的能区分**的时候不许响 —— 一条永远为真的告警等于没有告警
+    distinct = {"d001": "Aldermont Systems — company profile",
+                "d002": "Kestrel Aero — company profile"}
+    codes2 = {v.code for v in req(distinct).check(ctx)}
+    assert "indistinguishable_options" not in codes2, codes2
+    # 它**不是** fatal:拦住整条臂动不了,而报出来才有人看
+    assert not [v for v in req(same).check(ctx) if v.code == "indistinguishable_options" and v.fatal], \
+        "拦住没有意义 —— 它要么报出来被人看见,要么什么都别做"
+
+
+def test_a_host_pseudo_step_never_reaches_the_judge() -> None:
+    """★★★ **宿主自己的伪步骤不是环境观测,不许进帧。**
+
+    实测（2026-10-04，Ternary）一条**纯人工的因果链**:
+
+      ① `run_loop` 解析不出动作 ⇒ 塞一步 `__parse_error__`(好让下一轮 prompt 带纠正提示)
+      ② `records()` 返回整个历史 ⇒ 它进了 `evidence`
+      ③ 判官读到 `__parse_error__() -> Could not parse an action.`
+      ④ 模型**如实报告**"文档读取过程中有解析错误"
+      ⑤ **闸门判它 `overclaim`** —— 因为 `read_doc` 其实**读成功了**
+
+    ⇒ 一条**我们工具链的失败**,经模型的嘴,变成模型的一次编造,再被我们的闸门罚。
+
+    ★ 它**必须仍然留在 `steps` 和事件流里**（那是给下一轮 prompt 的纠正提示）,
+      只是**不许进判官看得见的那一份**。两件事不能混。
+    """
+    from experiments.core.types import HARNESS_PSEUDO_TOOLS
+
+    sentinel = HARNESS_PSEUDO_TOOLS[0]
+    real = Step(index=0, action=Action(kind="tool", name="read_doc",
+                                      arguments={"doc_id": "d005"}),
+                observation="[d005] Elmridge Robotics — company profile")
+    bad = Step(index=1, action=Action(kind="tool", name=sentinel, arguments={}),
+               observation="Could not parse an action. Reply with exactly one of: …")
+    ctx = ctx_from_steps("Who is the CTO?", [real, bad])
+
+    # ① 它不在证据里
+    assert sentinel not in ctx.evidence, ctx.evidence
+    assert "Could not parse an action" not in ctx.evidence
+    # ② 也不在"做过什么"里
+    assert sentinel not in " ".join(r.tool for r in ctx.history)
+    # ③ 而**最后一步**因此指向真的那次调用 —— 不是那个伪步骤
+    assert ctx.last_tool == "read_doc" and "d005" in ctx.last_result
+    # ④ 真步骤还在
+    assert "read_doc" in ctx.evidence

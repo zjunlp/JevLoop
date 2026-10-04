@@ -69,7 +69,9 @@ CALCULATOR = Tool(
         "properties": {"expression": {"type": "string"}},
         "required": ["expression"],
     },
-)
+
+    # ★ 纯计算、无副作用 ⇒ 风险 0（常量，查表而不是问模型）
+    base_risk=0,)
 
 
 @dataclass

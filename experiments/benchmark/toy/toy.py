@@ -38,7 +38,9 @@ LOOKUP_TOOL = Tool(
         "properties": {"country": {"type": "string", "enum": sorted(CAPITALS)}},
         "required": ["country"],
     },
-)
+
+    # ★ 只读查表 ⇒ 风险 0
+    base_risk=0,)
 
 
 class ToyCapitals:
