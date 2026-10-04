@@ -314,19 +314,40 @@ def typed_arms(decider: DecisionClient) -> dict[str, Callable[[], Agent]]:
             controller=TypedController(decider, allow_choices_without_escape=True),
             exemplars=exemplars),
         # ★★★ **题形的单变量对照** —— 和 `react-typed` 只差 `pick_input_shape`
-        #   这一个开关：`single_choice`（一道 N 选 1）vs `per_candidate`
-        #   （N 道 yes/no，逃逸是推导出来的）。
+        #   这一个开关：`comparative`（一道 N 选 1，**现在的默认**）对
+        #   `admission`（N 道 yes/no，逃逸是推导出来的）。
         #
-        #   为什么必须是一个**臂**而不是"拿上一批数当基线"：
-        #   `react-typed-noescape` 同时改了题形和退出口两件事，归不到。
-        #   而"一候选一题比 N 选 1 好"这句话的全部内容就是**只改这一处**的差 ——
-        #   上一批（2026-10-04T11-00-45Z 起）是 `single_choice`，今天默认是
-        #   `per_candidate`，跨批比会把生成模型的抖动也算进去。
+        #   ★ 为什么这一格叫 `admission` 而不是 `singlechoice`:
+        #     默认原来是 `per_candidate`（=admission）,量完发现它在**两个数据集上
+        #     都更差**（TERNARY 8/8/9/9 对 15/12/12/12;ALFWorld 0/20 对 3/20）,
+        #     于是默认换成了 `comparative`。**换完之后 `singlechoice` 这个名字
+        #     就没有对照可言了**（它和默认是同一个配置）。
+        #     留在表里的那个**已测的负结果**是 admission 那一侧。
         #
-        #   ⚠️ 这一格的批次同样**必须和 `react-typed` 分开列**：
-        #     两版的题数、选项数、请求数都不同，进同一张表会把
+        #   ⚠️ 上一版的 `react-typed-singlechoice` 就是这么变成谎话的:
+        #     `Tool.candidate_shape` 压过了控制器,于是它名义上"强制 N 选 1",
+        #     实际跑的是工具声明的那一种,量出来和 `react-typed` 一样
+        #     （10/20、12/20 对 11/20、12/20）—— **臂名在说谎,而且不报错。**
+        #     优先级已改成「显式指定 > 环境声明 > 全局默认」,见 `PICK_INPUT_SHAPE_AUTO`。
+        #
+        #   ⚠️ 这一格的批次**必须和 `react-typed` 分开列**:
+        #     两版的题数、选项数、请求数都不同,进同一张表会把
         #     「判定准确率」变成一个没有共同分母的数。
+        "react-typed-admission": lambda exemplars="": react_baseline.ReAct(
+            controller=TypedController(decider, pick_input_shape="admission"),
+            exemplars=exemplars),
+        # ★ **同一对照的另一端** —— 显式强制 `comparative`。
+        #
+        #   ⚠️ **它和 `react-typed`（默认）现在是同一个配置**:默认在 2026-10-04
+        #     换成了 comparative。留着的理由是**可追溯**:这个名字底下已经落了
+        #     6 个 run（TERNARY 的 15/12/12/12/10/12 和 ALFWorld 的 3/20 都出自它）,
+        #     而那些 run **跑的就是 comparative** —— 改掉臂名会让
+        #     `scripts/check.py` 把它们的目录判成"未知的臂"。
+        #   ★ 所以它现在的第二个用处是**一条一致性检查**:它和 `react-typed`
+        #     必须给出同一批数。若哪天默认被改回 admission,这一对会立刻分叉。
         "react-typed-singlechoice": lambda exemplars="": react_baseline.ReAct(
+            # ★ 旧拼法,由 `PICK_INPUT_SHAPE_ALIASES` 映射到 `comparative`。
+            #   留着旧字面量是因为**臂名和落盘的 run 都用它**。
             controller=TypedController(decider, pick_input_shape="single_choice"),
             exemplars=exemplars),
         # ★★★ **闸门的对照臂：判官产生裁决那一版**（`gates_rules_first=False`）。

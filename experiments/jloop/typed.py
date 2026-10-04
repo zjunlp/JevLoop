@@ -632,12 +632,62 @@ PICK_INPUT_CANDIDATE_CRITERIA = {
 
 #: ★★★ **`pickInput` 的题形。两种,而且它们是两个方法。**
 #:
-#:   `"per_candidate"` 一候选一题 + 策略排序（**新默认**，2026-10-04）
-#:   `"single_choice"` 一道 N 选 1（旧的；`react-typed-noescape` 对照臂用它）
+#:   `"admission"`    一候选一题 + 策略排序。每道题问「做这一个是不是下一步」,
+#:                    逃逸是**推导出来的**（没有任何候选过线）。
+#:   `"comparative"`  一道 N 选 1。判官在同一张选项表里**互相比较**。
 #:
-#: ★ 两个形状都留着是因为**旧形状是已测的基线**（`docs/BATCH-1-PLAN.md` 那张表），
-#:   而后面的对照要靠它。**但它们不能混进同一张表** —— 所以它是契约的一部分、进指纹。
-PICK_INPUT_SHAPE = "per_candidate"
+#: ★★★ **默认是 `"comparative"` —— 这是量出来的,不是选出来的。**
+#:   我原来写下的结论是「N 选 1 的 argmax 是病,一候选一题是修法」
+#:   （`docs/ACTION-SELECTION-LESSONS.md`,从 μ / `jev-ultrafast` 读出来的）。
+#:   做完之后在**两个数据集上各量了一遍**,它**都是更差的那一个**:
+#:
+#:     ========== ========================= =========================
+#:     数据集      admission（一候选一题）    comparative（N 选 1）
+#:     ========== ========================= =========================
+#:     TERNARY    8, 8, 9, 9 / 20           15, 12, 12, 12 / 20
+#:     ALFWorld   0 / 20                     3 / 20
+#:     ========== ========================= =========================
+#:
+#:   ⇒ 数字说话:默认回到比较型。准入型**留着**,而且有它自己的臂
+#:     （`react-typed-admission`）—— 它是一个**已测的负结果**,不是一个被删掉的尝试。
+#:
+#: ★ 两个形状都留着还有第二个理由:**它们不能混进同一张表** ——
+#:   所以它是契约的一部分、进指纹。
+PICK_INPUT_SHAPE = "comparative"
+
+#: `pick_input_shape` 的默认值 —— **"自动":让环境说。**
+#:
+#: ★★★ 为什么默认不是那两个值之一,而是 `"auto"`:两种问法**没有全局胜负**
+#:   （见 `PICK_INPUT_SHAPE` 的数字）,胜负取决于**候选的结构**,而候选集是
+#:   环境给的（`Tool.live_candidates`）—— 所以"该用哪种"这个事实**只有环境知道**。
+#:   环境没说（`Tool.candidate_shape = None`）才落到上面那个全局默认。
+#:
+#: ★★ 为什么必须区分"自动"和"显式指定":对照臂靠 `pick_input_shape=…` 强制某一种。
+#:   如果工具声明**永远**压过控制器,RUN 起来会是这样 ——
+#:   `react-typed-singlechoice` 名义上"强制 N 选 1",实际跑的是工具声明的
+#:   `comparative`,于是它在 TERNARY 上量出来的数和 `react-typed` 一模一样
+#:   （实测 10/20、12/20 对 11/20、12/20）—— **臂名在说谎,而且不报错。**
+#:   这正是这个仓库反复栽的那个形状（"配了没生效"）。
+#:   ⇒ 优先级:**显式指定的臂 > 环境声明 > 全局默认**。
+PICK_INPUT_SHAPE_AUTO = "auto"
+
+#: ★ **改名不改语义** —— 旧拼法映射到新拼法。
+#:
+#:   `"single_choice"`  → `"comparative"`（同一个东西,当初叫"一道 N 选 1"）
+#:   `"per_candidate"`  → `"admission"`  （同一个东西,当初叫"一候选一题"）
+#:
+#: ★ 为什么要留别名而不是直接改字面量:`react-typed-singlechoice` 这个**臂名**
+#:   和它底下 6 个已落盘的 run 都在用旧拼法。直接改字面量会让那些 run 的臂名
+#:   从"已知的臂"变成"未知的臂"（`scripts/check.py` ③ 会红）,于是要么改臂名
+#:   （6 个目录跟着动）要么把它们挪进 `_superseded/`（丢掉可追溯性）。
+#:   而**旧 run 跑的就是 comparative** —— 别名让它继续成立,一个字都不用搬。
+#:
+#: ⚠️ 只认这两个。拼错了**不是**静默落到默认,而是在下面当场抛错:
+#:   一个拼错的形状名会让这个臂**悄悄变成另一个方法**,那正是要防的。
+PICK_INPUT_SHAPE_ALIASES = {
+    "single_choice": "comparative",
+    "per_candidate": "admission",
+}
 
 #: `_arguments` 用这个哨兵告诉调用方「判官说没有动作合适」——和「出错了」分开。
 NO_ACTION_FITS = "__no_action_fits__"
@@ -851,7 +901,7 @@ NODE_THRESHOLDS: dict[str, float] = {
 #: 并且 `pickInput` 补上了 `last_result`。帧的**内容**变了 ⇒ 与 typed-4 不可比。
 #: ★ `typed-4` —— 闸门改成**规则先筛、判官只确认**（用户 2026-10-04 的决定）。
 #: ★ `typed-3` 及以前 —— **判官产生裁决**。三批数字**不能进同一张表**。
-DECISION_SPEC_VERSION = "typed-9"
+DECISION_SPEC_VERSION = "typed-10"
 
 #: `allow_choices_without_escape` 的**离线说明** —— 见那个字段的文档。
 #: ★ 它是一份**声明**，不是一个可调的参数:打开它的批次是另一个方法。
@@ -880,6 +930,10 @@ DECISION_SPEC_PARTS: tuple[str, ...] = (
     "UNKNOWN_TOOL_BAND", "RAISE_STEP", "RISK_CONFIRM_ASK", "RISK_CONFIRM_CRITERIA",
     "RISK_CONFIRM_WHEN", "ANSWER_EVIDENCE_STEPS", "ANSWER_EVIDENCE_RESULT_CHARS",
     "PICK_INPUT_CANDIDATE_ASK", "PICK_INPUT_CANDIDATE_CRITERIA", "PICK_INPUT_SHAPE",
+    # ★ `PICK_INPUT_SHAPE_AUTO` 也进指纹:它不是"跑法",它决定
+    #   `shape = 环境声明 or 全局默认` 这条解析规则 —— 拿掉它,
+    #   `pick_input_shape` 的默认值就从"自动"变成"某一种",那是另一个方法。
+    "PICK_INPUT_SHAPE_AUTO", "PICK_INPUT_SHAPE_ALIASES",
     "CONFIRM_BLOCK_ASK", "CONFIRM_BLOCK_CRITERIA",
     "OBJECT_ALLOW_ASK", "OBJECT_ALLOW_CRITERIA",
     # 出口与哨兵
@@ -1151,8 +1205,11 @@ class TypedController:
     #:   ⚠️ 打开它的批次**必须和默认批次分开列**：它们是两个不同的方法。
     allow_choices_without_escape: bool = False
 
-    #: ★★ `pickInput` 的题形（见 `PICK_INPUT_SHAPE` 的说明）。
-    pick_input_shape: str = PICK_INPUT_SHAPE
+    #: ★★ `pickInput` 的题形。**默认 `"auto"` = 让环境说**
+    #:   （`Tool.candidate_shape`,环境没说才落到 `PICK_INPUT_SHAPE`）。
+    #:   显式写 `"comparative"` / `"admission"` = **压过环境声明** ——
+    #:   对照臂靠这一条才成立,理由见 `PICK_INPUT_SHAPE_AUTO`。
+    pick_input_shape: str = PICK_INPUT_SHAPE_AUTO
 
     #: ★★★ **只观察、不落地的判定点**（照 μ 的 `shadow` 模式）。
     #:
@@ -1497,14 +1554,25 @@ class TypedController:
             #     而"要不要做这个动作"已经由**更前面**的 `needsTool` 判过了。
             #     §8.1：能由精确规则定的，不交给判定模型。
             return {first: options[0]}, None
-        # ★★★ **问法跟候选的结构走** —— 环境可以为**这一个工具**声明用哪种
-        #   （`Tool.candidate_shape`），没说才用控制器的默认。
-        #   为什么必须有这一栏:`docs/ACTION-SELECTION-LESSONS.md` 那条结论
-        #   （"N 选 1 的 argmax 是病,一候选一题是修法"）在 TERNARY 上**被实测推翻**了,
-        #   而推翻它的原因是候选的**结构**:同质候选要比较,异构候选要准入。
-        #   详见 `Tool.candidate_shape`。
-        shape = getattr(tool, "candidate_shape", None) or self.pick_input_shape
-        if shape == "per_candidate" and not self.allow_choices_without_escape:
+        # ★★★ **问法跟候选的结构走。**优先级（见 `PICK_INPUT_SHAPE_AUTO`）:
+        #
+        #     ① 控制器**显式**指定的形状（对照臂）—— 压过一切
+        #     ② 环境为**这一个工具**声明的形状（`Tool.candidate_shape`）
+        #     ③ 全局默认（`PICK_INPUT_SHAPE` = 量出来的那个赢家）
+        #
+        #   ⚠️ ①②的顺序是这个函数里最容易搞反、而且**搞反了不报错**的一处:
+        #     让①输给②,`react-typed-singlechoice` 就会静默地跑成
+        #     `comparative`,量出来和 `react-typed` 一样 —— 臂名说谎。
+        shape = (self.pick_input_shape if self.pick_input_shape != PICK_INPUT_SHAPE_AUTO
+                 else (getattr(tool, "candidate_shape", None) or PICK_INPUT_SHAPE))
+        shape = PICK_INPUT_SHAPE_ALIASES.get(shape, shape)
+        if shape not in ("comparative", "admission"):
+            # ★ 不静默降级 —— 见 `PICK_INPUT_SHAPE_ALIASES` 的说明。
+            raise ValueError(
+                f"pick_input_shape={self.pick_input_shape!r}（解析成 {shape!r}）不是已知题形；"
+                f"只有 'comparative' / 'admission'（或 'auto'）"
+            )
+        if shape == "admission" and not self.allow_choices_without_escape:
             # ★★★ **一候选一题**（2026-10-04）—— 见 `PICK_INPUT_CANDIDATE_ASK` 的说明。
             #
             #   ① **候选进状态（编号表）,题里只引用编号。**

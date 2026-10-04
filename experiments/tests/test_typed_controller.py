@@ -58,16 +58,21 @@ def judge_gate(client, **kw):
 
 
 def single_choice(client, **kw):
-    """**旧题形**（`pickInput` 是一道 N 选 1）的控制器。
+    """**比较型题形**（`pickInput` 是一道 N 选 1）的控制器。
 
-    ★ 一候选一题是 2026-10-04 起的新默认。而下面这几条测试钉的是**旧形状特有的行为**:
+    ★ 下面这几条测试钉的是**比较型特有的行为**:
     退出口是候选表里的一个**选项**、`top()` 门限、`accept_below_bar` / `drop_below_bar`
-    这两种兜底名字。**新形状下这些概念不存在**（逃逸变成"没有任何候选过线"），
-    所以它们必须显式声明测的是旧形状 —— 而不是悄悄跟着默认值跑。
+    这两种兜底名字。**准入型下这些概念不存在**（逃逸变成"没有任何候选过线"），
+    所以它们必须**显式**声明测的是哪一种 —— 而不是悄悄跟着默认值跑。
+
+    ⚠️ 2026-10-04 的默认换过一次（admission → comparative）。这几条测试当时
+    **没有跟着错**，正是因为它们显式写了形状;现在这个显式值从 `single_choice`
+    改名叫 `comparative`（两个词指的是同一件事，统一成后者）。
+    ★ 换句话说:**显式声明形状的测试，在默认翻转时不会静默改变含义。**
     """
     from experiments.jloop.typed import TypedController
 
-    return TypedController(client, pick_input_shape="single_choice", **kw)
+    return TypedController(client, pick_input_shape="comparative", **kw)
 
 
 
@@ -1155,10 +1160,18 @@ def test_the_typed_cells_are_reachable_by_name() -> None:
         #   单变量对照是唯一能把"退出口有没有用"问清楚的形式。
         "react-typed-noescape",
         # ★★ **题形的单变量对照** —— `pick_input_shape="single_choice"`
-        #   （一道 N 选 1）对 `per_candidate`（N 道 yes/no）。
+        #   （一道 N 选 1）对 `admission`（N 道 yes/no）。
         #   它和 `react-typed-noescape` 不是同一个对照：那一格同时改了
         #   **题形和退出口**两件事，答不了"题形有没有用"。
         "react-typed-singlechoice",
+        # ★★ **题形的另一个方向** —— 强制 `admission`（一候选一题）。
+        #
+        #   默认在 2026-10-04 从 admission 换成了 comparative（两个数据集上
+        #   admission 都更差,见 `PICK_INPUT_SHAPE`）。**负结果也要留着能跑** ——
+        #   否则"它更差"这句话没人复现得了。
+        #   ⚠️ 它和 `react-typed-singlechoice` 现在是**同一个对照的两端**,
+        #     而 `react-typed`（默认）落在 comparative 那一端。
+        "react-typed-admission",
         # ★★ **闸门的对照臂** —— `gates_rules_first=False`（判官产生裁决）。
         #   它换的是**裁决的来源**，和默认那一版的问法完全不同，
         #   所以两批数字不能进同一张表（`DECISION_SPEC_VERSION` 已到 typed-4）。
@@ -1166,7 +1179,7 @@ def test_the_typed_cells_are_reachable_by_name() -> None:
     }
     for name in ("react-typed", "act-typed", "react-termination", "react-selfcheck",
                  "react-typed-noescape", "react-typed-singlechoice",
-                 "react-typed-judgegate"):
+                 "react-typed-admission", "react-typed-judgegate"):
         agent = resolve_agent(name, decider)()
         assert agent.config.controller is not None, f"{name} 没接上控制器"
 
@@ -2171,7 +2184,12 @@ def test_no_candidate_clearing_the_bar_means_stop_not_failure() -> None:
     # 而**每一个候选都要低** —— 用通配键表达"没有任何候选过线"。
     client = ScriptedClient(noul={"needsTool": 0.9, "needs_auth": 0.1,
                                   "pickInput::*": 0.05})
-    ctrl = TypedController(client, gates_rules_first=True)
+    # ★ **显式声明测的是准入型** —— 这条命题说的就是"没有任何候选过线",
+    #   而那只有准入型才有（比较型里逃逸是候选表里的一个选项,见本文件顶部的
+    #   `single_choice()`）。默认在 2026-10-04 换成了比较型,所以这里必须写明,
+    #   否则这条测试会跟着默认**静默地**变成在测另一件事。
+    ctrl = TypedController(client, gates_rules_first=True,
+                           pick_input_shape="admission")
     out = ctrl.decide(session, _view(session))
     session.finish_events()
 
@@ -2510,10 +2528,10 @@ def test_the_decision_spec_fingerprint_is_pinned() -> None:
     """
     from experiments.jloop.typed import DECISION_SPEC_VERSION, decision_spec_digest
 
-    assert DECISION_SPEC_VERSION == "typed-9", (
+    assert DECISION_SPEC_VERSION == "typed-10", (
         "bump 版本时把这一行也改掉，并把下面的指纹更新成新的"
     )
-    assert decision_spec_digest() == "039e0a4fc27b0ed0", (
+    assert decision_spec_digest() == "ea0a6fa0f74b7b21", (
         "判定规格的指纹变了 —— 问法 / 门限 / 兜底 / 帧预算里有东西被改动。\n"
         "  · 如果是**有意的**改动：bump `DECISION_SPEC_VERSION`，"
         "并把这条断言里的值换成新指纹。\n"
