@@ -9,7 +9,7 @@
 所以规则是:
 
 ```
-Benchmark.downloads()  ──►  scripts/datasets.py --write  ──►  dataset/DOWNLOADS.md
+Benchmark.downloads()  ──►  scripts/dataset_catalog.py --write  ──►  dataset/DOWNLOADS.md
    （权威，住在 loader 旁边）        （生成）                      （不许手改）
 ```
 

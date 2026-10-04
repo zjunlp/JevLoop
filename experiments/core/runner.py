@@ -11,14 +11,14 @@ from __future__ import annotations
 
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
 from experiments.core.agent import Agent, AgentOutcome, Session
 from experiments.core.events import AnswerEvent
 from experiments.core.bench import Benchmark
-from experiments.core.models import ModelClient, describe
+from experiments.core.models import ModelClient, Thinking, describe
 from experiments.core.runlog import EXPERIMENTS_DIR, RunLog, archive_hint, repo_commit
 from experiments.core.spec import Cost, ModelRef, Result, RunMeta, Timing
 from experiments.core.tools import ToolExecutor
@@ -108,8 +108,17 @@ def run_cell(
     argv: Sequence[str] = (),
     only: Sequence[str] = (),
     dump_requests: Path | None = None,
+    decider: ModelRef | None = None,
+    thinking: Thinking | None = None,
 ) -> list[Result]:
-    """跑一个格子。**一个格子一个 log 目录,永不覆盖。**"""
+    """跑一个格子。**一个格子一个 log 目录,永不覆盖。**
+
+    `decider` = **计划用的**那个判定后端（不是实际答话的那个 —— 那条在
+    `DecisionBatchEvent.provider` 里，见那里为什么两者要分开）。
+    ★ 不传 = 这一臂没有判定后端。以前这一栏**写死成 `id="none"`**，
+    于是带了 Jev 的格子（`react-typed` / `react-termination`）在 `meta.json` 里
+    和 `direct` 长得一模一样 —— 又一个"信息在手里、没往回传"。
+    """
     # ★ `only` 是**定点重跑**:给一批 task_id 的后缀,只跑那些。
     #   为什么需要它:整批 100 题里往往只有十几题是坏的,而全量一批要几分钟、
     #   还带着 ±9 的噪声（§8.17）——**盯着已知坏的那几题看,信噪比高得多**。
@@ -173,6 +182,9 @@ def run_cell(
         #   而那种情况更隐蔽:开始是干净的,所以第一道警告不会响。
         start_commit = commit
         mid_run_change: str | None = None
+        # ★ 判定后端的降落次数与实际答过话的后端（见 `DecisionBatchEvent.provider`）。
+        degraded_total = 0
+        answered_by: set[str] = set()
 
         for i, task in enumerate(tasks, start=1):
             # ★★ **在有状态的环境里,benchmark 必须知道「现在是哪个任务」。**
@@ -198,6 +210,8 @@ def run_cell(
                 run_id=log.run_id, task=task, arm=cell.arm, tools=tools, executor=executor,
                 model=model, max_steps=max_steps, temperature=temperature, max_tokens=max_tokens,
                 dump_requests=dump_requests,
+                # ★ 推理档位一路传下去 —— 见 `Session.call_model` 里那段实测。
+                thinking=thinking,
             )
 
             # 每题查一次「树还是不是那个」。★ 用 `repo_commit` 而不是逐文件 stat ——
@@ -255,6 +269,12 @@ def run_cell(
             session.finish_events()
             trajectory = session.trajectory(outcome)
             judgment = _safe_score(bench, task, trajectory, outcome)
+            # ★ 闸门**打回的那一版**本来对不对 —— `gate_false_reject` 全靠它才名实相符。
+            draft_correct = _draft_was_correct(bench, task, trajectory, outcome)
+            # ★ 判定后端降过几次级 —— 跑完要大声报（见下面 `degraded_total`）。
+            degraded_total += session.decider_degradations
+            if session.decider_providers:
+                answered_by.update(session.decider_providers)
             log.progress(i, len(tasks))
 
             # ★ **一条事件流,不是一个调用摊在三张表里。**
@@ -272,13 +292,14 @@ def run_cell(
                         task_count=len(tasks),
                         arm=cell.arm,
                         generator=ModelRef(**describe(model)),
-                        decider=ModelRef(id="none", version="n/a", provider="n/a"),
-                        thinking_budget="n/a",
+                        decider=decider or ModelRef(id="none", version="n/a", provider="n/a"),
+                        thinking_budget=(f"{thinking.effort}" if thinking else "server-default"),
                         temperature=temperature,
                         top_p=1.0,
                         max_tokens=max_tokens,
                         seed=cell.seed,
                         prompt_hash=_prompt_hash(bench, cell.arm),
+                        decision_spec=_decision_spec(cell.arm),
                         commit=commit,
                         dirty=dirty,
                         region=region,
@@ -304,9 +325,35 @@ def run_cell(
                     #   ⚠️ 字段名的历史遗留：`gate_false_deny` 指的是"闸门放过了错的"
                     #      （不是"拒绝了对的"）。名字反了，但它在 spec/测试里，不动它，
                     #      只在这里写明，免得下一个人再读反一次。
-                    gate_false_reject=bool(outcome.gate == "revise" and judgment.correct),
+                    #
+                    #   ★★ 2026-10-01 修正 **`gate_false_reject` 的判据**：
+                    #      判的是**闸门打回的那一版草稿**，不是改完之后那一版。
+                    #      旧判据（`revise ∧ 最终 correct`）把"修订救回来了"也算成误伤 ——
+                    #      实测 `fta × react-termination` 报了 27 条，全部 `failure_class=none`。
+                    #      改完之后那 27 条被分成：草稿本来就坏 → `gate_corrected`
+                    #      （闸门立功），草稿本来就对 → 才算 `gate_false_reject`。
+                    #      ⚠️ **同一个字段名，跨 commit 语义不同** —— 好在这条 pipeline
+                    #      把 `commit` 当分组键的一部分，新旧批次不会进同一张表。
+                    gate_false_reject=bool(outcome.gate == "revise" and draft_correct),
                     gate_false_deny=bool(outcome.gate == "deliver" and not judgment.correct),
+                    # ★ 闸门要求修订、而且**确实改好了**。没有这一栏，那 27 条修好的
+                    #   就从记账里消失了 —— 只剩"误伤"一栏，看起来闸门只会帮倒忙。
+                    gate_corrected=bool(
+                        outcome.gate == "revise" and not draft_correct and judgment.correct
+                    ),
+                    # ★ **原始事实**：闸门打回去的那一版草稿本身过不过判分。
+                    #   上面三个标志都是从它推出来的；它留下，是为了让
+                    #   "闸门说 blocked 的那 27 次到底是保护还是误杀"可查。
+                    gate_draft_correct=draft_correct,
                     failure_class=judgment.failure_class or ("none" if judgment.correct else "unclassified"),
+                    # ★ **循环**的口径（这一题为什么结束），和上面那个**判分器**的
+                    #   口径（判成什么）是两件事 —— 一个说"它交没交、为什么没交",
+                    #   一个说"交出来的东西对不对"。实测两者不可互推。
+                    stop_reason=_stop_reason(outcome, max_steps),
+                    # ★ 判分器的原话要落盘。以前它只活在内存里 —— `run_cell` 手里
+                    #   一直有它，结果行里却没有，于是"命中哪一条假声明 / 哪一句断言"
+                    #   这种问题只能靠重跑回答（和 §11 那两个死字段同一个模式）。
+                    detail=judgment.detail or "",
                     cost=aggregate_cost(session),
                     timing=aggregate_timing(session, wall_ms=wall_ms),
                     artifacts=("cmd.txt", "meta.json", "exit.json", "results.jsonl",
@@ -355,6 +402,19 @@ def run_cell(
         # ★ 中途变过就记进 `exit.json` 的 `stop_reason` —— 归档之后那是唯一线索。
         if mid_run_change:
             log.stop(f"★ 这一批跨了多个代码版本：{mid_run_change}")
+        # ★★ **判定后端降过级就必须大声报。** 判定后端是一条降级链，而正常降级
+        #   以前在日志上不留痕 —— 于是"这一批跑的是真 Jev"是一个**不可证伪**的说法。
+        #   实测（2026-10-01）：152 批零降级，但那是查出来的，不是推出来的。
+        if degraded_total:
+            msg = (
+                f"★ 判定后端降级 {degraded_total} 次（回答过话的后端："
+                f"{sorted(answered_by)}）—— 这些判定**不来自计划用的那个后端**，"
+                f"数字要单独看"
+            )
+            print("\n" + "!" * 68 + f"\n⚠️  {msg}\n" + "!" * 68 + "\n")
+            log.stop(f"{mid_run_change or ''}{'；' if mid_run_change else ''}{msg}")
+        elif answered_by:
+            print(f"  判定后端实际答话：{sorted(answered_by)}（无降级）")
         return results
 
 
@@ -366,13 +426,118 @@ def _make_checker(bench: Benchmark, task: Task):
     return lambda answer: bool(hook(task, answer))
 
 
+def _no_answer_class(outcome: AgentOutcome) -> str:
+    """没有可交付答案时，**是"谁"没交出来**。
+
+    ★★ 这一栏原来只有 `agent_error` 一个值 —— 于是三种完全不同的结局在记账里
+    长得一模一样（实测 `fta × react-termination`，n=100）：
+
+        · 闸门说 `blocked` → 退回弃答     ← **闸门在弃权**，不是我们崩了
+        · 模型自己要求问人 / 步数用完      ← agent 弃权
+        · `TimeoutError` 之类的真异常      ← 这才是 harness 故障
+
+    前两种都是**弃权**，而本项目的规矩就是弃权必须单独计
+    （`core/decisions.py` 那条「『我不确定』不是『我判对了』，也不是『我判错了』」）。
+    混在一栏的后果是实的：那 28 次闸门弃权会被读成 28 次崩溃。
+
+    ★ 判据用**结构字段**（`escalated` / `gate`），不靠匹配 `error` 里的中文 ——
+      文案一改，匹配就静默失效。
+    """
+    if outcome.escalated:
+        return "gate_blocked" if outcome.gate == "blocked" else "no_answer"
+    return "agent_error"
+
+
+def _stop_reason(outcome: AgentOutcome, max_steps: int) -> str:
+    """这一题**为什么结束**。六类,不许合并（见 `spec.Result.stop_reason`）。
+
+    ★ 判据只能在这里算 —— `Result` 里没有 `outcome.error`,事后从事件流重建
+      会把"抛异常"读成"跑满预算",而这两件事一个该进分母一个不该。
+
+    ★★ **`escalated` 一个标志盖了三件事,这里必须按结构拆开。**
+
+      `baseline/common.py` 里三处都返回 `escalated=True`：
+
+          ① 闸门说 `blocked`、所以退回弃答            → `blocked`
+          ② 控制器要求问人（`ask`）                    → `declined`
+          ③ **步数用完了**（`for _ in range(max_steps)` 跑完）→ `exhausted`
+
+      那段代码自己的注释已经记下了这个坑（"和'步数用完了'长得一模一样"），
+      所以这里**不能**只凭 `escalated` 判 —— 那正是旧账分不出
+      "闸门拦下的 28 条"和"TimeoutError"的原因。
+
+      ⚠️ 判据用 `len(outcome.steps) >= max_steps`（**结构**，不是匹配错误文本）：
+        循环体只在 `len(steps) < max_steps` 时运行,所以 `ask` 那一支不可能
+        在步数满时触发 —— 到那时循环已经退出去返回 ③ 了。
+    """
+    if outcome.escalated and outcome.gate == "blocked":
+        return "blocked"
+    if outcome.escalated and len(outcome.steps) >= max_steps:
+        return "exhausted"
+    if outcome.escalated:
+        return "declined"
+    if outcome.error:
+        return "error"
+    if (outcome.final_answer or "").strip():
+        return "delivered"
+    return "exhausted"
+
+
+def _draft_was_correct(
+    bench: Benchmark, task: Task, trajectory: Trajectory, outcome: AgentOutcome
+) -> bool:
+    """闸门打了 `revise` 时，**改之前那一版**本来是不是对的。
+
+    ★★ 不判这一栏，`gate_false_reject` 就是错的。它想说的是"闸门把一个本来对的
+    答案打回去了"，而 `correct` 判的是**改完之后**那一版 —— 于是
+    「第一判 revise ∧ 最终正确」把两件相反的事混成一件：
+
+        草稿是坏的 → 修订救回来了   ⇒ 闸门**立功**（新字段 `gate_corrected`）
+        草稿是好的 → 修订多此一举   ⇒ 闸门**误伤**（`gate_false_reject`）
+
+    实测那 27 条按旧判据全被记成误伤，实际一条都分不出是哪一种。
+
+    ★ 只在闸门**真的做过裁决**（`revise` / `blocked`）且拿得到草稿时才判：
+      这两条路才是"闸门把一个东西打回去了"；`deliver` 的草稿就是最终答案，另算。
+    ★ 判不了就返回 `False`，**不猜** —— 没有 `check()` 又判分失败的 benchmark 上，
+      这一栏退回旧行为，几个字段都不报。
+    """
+    if not outcome.draft or outcome.gate not in ("revise", "blocked"):
+        return False
+    try:
+        checker = _make_checker(bench, task)
+        if checker is not None:
+            return bool(checker(outcome.draft))
+    except Exception:  # noqa: BLE001 —— `check()` 抛不代表判不了,见下
+        # ★★★ **回落,不是吞掉。** 实测（2026-10-02，ALFWorld）这个洞让两个字段
+        #   整个失效：ALFWorld 的 `check()` **故意抛** `NeedsTextWorld`
+        #   （成败在环境状态里,不在答案字符串里 —— 它自己的文档就这么写的）。
+        #   异常被吞 ⇒ `draft_correct` **恒为 False** ⇒
+        #       `gate_false_reject` 恒为 0（读起来像"闸门一次没错杀"）
+        #       `gate_corrected`   退化成 `revise ∧ correct`
+        #   于是**闸门在两道已经赢了的题上打回答案**这件事,
+        #   被记成了"闸门改好了 2 条" —— **误杀被记成功劳**。
+        #
+        #   ⇒ 回落去 `score()`：它的判据是**回放轨迹**，对 ALFWorld 而言
+        #     草稿和终稿动作相同 ⇒ 判分相同 ⇒ `draft_correct == correct` ⇒
+        #     那两个字段才回到它们的本义。
+        pass
+    try:
+        return bool(
+            bench.score(task, replace(trajectory, final_answer=outcome.draft)).correct
+        )
+    except Exception:  # noqa: BLE001 —— 判草稿失败不许把整轮带走
+        return False
+
+
 def _safe_score(bench: Benchmark, task: Task, trajectory: Trajectory, outcome: AgentOutcome) -> Judgment:
     """评分失败不许把整轮带走 —— 但也**不许当成对**。
 
     当成对是最坏的一种处理:它把「判分器坏了」变成「我们赢了」。
     """
     if outcome.error:
-        return Judgment(correct=False, score=0.0, detail=outcome.error, failure_class="agent_error")
+        return Judgment(correct=False, score=0.0, detail=outcome.error,
+                        failure_class=_no_answer_class(outcome))
     try:
         return bench.score(task, trajectory)
     except NotImplementedError:
@@ -387,6 +552,19 @@ def _first_divergence(bench: Benchmark, task: Task, trajectory: Trajectory) -> i
     if hook is None:
         return -1
     return int(hook(task, trajectory))
+
+
+def _decision_spec(arm: str) -> str:
+    """类型化那几臂的**判定规格版本**（`版本@指纹`）；别的臂是空串。
+
+    ★ 只有用 `TypedController` 的臂才有"问法可谈"。给 `direct` 也填一个，
+      会让"改过问法"和"这一臂没有问法"在表里长得一样。
+    """
+    if "typed" not in arm and arm != "react-termination":
+        return ""
+    from experiments.jloop.typed import DECISION_SPEC_VERSION, decision_spec_digest
+
+    return f"{DECISION_SPEC_VERSION}@{decision_spec_digest()}"
 
 
 def _prompt_hash(bench: Benchmark, arm: str) -> str:

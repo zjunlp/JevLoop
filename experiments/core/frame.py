@@ -51,7 +51,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Sequence
 
-from experiments.core.types import Step, Tool
+from experiments.core.types import Step, Tool, is_harness_pseudo_step
 
 # ═══════════════════════════════════════════════════════════
 # 词汇
@@ -112,7 +112,6 @@ class AgentCtx:
     # ★ **每步重建** —— 固定的候选会让模型去选一个已经不适用的动作（§8.4）。
     candidates: dict[str, list[str]] = field(default_factory=dict)
     # 候选被窗口截断时**必须明说**（TS 的 `MAX_FILE_OPTIONS = 20` 那条）
-    candidate_notes: dict[str, str] = field(default_factory=dict)
     #: ★★★ **还剩哪些动作没做** —— 工具名的列表，由调用方每步重算。
     #:
     #: `needsTool` 问的是「这个任务还有没有没做的动作?」，
@@ -160,8 +159,62 @@ class AgentCtx:
     #:   而整段 `history` 会把回答（`draft`,闸门的判定对象）挤出帧。
     evidence: str = ""
 
+    #: ★★★ **上一次交付被打回的理由** —— 只在**改道**之后的那个动作步上有值。
+    #:
+    #: 为什么需要它：交付闸门判出"任务没做完"时，它**知道缺什么**（它读了草稿和
+    #: 任务要求），而改道把控制流送回动作路径时，那条信息原来**被扔掉了** ——
+    #: 于是 `pickTool` 看到的是和之前**一模一样**的帧，它不知道刚刚有一份交付
+    #: 被打回、也不知道缺的是哪一块。**那是盲改道。**
+    #:
+    #: ★ 和 `done_tools` / `evidence` 同一个形状：**判一件事，就得把这件事的材料
+    #:   放进帧**。这里要判的是"选哪个动作能补上缺的那一块"，材料就是"缺什么"。
+    #:
+    #: ⚠️ 只在改道之后的**那一步**有效。动作执行完、下一次 `decide()` 重建 ctx 时
+    #:   它就没了 —— 因为那时已经有了新证据，旧的驳回理由不再是当前状态。
+    redirect_note: str = ""
+    #: ★★★ **索引化的候选表** —— 照 `jev-ultrafast::action_space`:
+    #: "One index per observed element"。**表进状态,题里只引用索引。**
+    #:
+    #: 我们原来是"从一串命令里挑一个字符串",于是每个候选的说明都要在题里
+    #: 重写一遍,而且**候选自己没有状态**。表只讲一次。
+    action_table: str = ""
+    #: ★★★ **环境的动作语义**（见 `Tool.action_rules`）—— 进状态,只讲一次,
+    #: 而不是在 N 道题里各重复一遍（那是 N 倍预算,而合并的判据是"共享一份状态"）。
+    action_rules: str = ""
+
     def records(self) -> list[StepRecord]:
         return list(self.history)
+
+
+def render_tool_input(arguments: Any, content: Any = "") -> str:
+    """一次工具调用的输入，**给判定模型看的那个形状**。
+
+    ★★★ 原来这里是 `str(s.action.arguments)` —— 也就是**把 dict 原样 str 出来**。
+    实测（2026-10-10，把完整请求体打出来才看见）：
+
+        already_done: {'command': 'open microwave 1'}) -> You open the microwave 1. …
+
+    三处后果，一处比一处严重：
+
+      ① **判官读的是 Python 语法**，不是命令。`already_done` 那一行被
+         `{'command': …}` 这种字面量吃掉预算 —— 实测 `history: 400→300`，
+         也就是**同样的步数会更早被截掉**。
+      ② `gradeRisk` 的 `target`（`FrameField("last_input", 2000, "target")`）
+         同样是这个字面量 —— 风险判定看的是 `{'command': 'rm -rf /'}`。
+      ③ ★★★ **`candidate_already_done` 这条检查对 `pickInput` 静默失效**：
+         它拿 `r.input`（字典串）去和 `question.options`（命令原文）求交集，
+         **永远为空**。于是一条本该报警的检查变成了死信 ——
+         而"没人看的告警"正是它当初要防的东西。
+
+    ★ 判据：**单参数用它的值**（那才是"这一步做了什么"），
+      多参数用 `k=v` 对。枚举候选那一侧给的也是裸值（`options` 里就是
+      `go to cabinet 1`），两边形状必须一致，交集才有意义。
+    """
+    if arguments:
+        if len(arguments) == 1:
+            return str(next(iter(arguments.values())))
+        return ", ".join(f"{k}={v}" for k, v in sorted(arguments.items()))
+    return str(content or "")
 
 
 def ctx_from_steps(task: str, steps: Sequence[Step], *, draft: str = "",
@@ -172,10 +225,23 @@ def ctx_from_steps(task: str, steps: Sequence[Step], *, draft: str = "",
     （`FrameField.budget`）,不是这里说了算。在两处截会得到两套口径,
     而 `canDeliver` 那次事故就是「截了但没人知道截了多少」。
     """
+    # ★★★ **宿主自己的伪步骤不进帧**（2026-10-04，Ternary 实测）。
+    #
+    #   `run_loop` 解析不出动作时会塞一步 `__parse_error__`（好让下一轮 prompt
+    #   带上纠正提示）。它**不是环境观测**,而 `records()` 返回整个历史 ⇒ 它进了
+    #   `evidence` ⇒ 判官读到"Could not parse an action" ⇒ 模型如实报告
+    #   "文档读取过程中有解析错误" ⇒ **闸门判它 `overclaim`**。
+    #   而 `read_doc` 其实**读成功了** —— 那个解析错误是我们自己的。
+    #
+    #   ⇒ 一条**我们工具链的失败**,经模型的嘴,变成模型的一次编造,再被我们的闸门罚。
+    #   ★ 它**仍然留在 `steps` 里、仍然进事件流** —— 那是给下一轮 prompt 用的纠正提示,
+    #     不是给判官的证据。两件事不该混。
     history = tuple(
         StepRecord(step=s.index, tool=s.action.name or s.action.kind,
-                   input=str(s.action.arguments or s.action.content), result=s.observation)
+                   input=render_tool_input(s.action.arguments, s.action.content),
+                   result=s.observation)
         for s in steps
+        if not is_harness_pseudo_step(s)
     )
     last = history[-1] if history else None
     return AgentCtx(
@@ -404,25 +470,28 @@ NODE_FRAMES: dict[str, FrameSpec] = {
         node="needsTool",
         fields=(
             # 判的就是「这个任务还有没有没做的动作」—— 没有 task 就没有对象可判
-            FrameField("task", 400, "task", required=True),
+            FrameField("task", 2000, "task", required=True),
             FrameField("last_tool", 60, "last_tool"),
-            FrameField("last_result", 300, "last_result"),
+            FrameField("last_result", 4000, "last_result"),
             # ★ 是一份**清单**,不是一个计数 —— `steps_done: 2` 那种写法分不出
             #   「读过了」和「写过了」（实测：写任务里文件从没被写出来）
-            FrameField("history", 300, "already_done", clip="list"),
+            FrameField("history", 4000, "already_done", clip="list"),
             # ★ 「调过的工具能做什么」—— 判「任务被满足了吗」的依据。
             #   名字 + 历史只说明**调过什么**,说明不了**覆没覆盖**。
-            FrameField("done_tools", 400, "done_tools"),
+            FrameField("done_tools", 1500, "done_tools"),
+            # ★★ **改道时才有值**：上一次交付被打回的理由。判"还有没有没做的动作"
+            #   时，这是最直接的依据 —— 闸门刚刚说了"没做完"。空着 = 正常正向路径。
+            FrameField("redirect_note", 1500, "redirect_note"),
         ),
         excluded=(("draft", "还没生成,这时没有 draft"),),
     ),
     "pickTool": FrameSpec(
         node="pickTool",
         fields=(
-            FrameField("task", 400, "task", required=True),
+            FrameField("task", 2000, "task", required=True),
             # ⚠️ **不是** required:第 0 步本来就没有上一步的结果。
             #    标成 required 会让这条不变量每一步都响,然后被无视。
-            FrameField("last_result", 300, "last_result"),
+            FrameField("last_result", 4000, "last_result"),
             # ★★★ **「还剩哪些动作」** —— 实测（2026-09-23,101 个 pickTool 判定点,
             #   逐条重放同一批请求、只换帧）:
             #
@@ -443,7 +512,10 @@ NODE_FRAMES: dict[str, FrameSpec] = {
             #     `escalate` 而不是收工),而「两个都加」翻的那条是**坏的**
             #     （`modify_columns` → `create_backup`）。
             #     **边际大 + 零答案变化**才是能安全落地的那个。
-            FrameField("remaining", 200, "actions_left", clip="list"),
+            FrameField("remaining", 2000, "actions_left", clip="list"),
+            # ★★ **改道时才有值。** 正常正向路径上它是空的（`redirect_note` 为空），
+            #   所以这一条**不改变**上面那张表量出来的结论 —— 它只在改道那一步奏效。
+            FrameField("redirect_note", 1500, "redirect_note"),
         ),
         # 候选在问题那一侧（`choice` 的选项），不占帧的字段 —— 见 §8.4「每步重建」
         excluded=(
@@ -456,10 +528,47 @@ NODE_FRAMES: dict[str, FrameSpec] = {
     ),
     "pickInput": FrameSpec(
         node="pickInput",
-        fields=(FrameField("task", 400, "task", required=True),),
+        fields=(
+            FrameField("task", 2000, "task", required=True),
+            # ★★★ **一张编号的候选表** —— 状态里放一次,题里只引用 `[i]`。
+            #   照 `jev-ultrafast::action_space`（"dynamic, indexed action space"）。
+            #   预算给得大:ALFWorld 一步 ~28 条命令,每条还要带一句说明。
+            FrameField("action_table", 6000, "actions_on_the_table", clip="list"),
+            # ★★★ **这个世界的动作语义** —— 环境语义,不是任务脚本（见 `Tool.action_rules`）。
+            #   `jev-ultrafast` 把它放在 `instructions` 里;我们放在**状态**里,
+            #   因为 N 道候选题共享同一份帧 —— 放题里就是 N 倍预算。
+            FrameField("action_rules", 2500, "how_this_world_works"),
+            # ★★★ **必须带上"已经做过什么"。** 实测（2026-10-02，ALFWorld）：
+            #   这一格原来是空的，于是 `pickInput` 被问"下一步做什么"时
+            #   **不知道自己做过什么、上一步返回了什么**。后果不是判得差一点，
+            #   是**死循环**：Jev 连续 5+ 次选 `examine cabinet 1`
+            #   （一个只返回信息、不改变状态的命令），直到置信度抖到 0.5 以下
+            #   连撞 3 次被拒，整道题以 `declined` 结束。20 题里 13 题这样死掉。
+            #   `examine safe 1` 单轮跑出现 56 次、`look` 60 次 —— 都是同一形状。
+            #
+            #   旧注释写的排除理由是「候选由 `candidates` 每步算出来,历史是另外的事」——
+            #   那句话**把两件事混了**：候选列表说的是**什么可能**，
+            #   `history` 说的是**什么试过了**。动态候选越多（ALFWorld 每步 ~28 条），
+            #   后者越不可省。★ 这和 §8.2 那条「判定贴在门限边上，因为帧里证据太薄」
+            #   是同一个病，只是这次它表现为循环而不是抖动。
+            FrameField("history", 4000, "already_done", clip="list"),
+            # ★★★ **`last_result` 2026-10-04 补进来 —— 它是唯一一个排除它的节点。**
+            #
+            #   原来的排除理由是「判的是**这一调**的目标,不是上一步返回了什么」。
+            #   那句话**反了**:不知道刚刚发生了什么,就选不出下一步该做什么。
+            #   实测代价(TERNARY,2026-10-04):41 个候选里 40 个是 `d001…d040`,
+            #   判官答"一个都不合适" **20/20**(置信度 0.62)—— **它是对的**,
+            #   因为帧里没有能区分那 40 个 id 的任何东西。
+            #   而 `needsTool` / `isDone` 一直都有 `last_result`,只有这个节点漏了。
+            FrameField("last_result", 4000, "last_result"),
+            # ★ 改道时补上"缺什么"：ALFWorld 那一类里**同一个动词换个宾语**就是另一步
+            #   （`go to X` → `go to Y`），所以参数这一步同样需要知道为什么被打回。
+            FrameField("redirect_note", 1500, "redirect_note"),
+        ),
         excluded=(
-            ("last_result", "判的是**这一调**的目标,不是上一步返回了什么"),
-            ("history", "候选由 `candidates` 每步算出来,历史是另外的事"),
+            # ★ `last_result` **2026-10-04 从这里搬到了 `fields`**（见上面的说明）。
+            #   排除它的理由写反了:不知道刚刚发生了什么,就选不出下一步做什么。
+            ("draft", "还没到生成那一步"),
         ),
     ),
     "gradeRisk": FrameSpec(
@@ -472,8 +581,8 @@ NODE_FRAMES: dict[str, FrameSpec] = {
             #    的调用**本来就没有 target**,它是**正常状态**,不是缺陷。
             #    标成 required 会让每一步无参调用都撞一次 fatal ——
             #    而那正是 §8.15 那条「天天误报和没有这条检查等价」的形状。
-            FrameField("last_input", 200, "target"),
-            FrameField("task", 300, "task", required=True),
+            FrameField("last_input", 2000, "target"),
+            FrameField("task", 2000, "task", required=True),
         ),
         excluded=(("last_result", "判的是**调用之前**的风险,这时还没有结果"),),
     ),
@@ -481,9 +590,9 @@ NODE_FRAMES: dict[str, FrameSpec] = {
         node="stepOk",
         fields=(
             FrameField("last_tool", 60, "tool"),
-            FrameField("last_input", EVIDENCE_INPUT_CHARS, "input"),
+            FrameField("last_input", 2000, "input"),
             # ★ 判的就是「这一步成没成」—— 唯一没有它就没法判的字段
-            FrameField("last_result", 500, "output", required=True),
+            FrameField("last_result", 8000, "output", required=True),
         ),
         # ★★★ **故意没有 `task`** —— 这是修出来的:
         #   以前帧带着 `task`、问题写着 "for the task"、判据写着 "what the task needed",
@@ -499,9 +608,9 @@ NODE_FRAMES: dict[str, FrameSpec] = {
     "isDone": FrameSpec(
         node="isDone",
         fields=(
-            FrameField("task", 400, "task", required=True),
+            FrameField("task", 2000, "task", required=True),
             # ★ 是清单不是计数 —— 和 `needsTool` 同一条理由
-            FrameField("history", 300, "already_done", clip="list"),
+            FrameField("history", 4000, "already_done", clip="list"),
         ),
         excluded=(
             ("last_result", "判的是「任务做完没有」,不是「上一步返回了什么」"),
@@ -514,13 +623,13 @@ NODE_FRAMES: dict[str, FrameSpec] = {
     "canDeliver": FrameSpec(
         node="canDeliver",
         fields=(
-            FrameField("task", 400, "task", required=True),
+            FrameField("task", 2000, "task", required=True),
             # ★ 900,不是 100 —— 100 那次判定**正确地**判出 `unsupported=0.67`,
             #   是帧喂少了。这一格的预算直接决定闸门准不准。
             #   ★ 而且它是 required:**没有 draft 就没有可交付的东西**。
             #   这次事故的形状正是「有 draft 但被截短了」—— 那走 `truncations`,
             #   不在这里;这里是「压根没有」。
-            FrameField("draft", 900, "answer", required=True),
+            FrameField("draft", 8000, "answer", required=True),
             # ★★★ **工具证据** —— 见 `AgentCtx.evidence`。
             #
             #   这是 2026-09-23 查出来的「静默缺席」的修法:闸门判的是
@@ -532,7 +641,7 @@ NODE_FRAMES: dict[str, FrameSpec] = {
             #   ★ 预算 600:证据是**被核对的对象**,而 `draft` 是被判的对象 ——
             #     两者都要放得下。实测 100 字符那次的教训是「喂少了闸门会正确地误报」,
             #     所以这一格宁大勿小(`MAX_REQUEST_CHARS` 兜底)。
-            FrameField("evidence", 600, "evidence"),
+            FrameField("evidence", 20000, "evidence"),
         ),
         # ⚠️ `history` 仍然排除,但**理由变了**。原来那条写的是「历史会把回答挤掉」;
         #    现在证据是单独一栏、有自己的预算,所以真正的理由换成了:
@@ -600,16 +709,85 @@ NODE_FRAMES: dict[str, FrameSpec] = {
 #:   **28 到 77 之间没有量过** —— 要再往上提,先补那个测量。
 MAX_OPTIONS = 32
 
-#: 一次请求（帧 + 问题 + 选项）的字符上限。判定模型上下文只有 512/1024 token。
+#: 一次请求（帧 + 问题 + 选项）的字符上限。
+#:
+#: ★★★ **实测改过一次（2026-10-04），幅度 8 倍 —— 而旧值建立在一句没有出处的断言上。**
+#:
+#:   旧注释写的是「判定模型上下文只有 **512/1024 token**」,于是我们把整条请求卡在
+#:   **4,000 字符（≈1,000 token）**。往 `api.typesafe.ai/v1/systemone` 实测:
+#:
+#:   | state 字符 | ≈token | 中位延迟 | 结果 |
+#:   |---|---|---|---|
+#:   | 4,000 | 1,000 | 995ms | OK |
+#:   | 64,000 | 16,000 | 1,395ms | OK |
+#:   | **128,000** | **32,000** | **1,942ms** | **OK** |
+#:   | 256,000 | 64,000 | — | **400 Bad Request** |
+#:
+#:   ⇒ 窗口是 **32K token**,而那个 512/1024 的说法**错了 32 倍**。
+#:     μ 的源码里写着 *"The judge has a 32K window"* —— 和实测一致。
+#:     用满窗口的代价只有 **+1 秒**,而我们当时只用了窗口的 **3%**。
+#:
+#: ★ 取 32,000 字符（≈8K token，窗口的 25%）—— **不是取满**:
+#:   满载的收益没量过,而延迟与注意力稀释是有代价的。
+#:   要往上提,先补那个测量(和 `MAX_OPTIONS` 那条同一个规矩)。
 #: ★ **这是整个请求的预算,不是帧的预算** —— R5 的病就是只算了帧那一半。
-MAX_REQUEST_CHARS = 4000
+MAX_REQUEST_CHARS = 32000
 
-#: 一次请求**最多带几道题**。★ 合并省的是**往返次数**,不是容量 ——
-#: 这个数只用来挡「把七个节点一股脑塞进一次请求」那种写法:
-#: 七道题的问题与判据加起来约 1.5–2k 字符,和帧抢的是同一段上下文
-#: （实测 77 个候选时选中概率掉到 0.425,同一条道理）。
-#: 所以合并的判据是**证据形状相同、彼此独立**,不是「能塞多少塞多少」。
-MAX_QUESTIONS = 3
+#: 一次请求**最多带几道题**。
+#:
+#: ★★★ **实测改过一次（2026-10-04），3 → 96 —— 而旧值挡错了东西。**
+#:
+#:   旧理由写的是「挡『把七个节点一股脑塞进一次请求』那种写法」。而那个意图
+#:   **现在由调用结构保证**（每个调用点只传它自己那几道题），不靠这个计数。
+#:   于是这个数实际挡住的是**它本意不挡的东西**:`pickInput` 改成
+#:   **一候选一题**（ALFWorld 一步 ~28 条命令 ⇒ 28 道题）之后，
+#:   它会把每一步都判成 fatal。
+#:
+#:   而"一道请求带很多题"是正常的:`μ` 的 `tool.admission` 一次问 16 个块,
+#:   `jev-ultrafast` 一次问 1 个操作 + 3 个目标 head。
+#:   ★ 窗口实测是 **32K token ≈ 128K 字符**（见 `MAX_REQUEST_CHARS`），
+#:     96 道短题远在窗口之内。
+#:
+#:   ⚠️ 真正的预算守卫是下面那个 `MAX_REQUEST_CHARS`（帧 + 问题 + 选项的总字符）。
+#:     这个数只防"一个手滑写出无限道题"。
+MAX_QUESTIONS = 96
+
+
+@dataclass(frozen=True)
+class Pointer:
+    """★★★ **一个裁决必须能指向的东西，以及"指得对不对"的校验。**
+
+    这是从 `ternary-judge` 上实测出来的那条原理的通用化
+    （见 `docs/UNDECIDED-DIAGNOSIS.md`）：
+
+        一个概率**没有办法被证明是错的**。"unsupported = 0.86" 怎么反驳？
+        而一个**指认**可以："第 3 步的工具输出里写着这个数"——要么写了，要么没写。
+
+    所以要求不是"判得更谨慎"，而是**换一种输出**：裁决要带一个指向某份产物的
+    指针，而校验这个指针的必须是**判定模型之外的、确定性的**代码。
+
+    ★ 后半句是重点。**如果校验也交给模型，那只是又加了一个意见** ——
+      而"解耦但只读文本的判官和不判一样"这件事我们已经量过了
+      （`docs/MEASUREMENT-gate-equivalence.md`）。
+
+    ★★ **它不是什么**：不是"更好的 prompt"，也不是"更多的证据"。它改变的是
+      裁决的**可证伪性**。模型说"第 3 步证明了它"，代码就去第 3 步的输出里找。
+
+    ⚠️ **强度随证据通道的结构而变。** 有可枚举、可检索的产物时它能做实事
+      （文档 id + 文本、步骤 + 观测）；只有自由文本时它退化成"有没有引"。
+      这个分档必须跟着数字一起报 —— 和"后置条件分档"那张表是同一件事。
+    """
+
+    #: 问判定模型的话。措辞要贴着"指哪个产物"，不是"你确定吗"。
+    ask: str
+    #: ★ **封闭的可指认集合。** 判定模型只能从这里挑 ——
+    #:   这正是判定模型的本性（穷尽枚举），也是它比生成式判官更可审计的地方。
+    options: tuple[str, ...]
+    #: ★★ **校验器：跑在模型之外。** 输入是被指认的选项，返回它是否真的成立。
+    #:   `False` ⇒ 那条**肯定性**裁决不成立（见 `Request.check` 那条注释）。
+    validate: Callable[[str], bool]
+    #: 「指不出来」那一项。选它 = 承认没有可指的东西 ⇒ 裁决必须降级。
+    none_option: str = ""
 
 
 @dataclass(frozen=True)
@@ -651,6 +829,39 @@ class Question:
     #: 是模型能看到的全部,写错了没有别的东西兜得住。
     #: 而且 `noul` 的判据「显著提升判定质量」,不给是白丢的。
     criteria: dict[str, str] = field(default_factory=dict)
+    #: ★★★ **"这些选项里一个都不合适"是哪个选项。**
+    #:
+    #: 抄自 μ（`packages/kyrn-judge/src/policy.ts`）的原话：
+    #:
+    #:   > Option names that mean "nothing fits". A choice question without one is
+    #:   > **forced to pick a real option even for off-topic input, and does so at
+    #:   > full confidence**, so specs must include one unless the option set is
+    #:   > truly closed.
+    #:
+    #:   而它的 `defineDecision` **没有退出口就直接抛错**，注册不上。
+    #:
+    #: ★★ 我们违反了这条，而且代价已经被量到了：`pickInput` 是 **28 选 1 的强制
+    #:   选择**（ALFWorld 每步的 `admissible_commands`），判官**没法说"这些都不是
+    #:   下一步该做的"**。于是：
+    #:
+    #:     · `top` 常年 0.44–0.55（概率质量摊在 28 个都合理的选项上）
+    #:     · 0.5 那道门限**恰好落在众数上** —— 那个门限是畸形问题的变通办法
+    #:     · 一轮里 `examine cabinet 1` 被挑了 56 次 —— 它没有"这不是进展"可答
+    #:     · 仓库自己记的「77 个候选 → top 0.425」是同一个病，被记成了后端性质
+    #:
+    #:   ⇒ 没有退出口的 choice 问题**不是一个好问题**，而"判得不够果断"只是它的症状。
+    #:
+    #: ★ 构造规则：`kind == "choice"` 且有选项时**必须**给退出口，
+    #:   否则 `_choice_question` 当场抛错（照 μ 的 `defineDecision`）。
+    #:   确实封闭的选项集（比如工具名 + `DONE`）才允许显式豁免。
+    escape: str = ""
+    #: ★ 这个 choice 的选项集**真的封闭**，不需要退出口（少数情况，要写理由）。
+    closed_choices: bool = False
+    #: ★★★ **这个裁决必须能指向的东西**（`None` = 不要求举证）。
+    #:
+    #: 由**调用方**构造，而且校验器闭包在构造时就把证据绑好了 ——
+    #: 于是 `_ask_many` 不需要知道证据长什么样，只负责"问、校验、降级"。
+    pointer: "Pointer | None" = None
     #: **答得果不果断**的门限 —— 逐字对应 TS 的 `topGte`。
     #:
     #: ⚠️ `noul` 上判的是 `max(p, 1-p)`,**不是** `p`:一个果断的「否」也算果断。
@@ -866,14 +1077,56 @@ class Request:
                 fatal=False,
             ))
 
+        # R6:**这些选项彼此能区分吗?**
+        #
+        # ★★★ 这条是 2026-10-04 实测补的,而且它**本该在构造时就抓住**那个问题:
+        #   TERNARY 的 `pickInput` 是 40 个 `d001…d040`,而判据来自一张
+        #   **ALFWorld 的动词表** —— 40 个候选拿到**同一句话**。
+        #   判官答"一个都不合适" **21/21**(置信度 0.62)。
+        #   **它不是不会挑,是没有可挑的依据。**
+        #
+        # ⇒ 判据:N 个选项(去掉退出口)如果**说明全都一样**,这道题就是
+        #   **无法回答的**。不该拦住(拦住整条臂动不了),但**必须报出来** ——
+        #   否则它只会表现为"判官老逃/乱挑",然后被归咎于判官质量。
+        if (question.kind == "choice" and len(question.criteria) >= 2
+                and len(set(question.criteria.values())) == 1):
+            only = next(iter(set(question.criteria.values())))
+            out.append(Violation(
+                code="indistinguishable_options",
+                detail=(f"{question.node}: {len(question.criteria)} 个选项的说明**全是同一句**"
+                        f"（{only[:60]!r}）⇒ 这道题**没有可判别的依据**,"
+                        f"判官只能选退出口或乱挑。"
+                        f"给每个选项一句真实的身份(`Tool.describe_candidate`),"
+                        f"或者把它改成一候选一题"),
+                fatal=False,
+            ))
+
         # R2:候选里有没有**已经做过的动作**
+        #
+        # ★★ 这一条的判据**改过一次**（2026-10-02），因为它在 ALFWorld 上
+        #    **每步都误报**：原来只比工具名（`{r.tool} ∩ options`），
+        #    而 ALFWorld 只有一个工具 `act`，调过一次之后 `act` 永远在候选里
+        #    ⇒ 忠实跑一轮报 187 次。**一条永远为真的告警等于没有告警**
+        #    （R2 的病本来就是「没人看这个不变量」，而误报正是没人看的原因）。
+        #
+        #   现在**两个来源一起比**，因为光看 `kind` 分不开这两种题
+        #   （`pickTool` 和 `pickInput` 都是 `choice`）：
+        #     · 参数值（`pickInput` 的候选）⇒ 比"这个动作做过没有"。
+        #       这才是 §8.4 那句话真正要防的：同一个动作反复做而局面没变。
+        #     · 工具名（`pickTool` 的候选）⇒ 比工具名，但**带动态候选的工具
+        #       不算重复** —— 它的动作空间在参数里，换个参数就是另一步；
+        #       按名字去重会让 ALFWorld 的循环在第一步就收尾（`candidates()` 记了这件事）。
         if ctx is not None and question.options:
-            done = {r.tool for r in ctx.records()}
-            repeated = sorted(done & set(question.options))
+            records = ctx.records()
+            live = set(ctx.candidates)
+            seen = {r.input for r in records if r.input}
+            seen |= {r.tool for r in records if r.tool and r.tool not in live}
+            repeated = sorted(seen & set(question.options))
             if repeated:
+                what = "动作" if question.node == "pickInput" else "工具"
                 out.append(Violation(
                     code="candidate_already_done",
-                    detail=(f"{question.node}: 候选里有做过的动作 {repeated}。"
+                    detail=(f"{question.node}: 候选里有做过的{what} {repeated}。"
                             f"§8.4 要求**每步重建**、把做过的删掉 —— "
                             f"固定候选会让模型去选一个已经不适用的动作（实测：写完文件后 "
                             f"`write_file` 还在候选里,模型会再选它）"),
@@ -893,6 +1146,76 @@ def frame_for(node: str) -> FrameSpec:
     if node not in NODE_FRAMES:
         raise KeyError(f"没有 {node!r} 的帧声明；有 {sorted(NODE_FRAMES)}")
     return NODE_FRAMES[node]
+
+
+# ═══════════════════════════════════════════════════════════
+# ★★★ 规范状态键 —— "同一个状态"到底指什么
+# ═══════════════════════════════════════════════════════════
+#
+# 为什么要它:`request_digest` **不是**状态键。它覆盖帧的**渲染文本**,而渲染文本里
+# 混着跟判定无关的东西 —— 截断提示(`(truncated — k: was→now)`)、字段顺序、
+# 列表截断的位置。两个**逻辑上一样**的状态会因此得到两个指纹,于是
+# 「状态重复率」被**低估**,而「有效控制熵」的分母偏小。
+#
+# ★ 实测(2026-10-04):用 `request_digest` 算,20 题那批的重复率是 51%;
+#   而那个数**没法从旧日志重算一遍验证** —— 判定行里只有指纹,没有字段值。
+#   所以这个函数既服务**以后**(记进账),也说明了**以前**的数只能叫"请求层面"的。
+#
+# ★★ 键从哪来:**帧的字段声明**。哪些证据是本质的,不是我们凭空列的 ——
+#   它就是 `NODE_FRAMES[node].fields`。`FrameField.name` 是 `AgentCtx` 的属性名,
+#   所以"这个判定的状态"= 那些属性的值。**帧声明改了,键跟着改,不会漂。**
+#
+# ⚠️ 两个刻意的选择:
+#   · **用未截断的原值**,不是渲染出来的文本。规则要读的是状态,不是被
+#     `budget` 切过的那一段。而"截断把多少不同的状态压成了同一个问题"
+#     正是两个键的重复率之差能测出来的东西 —— 那是个有意义的量,不该被抹掉。
+#   · **列表排序**。`already_done` 的集合顺序是拼装顺序,不是语义。
+
+def _norm_state(v: object) -> str:
+    """把一份证据归一成一个可比的字符串。**只去掉显然无关的东西。**"""
+    if v is None:
+        return "∅"
+    if isinstance(v, str):
+        # 折叠空白/换行 —— 同一个观测在不同渲染下空白不同,那是排版不是内容
+        return " ".join(v.split())
+    if isinstance(v, (list, tuple)):
+        return "[" + ",".join(sorted(_norm_state(x) for x in v)) + "]"
+    if isinstance(v, dict):
+        return "{" + ",".join(f"{k}={_norm_state(val)}"
+                              for k, val in sorted(v.items(), key=lambda kv: str(kv[0]))) + "}"
+    return str(v)
+
+
+def canonical_state(ctx: AgentCtx, question: object) -> str:
+    """**这个判定在什么状态下被问的** —— 归一后取指纹。**三样都要在。**
+
+        ① **声明的证据** —— 帧声明里那几个字段的值（未截断）
+        ② **题的身份** —— 哪道题、什么形状
+        ③ **选项集**（`choice` 题）—— ★★ 候选集在**题**里,**不在帧里**
+
+    ★★★ ③ 是实测逼出来的（2026-10-04）。第一版只用了 ①:
+      于是 `pickInput` 在规范键下算出 **57.3% 的翻转率** ——
+      而它的题就是"从这些候选里挑一个",候选集却没进键。
+      两个不同的候选集下给出不同的答案（**都对**）被算成了翻转。
+      ⇒ 那是**键的缺陷,不是判官的不稳定**。
+
+    ★ `Request.digest()` 是覆盖选项的（它当初就是为这件事建的:
+      "换掉候选集而帧指纹一动不动"）。所以这里的键必须也覆盖 ——
+      否则同一件事有两个口径,而"哪个口径算出的数"会变成说不清的事。
+    """
+    qname = str(getattr(question, "frame", "") or getattr(question, "node", ""))
+    spec = frame_for(qname)
+    evidence = "|".join(f"{f.name}={_norm_state(getattr(ctx, f.name, None))}"
+                        for f in spec.fields)
+    options = getattr(question, "options", None) or ()
+    identity = "|".join((
+        str(getattr(question, "node", "")),
+        str(getattr(question, "kind", "")),
+        _norm_state(list(options)),
+        _norm_state(getattr(question, "criteria", None)),
+    ))
+    blob = f"{evidence}||{identity}"
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
 def candidate_provider(tool: Tool) -> Callable[[AgentCtx], list[str]] | None:
@@ -920,7 +1243,8 @@ def candidate_provider(tool: Tool) -> Callable[[AgentCtx], list[str]] | None:
 
 
 __all__ = [
-    "AgentCtx", "StepRecord", "Frame", "FrameField", "FrameSpec",
+    "AgentCtx", "StepRecord", "Frame", "FrameField", "FrameSpec", "Pointer",
+    "render_tool_input",
     "Question", "Request", "Violation", "MAX_OPTIONS", "MAX_REQUEST_CHARS",
     "MAX_QUESTIONS",
     "NODE_FRAMES", "MAX_LISTED_CANDIDATES", "EVIDENCE_INPUT_CHARS",

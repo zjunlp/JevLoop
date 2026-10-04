@@ -136,14 +136,14 @@ def check_arm_names() -> list[str]:
 def check_downloads() -> list[str]:
     """④ `dataset/DOWNLOADS.md` 要覆盖每个注册的数据集。
 
-    ★ 它是由各 loader 的 `downloads()` **生成**的（`scripts/datasets.py --write`）,
+    ★ 它是由各 loader 的 `downloads()` **生成**的（`scripts/dataset_catalog.py --write`）,
       所以漏了只可能是「加了 loader 忘了重新生成」。
     **数据集不进仓库,下载方式就得在仓库里 —— 这是它唯一的入口。**
     """
     problems: list[str] = []
     doc = EXPERIMENTS / "dataset" / "DOWNLOADS.md"
     if not doc.is_file():
-        return [f"{doc.relative_to(EXPERIMENTS)} 不存在 —— 跑 scripts/datasets.py --write"]
+        return [f"{doc.relative_to(EXPERIMENTS)} 不存在 —— 跑 scripts/dataset_catalog.py --write"]
     text = doc.read_text(encoding="utf-8")
     for name, factory in sorted(BENCHMARK_FACTORIES.items()):
         # ★ **只要求声明了下载的那些。** `toy` 是**合成的**（`CAPITALS` 写死在代码里）,

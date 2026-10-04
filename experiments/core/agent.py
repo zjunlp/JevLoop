@@ -25,7 +25,7 @@ import json
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, Sequence
 
 from experiments.core.events import (
     AuditEvent,
@@ -40,7 +40,7 @@ from experiments.core.events import (
     hash_text,
     now_iso,
 )
-from experiments.core.models import Message, ModelClient, ModelReply
+from experiments.core.models import Message, ModelClient, ModelReply, Thinking
 from experiments.core.spec import DecisionRecord
 from experiments.core.tools import ToolExecutor
 from experiments.core.types import Action, Step, Task, Tool, Trajectory
@@ -58,6 +58,9 @@ class AgentOutcome:
     #: ★ 记**第一次**而不是最后一次：修订之后再判的那个数已经是被闸门影响过的结果，
     #:   用它算"闸门错没错"是循环论证。
     gate: str = ""
+    #: ★ **闸门打了 `revise` 时，改之前那一版原文**（见 `Decision.draft`）。
+    #: 没有它，`gate_false_reject` 分不出"闸门立功"和"闸门误伤"。
+    draft: str = ""
 
 
 class Agent(Protocol):
@@ -97,6 +100,9 @@ class Session:
         temperature: float,
         max_tokens: int | None,
         dump_requests: Path | None = None,
+        #: ★ 推理档位（`None` = **不发这个字段**,用服务端的默认）。
+        #: 见 `call_model` 里那段：这一格空着的时候，服务端的 `high` 永远生效。
+        thinking: "Thinking | None" = None,
     ) -> None:
         # ★ 判定请求的**正文**往哪落（`None` = 不落）。
         #
@@ -114,6 +120,7 @@ class Session:
         self.max_steps = max_steps
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.thinking = thinking
 
         # ★★ **一条事件流,不是三份平行列表。**
         #
@@ -142,6 +149,16 @@ class Session:
         self._batch_request_ms: float = 0.0
         self._batch_requests: int = 0
         self._batch_decisions: list[DecisionRecord] = []
+        # ★★ 这一批**是谁答的**（见 `DecisionBatchEvent.provider` 那段）。
+        #   判定后端是降级链，正常降级以前在日志上不留痕 —— 于是"我们跑的是真 Jev"
+        #   变成一个没有证据的说法。这三项就是那个证据。
+        self._batch_provider: str = ""
+        self._batch_degraded: bool = False
+        self._batch_warnings: list[str] = []
+        #: 整轮累计的降级次数 —— 跑完要**大声报出来**，不能只在 event 里躺着。
+        self.decider_degradations: int = 0
+        #: 实际答过话的判定后端（去重、保序）—— meta 里要记的是这个，不是硬编码的 "none"。
+        self.decider_providers: list[str] = []
         # 工具执行器把每次调用报回来 —— 见 tools.ToolExecutor.on_call
         self.executor.on_call = self._on_tool_call
 
@@ -164,7 +181,16 @@ class Session:
         working_start = self.clock.elapsed()
         started = now_iso()
         t0 = time.perf_counter()
-        reply = self.model.chat(messages, max_tokens=self.max_tokens, temperature=self.temperature)
+        reply = self.model.chat(messages, max_tokens=self.max_tokens,
+                                temperature=self.temperature,
+                                # ★★ **推理档位要传下去。**
+                                #   实测（2026-10-01，ALFWorld × `deepseek-flash`）：
+                                #   这一格原来是空的 ⇒ 服务端默认 `high` 永远生效 ⇒
+                                #   单次调用吐出 **18,384 个推理 token**（中位 598，
+                                #   但 11% 的调用超过 3000），6 题跑了 11 分钟还没写完。
+                                #   `Thinking` 这个类型在 `core/models.py` 里一直躺着，
+                                #   而**没有任何一处能到达它** —— 又一个"配了没生效"。
+                                thinking=self.thinking)
         elapsed = (time.perf_counter() - t0) * 1000
         event = ModelCallEvent(
             run_id=self.run_id,
@@ -250,12 +276,19 @@ class Session:
         request_digest: str = "",
         request_text: str = "",
         note: str = "",
+        source: str = "judge",
+        fallback: str = "",
+        state_key: str = "",
     ) -> None:
         """★ `confidence` 和 `correct` **记在同一行**。RQ2 全靠这一对。
 
         `frame_digest` 和 `note` 也要一起进 —— 见 `spec.DecisionRecord`:
         帧的指纹让「同一个方法」这句话可核对（§8.14）,
         而违规只写在内存里**不算有人接收**,进了事件流才算（第 10 轮 R2/R5）。
+
+        ★★ `source` = **这一次控制是谁做的**（`spec.DECISION_SOURCES`）。
+        默认 `"judge"` 是**故意留的**：忘了写的地方会被读成"判定模型做的",
+        于是它错得**看得见**（判定占比虚高),而不是悄悄错成"规则做的"。
         """
         self._batch_decisions.append(
             DecisionRecord(
@@ -271,6 +304,9 @@ class Session:
                 frame_digest=frame_digest,
                 request_digest=request_digest,
                 note=note,
+                source=source,
+                fallback=fallback,
+                state_key=state_key,
             )
         )
 
@@ -371,6 +407,21 @@ class Session:
         return [{"call": i, "task_id": e.task_id, **e.response}
                 for i, e in enumerate(self.model_events())]
 
+    def note_batch(self, *, provider: str, degraded: bool, warnings: Sequence[str] = ()) -> None:
+        """记下**这一批是谁答的**。
+
+        ★ 在拿到 `DecideResponse` 之后、逐条记账之前调用。见
+          `DecisionBatchEvent.provider` 那段：降级链正常降级时响应看起来完全正常，
+          不在这里留痕，日志上就查不出"这批其实是 Mock 答的"。
+        """
+        self._batch_provider = provider
+        self._batch_degraded = bool(degraded)
+        self._batch_warnings = list(warnings)
+        if degraded:
+            self.decider_degradations += 1
+        if provider and provider not in self.decider_providers:
+            self.decider_providers.append(provider)
+
     def _close_batch(self) -> None:
         if not self._batch_decisions:
             return
@@ -386,6 +437,9 @@ class Session:
                 #   后者把生成调用和工具执行一起算了进来（实测见 __init__ 的说明）。
                 latency_ms=self._batch_request_ms,
                 decisions=[d.__dict__ for d in self._batch_decisions],
+                provider=self._batch_provider,
+                degraded=self._batch_degraded,
+                warnings=list(self._batch_warnings),
                 working_start=working_start,
                 parent=self._span_stack[-1] if self._span_stack else None,
             )
@@ -393,6 +447,9 @@ class Session:
         self._batch_decisions = []
         self._batch_request_ms = 0.0
         self._batch_requests = 0
+        self._batch_provider = ""
+        self._batch_degraded = False
+        self._batch_warnings = []
 
     def _on_tool_call(self, name: str, arguments: dict, necessary: bool, ms: float,
                       error: str | None, observation: str) -> None:

@@ -32,7 +32,7 @@ dataset/
 「怎么下载」这件事**住在代码里**,不在文档里:
 
 ```
-Benchmark.downloads()   ──►   scripts/datasets.py --write   ──►   dataset/DOWNLOADS.md
+Benchmark.downloads()   ──►   scripts/dataset_catalog.py --write   ──►   dataset/DOWNLOADS.md
    （权威，住在 loader 旁边）          （生成）                        （产物）
 ```
 

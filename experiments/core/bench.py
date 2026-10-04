@@ -66,7 +66,7 @@ class Benchmark(Protocol):
     def downloads(self) -> Sequence["DownloadSpec"]:
         """★ **这个 loader 需要的数据从哪来。**
 
-        权威就住在这里 —— 不在文档里。`scripts/datasets.py --write` 会把所有
+        权威就住在这里 —— 不在文档里。`scripts/dataset_catalog.py --write` 会把所有
         loader 的声明汇总成 `dataset/DOWNLOADS.md`,**那份文件是生成的,不许手改**。
         两边各写一遍就会分叉,而分叉的后果是别人照文档下载、拿到的和我们对不上。
 
@@ -156,7 +156,7 @@ class Unscored(Benchmark):
     def downloads(self) -> Sequence["DownloadSpec"]:
         """★ **这个 loader 需要的数据从哪来。**
 
-        权威就住在这里 —— 不在文档里。`scripts/datasets.py --write` 会把所有
+        权威就住在这里 —— 不在文档里。`scripts/dataset_catalog.py --write` 会把所有
         loader 的声明汇总成 `dataset/DOWNLOADS.md`,**那份文件是生成的,不许手改**。
         两边各写一遍就会分叉,而分叉的后果是别人照文档下载、拿到的和我们对不上。
 

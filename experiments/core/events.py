@@ -199,6 +199,22 @@ class DecisionBatchEvent(Event):
     requests_in_batch: int = 0
     latency_ms: float = 0.0
     decisions: list[dict[str, Any]] = field(default_factory=list)
+    #: ★★ **这一批到底是谁答的。**
+    #:
+    #: 为什么必须有：判定后端是一条**降级链**（`FallbackClient`：先试托管的 Jev，
+    #: 挂了退到 `MockClient`）。而"降级"这件事以前**只在内存里报一次** ——
+    #: 只有"答案不可用"那条路会把 `warnings` 塞进 `note`；正常降级时响应
+    #: 看起来完全正常，**日志上没有任何痕迹**。
+    #:
+    #: 实测（2026-10-01）：`fta × react-termination` 跑完 152 批判定，
+    #: `events.jsonl` 里搜「降级」**零命中** —— 而这**不能证明没降级**，
+    #: 只证明那个字符串当初就没有地方可写。⚠️ **不可证伪的"没发生"**比报了
+    #: 降级还危险：它让"我们跑的是真 Jev"变成一个没有证据的说法。
+    provider: str = ""
+    #: 这一批有没有降过级。★ **`provider` 保留原计划的那个**（和 TS 侧
+    #: `provider-fallback.ts` 同一条规矩）—— 所以只有这个布尔认得出降级。
+    degraded: bool = False
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
