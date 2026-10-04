@@ -26,10 +26,11 @@ class AdmissionClient(ScriptedClient):
         return response
 
 
-def run(kind, p):
+def run(kind, p, form="relational"):
     client = AdmissionClient(p)
     session = make_session()
-    ctl = TypedController(client, pick_input_shape="admission", admission_answer_kind=kind)
+    ctl = TypedController(client, pick_input_shape="admission", admission_answer_kind=kind,
+                         admission_question_form=form)
     decision = ctl.decide(session, _view(session))
     requests = [r for r in client.requests if any(n.startswith("pickInput::") for n in r.questions)]
     assert requests
@@ -56,6 +57,15 @@ def test_high_false_probability_is_not_positive_admission():
     assert decision.kind != "tool"
     ranked = [r for r in ctl.trace if r.get("answer") == "none_cleared_the_bar"]
     assert ranked and ranked[0]["top"] == 0.05
+
+
+def test_only_question_form_changes_prompt():
+    _, relational, _ = run("noul", 0.9, "relational")
+    _, suffices, _ = run("noul", 0.9, "suffices")
+    for node in relational.questions:
+        assert relational.questions[node]["type"] == suffices.questions[node]["type"] == "noul"
+        assert relational.questions[node]["criteria"] == suffices.questions[node]["criteria"]
+        assert relational.questions[node]["instructions"] != suffices.questions[node]["instructions"]
 
 
 def test_unknown_answer_kind_raises():

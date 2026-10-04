@@ -73,7 +73,7 @@ ALFWorld 20 题的 run-to-run 标准差是 **1.30 题**（`docs/ALFWORLD-VARIANC
 |---|---|---|---|---|---|---|
 | — | 基线（历史完整批次） | `b9d7df1` / `1fe533f` | 11, 11 | 2 | exact run commits listed below | ALFWorld baseline used `1fe533f`; no claim that `cd2bd5f` produced it |
 | A1a | 只换回答类型：布尔 → true/false/unclear 选择题；题面、帧、0.5 门限不变 | `d874239` | 11, 11 | 3 | 准入型 TERNARY：9, 9 → 9, 9；ALFWorld：0 → 0 | 仅换回答类型没有改善；TERNARY 逐题配对无变化。ALFWorld 单次仅筛选 |
-| A1b | 单独改为“够不够”问法；不与回答类型合并 | 待测 | | | | |
+| A1b | 单独改为“够不够”问法；保留旧布尔回答类型 | `pending` | | | | |
 | A2 | 准入型的逃逸＝**平先验/取排序第一**，不再拿门限卡（缺口 2） | | | | | |
 | A3 | 布尔判定点的**三区**：中间区落到调用方的默认（缺口 2） | | | | | |
 | A4 | 门限**按题型分开声明**，用错题型就抛错（缺口 1） | | | | | |

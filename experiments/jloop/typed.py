@@ -624,6 +624,12 @@ PICK_INPUT_CANDIDATE_ASK = (
     "Judge only this one action — the other candidates are judged separately, "
     "and `how_this_world_works` tells you what actions do in this world."
 )
+PICK_INPUT_CANDIDATE_SUFFICES_ASK = (
+    "The task, current evidence, and actions already done remain in view regardless. "
+    "Is `{ref}` still needed to make progress now? "
+    "Judge only this one action — the other candidates are judged separately, "
+    "and `how_this_world_works` tells you what actions do in this world."
+)
 PICK_INPUT_ADMISSION_UNCLEAR = "Cannot tell from the supplied evidence."
 PICK_INPUT_CANDIDATE_CRITERIA = {
     "true": "doing this now is required by the task, or is a necessary step towards it",
@@ -902,7 +908,7 @@ NODE_THRESHOLDS: dict[str, float] = {
 #: 并且 `pickInput` 补上了 `last_result`。帧的**内容**变了 ⇒ 与 typed-4 不可比。
 #: ★ `typed-4` —— 闸门改成**规则先筛、判官只确认**（用户 2026-10-04 的决定）。
 #: ★ `typed-3` 及以前 —— **判官产生裁决**。三批数字**不能进同一张表**。
-DECISION_SPEC_VERSION = "typed-11"
+DECISION_SPEC_VERSION = "typed-12"
 
 #: `allow_choices_without_escape` 的**离线说明** —— 见那个字段的文档。
 #: ★ 它是一份**声明**，不是一个可调的参数:打开它的批次是另一个方法。
@@ -931,7 +937,7 @@ DECISION_SPEC_PARTS: tuple[str, ...] = (
     "UNKNOWN_TOOL_BAND", "RAISE_STEP", "RISK_CONFIRM_ASK", "RISK_CONFIRM_CRITERIA",
     "RISK_CONFIRM_WHEN", "ANSWER_EVIDENCE_STEPS", "ANSWER_EVIDENCE_RESULT_CHARS",
     "PICK_INPUT_CANDIDATE_ASK", "PICK_INPUT_CANDIDATE_CRITERIA", "PICK_INPUT_SHAPE",
-    "PICK_INPUT_ADMISSION_UNCLEAR",
+    "PICK_INPUT_ADMISSION_UNCLEAR", "PICK_INPUT_CANDIDATE_SUFFICES_ASK",
     # ★ `PICK_INPUT_SHAPE_AUTO` 也进指纹:它不是"跑法",它决定
     #   `shape = 环境声明 or 全局默认` 这条解析规则 —— 拿掉它,
     #   `pick_input_shape` 的默认值就从"自动"变成"某一种",那是另一个方法。
@@ -1214,6 +1220,7 @@ class TypedController:
     pick_input_shape: str = PICK_INPUT_SHAPE_AUTO
     # A1a changes only the answer type; keep the measured boolean control.
     admission_answer_kind: str = "noul"
+    admission_question_form: str = "relational"
 
     #: ★★★ **只观察、不落地的判定点**（照 μ 的 `shadow` 模式）。
     #:
@@ -1576,6 +1583,8 @@ class TypedController:
                 f"pick_input_shape={self.pick_input_shape!r}（解析成 {shape!r}）不是已知题形；"
                 f"只有 'comparative' / 'admission'（或 'auto'）"
             )
+        if self.admission_question_form not in ("relational", "suffices"):
+            raise ValueError(f"Unknown admission question form: {self.admission_question_form!r}")
         if shape == "admission" and not self.allow_choices_without_escape:
             # ★★★ **一候选一题**（2026-10-04）—— 见 `PICK_INPUT_CANDIDATE_ASK` 的说明。
             #
@@ -1593,9 +1602,12 @@ class TypedController:
                 for i, o in enumerate(options, 1)
             )
             ctx.action_rules = str(getattr(tool, "action_rules", "") or "")
+            admission_ask = (PICK_INPUT_CANDIDATE_SUFFICES_ASK
+                             if self.admission_question_form == "suffices"
+                             else PICK_INPUT_CANDIDATE_ASK)
             questions = [
                 _noul_question(f"pickInput::{i}",
-                               PICK_INPUT_CANDIDATE_ASK.format(ref=f"[{i}] {o}"),
+                               admission_ask.format(ref=f"[{i}] {o}"),
                                criteria=PICK_INPUT_CANDIDATE_CRITERIA,
                                # ★ 门限 0:这是一次**打分**,不是一次"够不够果断"。
                                #   过不过线由**策略**判（下面那一个 `bar`）——

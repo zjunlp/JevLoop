@@ -341,6 +341,11 @@ def typed_arms(decider: DecisionClient) -> dict[str, Callable[[], Agent]]:
             controller=TypedController(decider, pick_input_shape="admission",
                                        admission_answer_kind="choice"),
             exemplars=exemplars),
+        # A1b: only the question wording changes; preserve boolean answers.
+        "react-typed-admission-suffices": lambda exemplars="": react_baseline.ReAct(
+            controller=TypedController(decider, pick_input_shape="admission",
+                                       admission_question_form="suffices"),
+            exemplars=exemplars),
         # ★ **同一对照的另一端** —— 显式强制 `comparative`。
         #
         #   ⚠️ **它和 `react-typed`（默认）现在是同一个配置**:默认在 2026-10-04
