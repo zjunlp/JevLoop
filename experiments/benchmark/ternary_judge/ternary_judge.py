@@ -84,6 +84,9 @@ DECLINE = re.compile(
 #: 一个"具体承诺"的形状：数字（含货币/百分比）或一个 Name-like 的实体
 FIGURE = re.compile(r"\d[\d,\.]*\s*(?:million|billion|usd|%|万|亿|美元)?", re.I)
 
+#: 检索结果每行开头的 `[d001]` —— `read_doc` 的候选就是从这些标记里来的。
+_DOC_TAG = re.compile(r"^\[(d\d+)\]")
+
 
 def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip().lower())
@@ -100,8 +103,37 @@ class TernaryJudge:
     only: str | None = None
     #: ★ 判分口径，默认 `strict`。理由见 `score_variants()`
     headline: str = "strict"
+    #: ★★★ **这一步真正能读的文档** —— `search` 报出来的那些 doc_id。
+    #:
+    #:   为什么要它（实测 2026-10-04，TERNARY 20 题）:原来 `read_doc` 的候选是
+    #:   **整个语料 40 篇**,于是我方控制器每步都在问判官
+    #:   「该读这 40 篇里的哪一篇」。而实测:**按实体名检索只命中 1~3 篇**
+    #:   （150 题里 1 篇 18、2 篇 18、3 篇 114）—— 也就是说那道题里
+    #:   **37~39 个候选是已知不相关的**,判官却要在它们里面挑。
+    #:   它的回答印证了这一点:40 个候选**没有一个过 0.5 的线**（最高 0.26）。
+    #:
+    #:   ⚠️ 单变量对照臂（`react-typed-singlechoice`）当时**看起来更好**
+    #:   （15/20、12/20 对 8/20、8/20）—— 而那是**假象**:
+    #:   候选数超过 `MAX_OPTIONS` 的那 17/20 题走了 `accept_below_bar` 兜底,
+    #:   也就是"**明知不够果断,还是拿分布的第一个**"。它赢在一张 40 选 1 的
+    #:   彩票上,不是赢在问法上。
+    #:
+    #:   ⇒ 候选集应当是**检索真的报出来的那几篇**,不是整个语料。
+    #:     这是环境声明的领域事实（`Tool.live_candidates`,和 ALFWorld 同一机制）,
+    #:     **不是**控制器在猜,也**不动** benchmark 的判分。
+    _seen_docs: set[str] = field(default_factory=set)
 
     # ── 读数据 ──────────────────────────────────────────────
+
+    def on_task(self, task: Task) -> None:
+        """★ 每题重置"检索见过哪些文档"。
+
+        ★ 为什么必须有这个钩子:上面的集合是**实例状态**,而 benchmark 实例
+          在一次 run 里**跨题复用**（`core/runner.py` 每题调一次 `on_task`）。
+          不重置的话第 2 题的候选集里会带着第 1 题检索到的 doc_id ——
+          而那种串味**不会报错**,只会让候选集看起来"更宽",更难察觉。
+        """
+        self._seen_docs = set()
 
     def _root(self) -> Path:
         """
@@ -205,8 +237,13 @@ class TernaryJudge:
                 #   实测(2026-10-04):没有这一行时,40 个 `d00x` 拿到同一句判据,
                 #   判官答"一个都不合适" 21/21 —— 而任务是「Lindenthal Pharma 哪年成立」,
                 #   文档标题里**就写着公司名**。给它标题,它就能选。
-                describe_candidate=lambda d, _m={x["doc_id"]: x["title"] for x in docs}:
-                    f"{_m.get(d, d)}",
+            # ★★★ **`read_doc` 的候选 = 检索真的报出来的那几篇**（见 `_seen_docs`）。
+            #   空集合（还没检索过）时回退到整个语料:那时判官确实没有别的信息,
+            #   而"回退"必须**看起来像回退** —— 40 个候选本身就是那个信号,
+            #   `pickInput` 的候选数会把它记在账上。
+            live_candidates=lambda: sorted(self._seen_docs) or [d["doc_id"] for d in docs],
+            describe_candidate=lambda d, _m={x["doc_id"]: x["title"] for x in docs}:
+                f"{_m.get(d, d)}",
                 parameters={
                     "type": "object",
                     "properties": {
@@ -235,6 +272,13 @@ class TernaryJudge:
                 # ★ 说"没找到"，而不是给一段看起来像答案的东西 ——
                 #   工具自己编内容是本项目量过的另一类事故（见 tool-variants 的 fabrication）
                 return f"（没有匹配 {query!r} 的行）"
+            # ★★★ **把"检索报出来的文档"记下来** —— 这就是 `read_doc` 的候选集
+            #   （见 `_seen_docs`）。记的是**报了哪几篇**,不是"答案在哪几篇":
+            #   环境不许知道金标,它只知道检索结果。
+            for h in hits:
+                m = _DOC_TAG.match(h)
+                if m:
+                    self._seen_docs.add(m.group(1))
             return "\n".join(hits[:20])
 
         def read_doc(doc_id: str = "", **_kw: Any) -> str:
