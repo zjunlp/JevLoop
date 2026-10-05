@@ -2531,10 +2531,10 @@ def test_the_decision_spec_fingerprint_is_pinned() -> None:
     """
     from experiments.jloop.typed import DECISION_SPEC_VERSION, decision_spec_digest
 
-    assert DECISION_SPEC_VERSION == "typed-14", (
+    assert DECISION_SPEC_VERSION == "typed-15", (
         "bump 版本时把这一行也改掉，并把下面的指纹更新成新的"
     )
-    assert decision_spec_digest() == "e1a46b8b7166ff0e", (
+    assert decision_spec_digest() == "a14555afb0f6a68a", (
         "判定规格的指纹变了 —— 问法 / 门限 / 兜底 / 帧预算里有东西被改动。\n"
         "  · 如果是**有意的**改动：bump `DECISION_SPEC_VERSION`，"
         "并把这条断言里的值换成新指纹。\n"

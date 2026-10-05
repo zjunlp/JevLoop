@@ -26,6 +26,8 @@ from experiments.core.frame import (  # noqa: E402
     FrameField,
     FrameSpec,
     NODE_FRAMES,
+    Question,
+    Request,
     candidate_provider,
     compile_frame,
     ctx_from_steps,
@@ -69,12 +71,25 @@ def test_candidate_list_cap_is_reported() -> None:
 
     不说的话,判定模型会以为「就这些候选」—— 而它本来可能选的是第 21 个。
     """
-    spec = FrameSpec("t", (FrameField("candidates_list", 4000, "options", clip="list"),))
+    # ★ 2026-10-05：全局的 20 条上限删了（`MAX_LISTED_CANDIDATES is None`）。
+    #   机制本身不删 —— 这里用**显式预算**证明"数量截断仍会记账并报出去"。
+    assert MAX_LISTED_CANDIDATES is None, "全局候选上限应当已经删掉"
+    # 不设上限 ⇒ 50 条全进帧，一条不截
+    spec = FrameSpec("t", (FrameField("candidates_list", label="options", clip="list"),))
     ctx = AgentCtx()
     setattr(ctx, "candidates_list", [f"f{i}" for i in range(50)])
     frame = compile_frame(spec, ctx)
-    assert frame.count_truncations["candidates_list"] == (50, MAX_LISTED_CANDIDATES)
-    assert "items 50→20" in frame.render()
+    assert frame.count_truncations == {}
+    assert "f49" in frame.render(), "第 50 条候选必须还在帧里"
+    # 机制本身不删：临时把上限设回去，记账和正文提示都要回来
+    import experiments.core.frame as F
+    F.MAX_LISTED_CANDIDATES = 20
+    try:
+        frame2 = compile_frame(spec, ctx)
+        assert frame2.count_truncations["candidates_list"] == (50, 20)
+        assert "items 50→20" in frame2.render()
+    finally:
+        F.MAX_LISTED_CANDIDATES = None
 
 
 # ═══════════════════════════════════════════════════════════
@@ -353,13 +368,17 @@ def test_truncation_is_not_an_absence() -> None:
     截断的正文里留着 `原文→实际` 的痕迹,判定模型至少知道「这里少了」;
     而缺席是「压根没有」。前者可以判,后者不能。
     """
-    # ★ 长度按**声明的预算**造,不硬编码 —— 预算改了这条测试不该失效。
-    #   第一版写死 1000 个"证据",把 `draft` 的预算从 900 提到 8000 之后
-    #   它不再截断,于是 `truncations["draft"]` 直接 KeyError:
-    #   **测的本来是"截断要报出来",却因为长度不够变成了"没有截断"**。
-    budget = next(f.budget for f in frame_for("canDeliver").fields if f.name == "draft")
-    long = "证据" * (budget // 2 + 10)
-    req = _req(node="canDeliver", ctx=AgentCtx(task="t", draft=long))
+    # ★★ 2026-10-05：全局逐字段预算删掉了（`budget=None` = 不限），
+    #   所以「截断」不再由声明触发。这条测试测的是**机制**「截了必须报、且不拦」，
+    #   于是显式构造一个带预算的帧 —— 比原来更稳：不再依赖某个节点的具体数字。
+    from experiments.core.frame import compile_frame
+    spec = FrameSpec("canDeliver", (FrameField("task", label="task", required=True),
+                                    FrameField("draft", 100, "answer", required=True),
+                                    FrameField("evidence", label="evidence")))
+    long = "证据" * 60
+    req = Request(frame=compile_frame(spec, AgentCtx(task="t", draft=long)),
+                  question=Question(node="deliverable", kind="choice", ask="?",
+                                    options=("a", "b"), threshold=0.0, frame="canDeliver"))
     assert req.frame.missing_required == ()
     assert req.frame.truncations["draft"][0] == len(long)
     assert req.fatal == [], "截断是报出来,不是拦住"

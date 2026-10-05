@@ -908,7 +908,7 @@ NODE_THRESHOLDS: dict[str, float] = {
 #: 并且 `pickInput` 补上了 `last_result`。帧的**内容**变了 ⇒ 与 typed-4 不可比。
 #: ★ `typed-4` —— 闸门改成**规则先筛、判官只确认**（用户 2026-10-04 的决定）。
 #: ★ `typed-3` 及以前 —— **判官产生裁决**。三批数字**不能进同一张表**。
-DECISION_SPEC_VERSION = "typed-14"
+DECISION_SPEC_VERSION = "typed-15"
 
 #: `allow_choices_without_escape` 的**离线说明** —— 见那个字段的文档。
 #: ★ 它是一份**声明**，不是一个可调的参数:打开它的批次是另一个方法。
@@ -951,7 +951,7 @@ DECISION_SPEC_PARTS: tuple[str, ...] = (
     "DECISION_QUESTIONS", "MAX_REDIRECTS",
     # 帧的装配（`frame.py`）
     "NODE_FRAMES", "MAX_OPTIONS", "MAX_REQUEST_CHARS", "MAX_LISTED_CANDIDATES",
-    "MAX_QUESTIONS", "EVIDENCE_INPUT_CHARS", "EVIDENCE_WRITE_INPUT_CHARS",
+    "MAX_QUESTIONS",
 )
 
 #: 有意**不进**指纹的常量（写清楚为什么,免得下一个人以为是漏了）。

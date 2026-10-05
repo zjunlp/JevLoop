@@ -19,9 +19,9 @@
 ```python
 FrameSpec(
     node="step_ok",
-    fields=(FrameField("last_tool", 60, "tool"),
-            FrameField("last_input", 200, "input"),
-            FrameField("last_result", 500, "output")),
+    fields=(FrameField("last_tool", label="tool"),
+            FrameField("last_input", label="input"),
+            FrameField("last_result", label="output")),
     # ★ 显式声明「本节点故意不看什么」,以及为什么
     excluded=(("task", "判的是这一步,不是这个任务 —— 带上它会被拉到任务级（实测）"),),
 )
@@ -80,13 +80,17 @@ class StepRecord:
         可帧要回答的是「**任务要求的事做完没有**」—— 交给模型的却是对象 dump。
 
         ★ 分工:**这里给形状**(调过什么、按什么顺序),**`last_result` 给细节**
-          (最近一次到底返回了什么)。所以每条的结果在这里截短 ——
-          两份都全给,等于同一段话在帧里出现两遍,白占预算。
+          (最近一次到底返回了什么)。
+
+        ★★★ **2026-10-05：每条的 60 字符截断删掉了。** 它原本的理由是
+          「两份都全给等于同一段话出现两遍，白占预算」。实测那个理由不成立：
+          窗口 131,072 字符，我们最大的一条请求 5,153（4%）；
+          而 60 字截断把 `You open the safe 1. … In it, you see a...`
+          **切在物品清单上** —— 一格有 1 件东西记得住、有 2 件以上一件都看不见。
+          「找花瓶」正是要翻多物品的容器。**省下 9% 换掉最要紧的信息，不划算。**
         """
         arg = f"({self.input})" if self.input else "()"
         res = " ".join(self.result.split())
-        if len(res) > 60:
-            res = res[:57] + "..."
         return f"{self.tool}{arg} -> {res}" if res else f"{self.tool}{arg}"
 
 
@@ -199,7 +203,7 @@ def render_tool_input(arguments: Any, content: Any = "") -> str:
       ① **判官读的是 Python 语法**，不是命令。`already_done` 那一行被
          `{'command': …}` 这种字面量吃掉预算 —— 实测 `history: 400→300`，
          也就是**同样的步数会更早被截掉**。
-      ② `gradeRisk` 的 `target`（`FrameField("last_input", 2000, "target")`）
+      ② `gradeRisk` 的 `target`（`FrameField("last_input", label="target")`）
          同样是这个字面量 —— 风险判定看的是 `{'command': 'rm -rf /'}`。
       ③ ★★★ **`candidate_already_done` 这条检查对 `pickInput` 静默失效**：
          它拿 `r.input`（字典串）去和 `question.options`（命令原文）求交集，
@@ -258,8 +262,8 @@ def ctx_from_steps(task: str, steps: Sequence[Step], *, draft: str = "",
 
 
 def render_evidence(history: Sequence[StepRecord], *,
-                    last: int = 3, input_chars: int = 60,
-                    result_chars: int = 600) -> str:
+                    last: int | None = None, input_chars: int | None = None,
+                    result_chars: int | None = None) -> str:
     """把最近几步的**工具调用与它们的返回**渲染成 `canDeliver` 的判定材料。
 
     ★★ 这个名字和 `StepRecord.__str__()`（帧里的人话版）分开,因为两者回答的
@@ -278,20 +282,27 @@ def render_evidence(history: Sequence[StepRecord], *,
 
     ★ 只取最后 `last` 条:再往前的调用,结论已经被后面的覆盖了,
       而多给一条就少给 `draft`（判定对象本身）一份预算。
+
+    ★★★ **2026-10-05：`last` / 每条的字符上限全部改成"不限"（`None`）。**
+      理由同 `StepRecord.__str__`：窗口 131,072 字符而我们只用 4%，
+      而"只给最后 3 条、每条 200 字符"会让闸门**核不了早先那几次调用** ——
+      它要回答的正是「回答里那句『我把它放进去了』是哪一次调用支持的」。
+      显式传数字仍然生效（老调用点没变语义），只是默认值不再砍。
     """
-    recent = list(history)[-last:]
+    recent = list(history) if last is None else list(history)[-last:]
     out: list[str] = []
     for i, rec in enumerate(recent):
         writes = rec.tool in ("write_file", "write", "write_text")
         inp = clip_text(rec.input, 600 if writes else input_chars)
         # 最后一条给足空间:回答里的完成报告,核对的正是**最后一次**返回了什么
-        res = clip_text(rec.result, 60 if writes else (result_chars if i == len(recent) - 1 else 200))
+        cap = 60 if writes else (result_chars if i == len(recent) - 1 else 200)
+        res = clip_text(rec.result, cap if result_chars is not None else None)
         out.append(f"{rec.tool}({inp}) -> {res}" if res else f"{rec.tool}({inp})")
     return "\n".join(out)
 
 
-def clip_text(text: str, budget: int) -> str:
-    """截成 `budget` 字符,**截了就留下痕迹**。
+def clip_text(text: str, budget: int | None) -> str:
+    """截成 `budget` 字符,**截了就留下痕迹**。`budget=None` = 原样返回。
 
     ★ 痕迹不能省:判定模型看不到「这里少了 900 字」,它会当成「证据就这么多」
     —— `canDeliver` 那次事故（clip 到 100 → `unsupported=0.67`）正是这个形状。
@@ -299,7 +310,7 @@ def clip_text(text: str, budget: int) -> str:
     再切一刀的两处（`history` 的每条、`evidence` 的每条）。
     """
     text = " ".join(str(text).split())
-    if len(text) <= budget:
+    if budget is None or len(text) <= budget:
         return text
     return text[:budget] + f"…[+{len(text) - budget}]"
 
@@ -308,13 +319,27 @@ def clip_text(text: str, budget: int) -> str:
 class FrameField:
     """帧里的一个字段。
 
-    `budget` 是**字符**上限 —— 判定模型的上下文只有 512/1024 token。
+    `budget` 是**字符**上限;`None` = **不限**（2026-10-05 起是默认）。
     `clip` 决定超预算怎么截,而**截了多少必须报出来**（见 `Frame.truncations`）。
+
+    ★★★ **为什么默认从"有上限"改成"不限"**：立项时这里写着
+    「判定模型的上下文只有 512/1024 token」—— **那句话错了 32 倍**。
+    2026-10-05 实测 `api.typesafe.ai/v1/systemone`：
+    状态 **131,072 字符**（= 2¹⁷ = 32K token）可以，**131,500 就 HTTP 400**。
+    （μ 的 `decision.ts` 也写着 *"The judge has a 32K window"* —— 两边独立吻合。）
+
+    而实测我们**真正发出去的最大请求只有 5,153 字符**，用掉窗口的 **4%**。
+    那条 ALFWorld 题 27 步的观察全量 4,807 字符，按旧的 60 字符/条截断后
+    4,394 —— **只省了 413 字符（9%），却把「哪一格有什么」切没了**。
+    ⇒ 上限没省下东西，只是让判官看不见证据。所以逐字段上限全部去掉，
+    只留**一个**请求级闸门对着那面真实的墙（见 `MAX_REQUEST_CHARS`）。
     """
 
     name: str          # `AgentCtx` 上的字段名
-    budget: int        # 字符上限
-    label: str         # 进给判定模型时那行字
+    #: 字符上限。`None` = 不限（默认）。保留这一栏是因为**截断必须报出来**
+    #: 这条不变量还在用 —— 显式给了预算的地方照样会记账并进判官正文。
+    budget: int | None = None
+    label: str = ""    # 进给判定模型时那行字
     # tail: 留尾巴（证据通常是**后面**才是结论）；head: 留开头；list: 只留前 N 条
     clip: str = "tail"
     #: ★★ 这个字段是**判定的依据**吗?
@@ -392,14 +417,23 @@ class Frame:
 # 编译 —— 唯一的入口
 # ═══════════════════════════════════════════════════════════
 
-# 候选列表超过这个数就不再列全 —— **并且必须明说**（TS 的 `MAX_FILE_OPTIONS`）。
-MAX_LISTED_CANDIDATES = 20
+#: ★★★ **候选列表的上限删掉了（2026-10-05）。**
+#:
+#: 原来是 20：超过就不再列全，但**必须明说**。删它的理由和逐字段上限同一条 ——
+#: 实测窗口 131,072 字符、我们最大请求 5,153（4%），
+#: 而 ALFWorld 一步就有 21–32 条合法命令，**截到 20 条等于把合法动作藏起来**：
+#: 判官会答"这些都不合适"，而它其实只是没看见第 21 条。
+#: 留下来的 `Frame.count_truncations` 机制不变（显式给预算仍会记账）。
+MAX_LISTED_CANDIDATES = None
 
 
-def _clip(text: str, budget: int, mode: str) -> tuple[str, int]:
-    """返回 (裁过的文本, 原长)。**不在这里决定要不要报** —— 报是 `compile_frame` 的事。"""
+def _clip(text: str, budget: int | None, mode: str) -> tuple[str, int]:
+    """返回 (裁过的文本, 原长)。**不在这里决定要不要报** —— 报是 `compile_frame` 的事。
+
+    `budget=None` = 不裁,原样返回（并把原长一并交回,于是不会记账）。
+    """
     original = len(text)
-    if original <= budget:
+    if budget is None or original <= budget:
         return text, original
     if mode == "head":
         return text[:budget], original
@@ -437,8 +471,10 @@ def compile_frame(spec: FrameSpec, ctx: AgentCtx) -> Frame:
 
         if isinstance(raw, (list, tuple)):
             items = list(raw)
-            if len(items) > MAX_LISTED_CANDIDATES:
+            if MAX_LISTED_CANDIDATES is not None and len(items) > MAX_LISTED_CANDIDATES:
                 # ★ 截断候选**必须明说** —— 模型会以为「就这些」
+                #   （`MAX_LISTED_CANDIDATES` 现在是 `None` = 不截；这一支留给
+                #     将来显式设了上限的场合，机制本身不删。）
                 count_truncations[spec_field.name] = (len(items), MAX_LISTED_CANDIDATES)
                 items = items[:MAX_LISTED_CANDIDATES]
             # ★ **空的列表是一个事实,不是一处空白。**
@@ -464,41 +500,42 @@ def compile_frame(spec: FrameSpec, ctx: AgentCtx) -> Frame:
 # ═══════════════════════════════════════════════════════════
 # 七个节点的帧声明
 #
-# ★ 预算逐字抄自 TS 侧（`docs/PLAN-*.md` 记的那张表）。
-#   **改任何一个数都要两边一起改,并说明为什么** —— 否则 §8.7.2 的行为对照会红。
+# ★★★ **2026-10-05：逐字段预算全部删掉（`budget=None`）。**
+#   原来这里写着「预算逐字抄自 TS 侧」，而那张表的前提
+#   （「判定模型上下文只有 512/1024 token」）**错了 32 倍**。
+#   实测窗口 131,072 字符、我们最大请求 5,153（4%），
+#   最坏情况的一帧 6,971 字符（闸门的 5.8%）——
+#   ⇒ 上限没在防任何东西，只在切掉证据。
+#   保留的是**机制**：显式给了 `budget` 的地方照样记账 + 进正文提示。
 # ═══════════════════════════════════════════════════════════
-
-#: 证据在帧里最多占多少字符。★ 100 那次事故之后定的。
-EVIDENCE_INPUT_CHARS = 120
-EVIDENCE_WRITE_INPUT_CHARS = 600
 
 NODE_FRAMES: dict[str, FrameSpec] = {
     "needsTool": FrameSpec(
         node="needsTool",
         fields=(
             # 判的就是「这个任务还有没有没做的动作」—— 没有 task 就没有对象可判
-            FrameField("task", 2000, "task", required=True),
-            FrameField("last_tool", 60, "last_tool"),
-            FrameField("last_result", 4000, "last_result"),
+            FrameField("task", label="task", required=True),
+            FrameField("last_tool", label="last_tool"),
+            FrameField("last_result", label="last_result"),
             # ★ 是一份**清单**,不是一个计数 —— `steps_done: 2` 那种写法分不出
             #   「读过了」和「写过了」（实测：写任务里文件从没被写出来）
-            FrameField("history", 4000, "already_done", clip="list"),
+            FrameField("history", label="already_done", clip="list"),
             # ★ 「调过的工具能做什么」—— 判「任务被满足了吗」的依据。
             #   名字 + 历史只说明**调过什么**,说明不了**覆没覆盖**。
-            FrameField("done_tools", 1500, "done_tools"),
+            FrameField("done_tools", label="done_tools"),
             # ★★ **改道时才有值**：上一次交付被打回的理由。判"还有没有没做的动作"
             #   时，这是最直接的依据 —— 闸门刚刚说了"没做完"。空着 = 正常正向路径。
-            FrameField("redirect_note", 1500, "redirect_note"),
+            FrameField("redirect_note", label="redirect_note"),
         ),
         excluded=(("draft", "还没生成,这时没有 draft"),),
     ),
     "pickTool": FrameSpec(
         node="pickTool",
         fields=(
-            FrameField("task", 2000, "task", required=True),
+            FrameField("task", label="task", required=True),
             # ⚠️ **不是** required:第 0 步本来就没有上一步的结果。
             #    标成 required 会让这条不变量每一步都响,然后被无视。
-            FrameField("last_result", 4000, "last_result"),
+            FrameField("last_result", label="last_result"),
             # ★★★ **「还剩哪些动作」** —— 实测（2026-09-23,101 个 pickTool 判定点,
             #   逐条重放同一批请求、只换帧）:
             #
@@ -519,10 +556,10 @@ NODE_FRAMES: dict[str, FrameSpec] = {
             #     `escalate` 而不是收工),而「两个都加」翻的那条是**坏的**
             #     （`modify_columns` → `create_backup`）。
             #     **边际大 + 零答案变化**才是能安全落地的那个。
-            FrameField("remaining", 2000, "actions_left", clip="list"),
+            FrameField("remaining", label="actions_left", clip="list"),
             # ★★ **改道时才有值。** 正常正向路径上它是空的（`redirect_note` 为空），
             #   所以这一条**不改变**上面那张表量出来的结论 —— 它只在改道那一步奏效。
-            FrameField("redirect_note", 1500, "redirect_note"),
+            FrameField("redirect_note", label="redirect_note"),
         ),
         # 候选在问题那一侧（`choice` 的选项），不占帧的字段 —— 见 §8.4「每步重建」
         excluded=(
@@ -536,7 +573,7 @@ NODE_FRAMES: dict[str, FrameSpec] = {
     "pickInput": FrameSpec(
         node="pickInput",
         fields=(
-            FrameField("task", 2000, "task", required=True),
+            FrameField("task", label="task", required=True),
             # ★★★ **一张编号的候选表** —— 状态里放一次,题里只引用 `[i]`。
             #   照 `jev-ultrafast::action_space`（"dynamic, indexed action space"）。
             #   预算给得大:ALFWorld 一步 ~28 条命令,每条还要带一句说明。
@@ -544,7 +581,7 @@ NODE_FRAMES: dict[str, FrameSpec] = {
             # ★★★ **这个世界的动作语义** —— 环境语义,不是任务脚本（见 `Tool.action_rules`）。
             #   `jev-ultrafast` 把它放在 `instructions` 里;我们放在**状态**里,
             #   因为 N 道候选题共享同一份帧 —— 放题里就是 N 倍预算。
-            FrameField("action_rules", 2500, "how_this_world_works"),
+            FrameField("action_rules", label="how_this_world_works"),
             # ★★★ **必须带上"已经做过什么"。** 实测（2026-10-02，ALFWorld）：
             #   这一格原来是空的，于是 `pickInput` 被问"下一步做什么"时
             #   **不知道自己做过什么、上一步返回了什么**。后果不是判得差一点，
@@ -558,7 +595,7 @@ NODE_FRAMES: dict[str, FrameSpec] = {
             #   `history` 说的是**什么试过了**。动态候选越多（ALFWorld 每步 ~28 条），
             #   后者越不可省。★ 这和 §8.2 那条「判定贴在门限边上，因为帧里证据太薄」
             #   是同一个病，只是这次它表现为循环而不是抖动。
-            FrameField("history", 4000, "already_done", clip="list"),
+            FrameField("history", label="already_done", clip="list"),
             # ★★★ **`last_result` 2026-10-04 补进来 —— 它是唯一一个排除它的节点。**
             #
             #   原来的排除理由是「判的是**这一调**的目标,不是上一步返回了什么」。
@@ -567,11 +604,11 @@ NODE_FRAMES: dict[str, FrameSpec] = {
             #   判官答"一个都不合适" **20/20**(置信度 0.62)—— **它是对的**,
             #   因为帧里没有能区分那 40 个 id 的任何东西。
             #   而 `needsTool` / `isDone` 一直都有 `last_result`,只有这个节点漏了。
-            FrameField("last_result", 4000, "last_result"),
+            FrameField("last_result", label="last_result"),
             # ★ 改道时补上"缺什么"：ALFWorld 那一类里**同一个动词换个宾语**就是另一步
             #   （`go to X` → `go to Y`），所以参数这一步同样需要知道为什么被打回。
-            FrameField("redirect_note", 1500, "redirect_note"),
-            FrameField("action_table", 6000, "actions_on_the_table", clip="list"),
+            FrameField("redirect_note", label="redirect_note"),
+            FrameField("action_table", label="actions_on_the_table", clip="list"),
         ),
         excluded=(
             # ★ `last_result` **2026-10-04 从这里搬到了 `fields`**（见上面的说明）。
@@ -589,18 +626,18 @@ NODE_FRAMES: dict[str, FrameSpec] = {
             #    的调用**本来就没有 target**,它是**正常状态**,不是缺陷。
             #    标成 required 会让每一步无参调用都撞一次 fatal ——
             #    而那正是 §8.15 那条「天天误报和没有这条检查等价」的形状。
-            FrameField("last_input", 2000, "target"),
-            FrameField("task", 2000, "task", required=True),
+            FrameField("last_input", label="target"),
+            FrameField("task", label="task", required=True),
         ),
         excluded=(("last_result", "判的是**调用之前**的风险,这时还没有结果"),),
     ),
     "stepOk": FrameSpec(
         node="stepOk",
         fields=(
-            FrameField("last_tool", 60, "tool"),
-            FrameField("last_input", 2000, "input"),
+            FrameField("last_tool", label="tool"),
+            FrameField("last_input", label="input"),
             # ★ 判的就是「这一步成没成」—— 唯一没有它就没法判的字段
-            FrameField("last_result", 8000, "output", required=True),
+            FrameField("last_result", label="output", required=True),
         ),
         # ★★★ **故意没有 `task`** —— 这是修出来的:
         #   以前帧带着 `task`、问题写着 "for the task"、判据写着 "what the task needed",
@@ -616,9 +653,9 @@ NODE_FRAMES: dict[str, FrameSpec] = {
     "isDone": FrameSpec(
         node="isDone",
         fields=(
-            FrameField("task", 2000, "task", required=True),
+            FrameField("task", label="task", required=True),
             # ★ 是清单不是计数 —— 和 `needsTool` 同一条理由
-            FrameField("history", 4000, "already_done", clip="list"),
+            FrameField("history", label="already_done", clip="list"),
         ),
         excluded=(
             ("last_result", "判的是「任务做完没有」,不是「上一步返回了什么」"),
@@ -631,13 +668,13 @@ NODE_FRAMES: dict[str, FrameSpec] = {
     "canDeliver": FrameSpec(
         node="canDeliver",
         fields=(
-            FrameField("task", 2000, "task", required=True),
+            FrameField("task", label="task", required=True),
             # ★ 900,不是 100 —— 100 那次判定**正确地**判出 `unsupported=0.67`,
             #   是帧喂少了。这一格的预算直接决定闸门准不准。
             #   ★ 而且它是 required:**没有 draft 就没有可交付的东西**。
             #   这次事故的形状正是「有 draft 但被截短了」—— 那走 `truncations`,
             #   不在这里;这里是「压根没有」。
-            FrameField("draft", 8000, "answer", required=True),
+            FrameField("draft", label="answer", required=True),
             # ★★★ **工具证据** —— 见 `AgentCtx.evidence`。
             #
             #   这是 2026-09-23 查出来的「静默缺席」的修法:闸门判的是
@@ -649,7 +686,7 @@ NODE_FRAMES: dict[str, FrameSpec] = {
             #   ★ 预算 600:证据是**被核对的对象**,而 `draft` 是被判的对象 ——
             #     两者都要放得下。实测 100 字符那次的教训是「喂少了闸门会正确地误报」,
             #     所以这一格宁大勿小(`MAX_REQUEST_CHARS` 兜底)。
-            FrameField("evidence", 20000, "evidence"),
+            FrameField("evidence", label="evidence"),
         ),
         # ⚠️ `history` 仍然排除,但**理由变了**。原来那条写的是「历史会把回答挤掉」;
         #    现在证据是单独一栏、有自己的预算,所以真正的理由换成了:
@@ -739,7 +776,27 @@ MAX_OPTIONS = 32
 #:   满载的收益没量过,而延迟与注意力稀释是有代价的。
 #:   要往上提,先补那个测量(和 `MAX_OPTIONS` 那条同一个规矩)。
 #: ★ **这是整个请求的预算,不是帧的预算** —— R5 的病就是只算了帧那一半。
-MAX_REQUEST_CHARS = 32000
+#:
+#: ★★★ **2026-10-05 再往上提，32,000 → 120,000 —— 提到实测的墙边上。**
+#:   同一天把墙的位置二分出来了（`state + questions` 的 JSON 总长）：
+#:
+#:   | body 字符 | 结果 |
+#:   |---|---|
+#:   | 131,000 | OK |
+#:   | **131,072** | **OK（= 2¹⁷，就是那面墙）** |
+#:   | 131,117 | **400 Bad Request** |
+#:
+#:   ⇒ 硬墙是 **131,072 字符 = 128 KiB = 2¹⁷**，而且它管的是**总和**
+#:     （单独把体积放进 state 或放进 questions 都一样，见当天的两组探测）。
+#:
+#:   取 **120,000**（墙的 92%）：留 11,072 字符余量给估算误差，
+#:   同时**不再是我们自己设的那个 32,000 在挡路** ——
+#:   实测我们真正发出去的最大请求只有 **5,153 字符**，用掉 32,000 的 16%、
+#:   用掉 120,000 的 4%。所以这一栏**平时根本不会触发**,
+#:   它的作用只有一个：**别把 400 变成一次静默的判定丢失。**
+#:   ★ 它**不裁内容** —— 超了是 `request_over_budget` 报出来（fatal），
+#:     不是把证据切一段然后照发（切了照发正是"判官看不见证据"那条老病）。
+MAX_REQUEST_CHARS = 120_000
 
 #: 一次请求**最多带几道题**。
 #:
@@ -758,7 +815,12 @@ MAX_REQUEST_CHARS = 32000
 #:
 #:   ⚠️ 真正的预算守卫是下面那个 `MAX_REQUEST_CHARS`（帧 + 问题 + 选项的总字符）。
 #:     这个数只防"一个手滑写出无限道题"。
-MAX_QUESTIONS = 96
+#:
+#: ★★★ **2026-10-05：96 → 512。** 理由同上，只是把余量给足：
+#:   实测窗口 131,072 字符，而每道题都很短；96 这个数本来也是照着
+#:   32,000 字符的旧预算估的。真正拦越界的仍然是 `MAX_REQUEST_CHARS`，
+#:   所以这里放宽**不会**让请求超窗 —— 超窗由那一栏报出来。
+MAX_QUESTIONS = 512
 
 
 @dataclass(frozen=True)
@@ -1255,7 +1317,7 @@ __all__ = [
     "render_tool_input",
     "Question", "Request", "Violation", "MAX_OPTIONS", "MAX_REQUEST_CHARS",
     "MAX_QUESTIONS",
-    "NODE_FRAMES", "MAX_LISTED_CANDIDATES", "EVIDENCE_INPUT_CHARS",
-    "EVIDENCE_WRITE_INPUT_CHARS", "compile_frame", "ctx_from_steps", "frame_for",
+    "NODE_FRAMES", "MAX_LISTED_CANDIDATES",
+    "compile_frame", "ctx_from_steps", "frame_for",
     "candidate_provider", "clip_text", "render_evidence",
 ]
