@@ -187,7 +187,90 @@ len(set(question.criteria.values())) == 1      # 要求「全部判据一模一�
 ★ 交付闸门那一步**没有错**：`no_objection` 是对的 —— 那段草稿确实如实描述了发生了什么
 （"safe 里是 watch 2，不是 vase"）。闸门管的是**诚实**，不是**完成**；这是已经定下的设计。
 
-## 六、下一步可以试什么（都还没做）
+## 七、两个追问（2026-10-05 补）
+
+### 7.1 「还有活要干吗」和「该做哪个动作」**不是并列的，是顺序的** —— 但后者能无声推翻前者
+
+`decide()` 里的实际顺序（一次调用内）：
+
+```
+needsTool（还有活吗）
+  ├─ 否 ⇒ 收尾
+  └─ 是 ⇒ pickTool（哪个工具）⇒ pickInput（哪个动作）⇒ 执行 ⇒ stepOk ⇒ isDone
+```
+
+`pickInput` **只有**在 `needsTool` 说是之后才走到。所以它们是先后。
+
+**真正的问题是：第二个可以推翻第一个，而且不说。**
+
+- `needsTool` = 0.97 已经确立了「**存在**一个该做的动作」；
+- 然后 `pickInput` 的逃逸说「**没有**合适的动作」；
+- 我们执行了后者、扔掉了前者。
+
+★ 而**代码里已经有一条针对这个矛盾的守卫 —— 但只在 `pickTool` 那条路上**：
+
+```python
+options = candidates(session, ctx, redirected=redirected)
+if not options:
+    # ★ 但 `needsTool` 刚说「还要一个动作」—— 这两句是**矛盾的**,
+    #   矛盾本身要记下来,否则它看起来像一次顺利的收尾。
+    self.trace.append({"violation": "no_candidate_left", ...
+                       "detail": (f"needsTool={need.noul:.3f} 说还要动作,"
+                                  f"但候选已空（做过的都做过了）")})
+    return self._finish(...)
+```
+
+⇒ **`pickTool` 路上「候选空 × needsTool 说还要动作」会被明确记为矛盾；**
+**`pickInput` 的逃逸那条路上没有这个对质。** 逃逸也是"没有动作"，却不跟 `needsTool` 对账。
+
+★★ 而且对质之后的结论应该是什么，也能推出来：`needsTool`=0.97 与逃逸同时成立，
+只能推出两种可能 ——「**候选表不全**」或「**我分不出来**」。**两种都不支持"收尾"。**
+
+### 7.2 帧里的证据：**所有步都在，但每条结果只留 60 字符；只有最近一条是完整的**
+
+`StepRecord.__str__`（`core/frame.py`）：
+
+```python
+res = " ".join(self.result.split())
+if len(res) > 60:
+    res = res[:57] + "..."
+return f"{self.tool}{arg} -> {res}"
+```
+
+预算是 `already_done` 4000 字符、最多 20 条（`clip="list"`，超了留**最近的**）；
+`last_result` 4000 字符（**只装最近那一步**）。
+
+设计意图写在它自己的注释里：
+> 分工:**这里给形状**(调过什么、按什么顺序),**`last_result` 给细节**。
+
+#### 实测后果：它**系统性地忘掉多物品的容器**
+
+```
+原文  56 字 → "You arrive at shelf 6. On the shelf 6, you see a vase 2."        ✅ 全留
+原文  81 字 → "You open the safe 1. The safe 1 is open. In it, you see a..."   ❌ 物品清单全丢
+原文 136 字 → "You arrive at dresser 1. On the dresser 1, you see a cell..."   ❌ 物品清单全丢
+原文  49 字 → "You arrive at cabinet 1. The cabinet 1 is closed."              ✅ 全留
+```
+
+⇒ **一格里有 1 件东西 ⇒ 记得住；有 2 件以上 ⇒ 一件都看不见。**
+而"找花瓶"正是要翻容器 —— **东西多的容器才是可能的藏处。**
+
+这一批 34 次工具调用里，超过 60 字被截的是 **5 次**，全部是列物品的那几次。
+
+#### 而 `react` 那边：**全部原文**
+
+`react` 的 prompt 是完整对话，某一步实测 **9873 字符、含 30 条 `Observation`，一条不截**：
+
+```
+Observation: You arrive at dresser 1. On the dresser 1, you see a cellphone 2,
+a keychain 2, a keychain 1, a laptop 1, a remotecontrol 1, a statue 1, …
+```
+
+⇒ 两边在这一点上是**不同的问题**：
+`react` 记住了一切但它只能猜"哪个格子有花瓶"；
+我们的判官候选有 30 条却几乎同义，而且**历史里"哪格有什么"被截掉了**。
+
+## 八、下一步可以试什么（都还没做）
 
 1. **把判据变可区分**：给 ALFWorld 的 `act` 加 `describe_candidate`，
    用环境已知的事实区分候选 —— 最有信息量的是**"这一格去过没有 / 里面报过什么"**
